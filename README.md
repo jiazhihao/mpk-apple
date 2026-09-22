@@ -14,11 +14,14 @@ weights from a block-lane-major pack — not one never-returning kernel with spe
 |---|---|
 | [`docs/design/design.md`](docs/design/design.md) | The design: MPK Runtime V2 re-derived for Apple GPUs; answers on warp specialization and the static-megakernel approach |
 | [`plans/implementation-plan.md`](plans/implementation-plan.md) | Milestones M0–M9 with exit gates and go/no-go points, repo layout, tests, reuse map, risks |
-| [`docs/research/apple-gpu-probes.md`](docs/research/apple-gpu-probes.md) | Measured Apple-GPU execution model (M3 Pro): core mapping, in-kernel sync, no preemption within a dispatch, sharing at dispatch granularity, bandwidth vs access pattern, in-kernel barriers vs dispatch boundaries |
+| [`docs/research/apple-gpu-probes.md`](docs/research/apple-gpu-probes.md) | Measured Apple-GPU execution model (M3 Pro, M5 Pro): core mapping, in-kernel sync, preemption and sharing, bandwidth vs access pattern and lane order, in-kernel barriers vs dispatch boundaries, real FP8/NVFP4 decode kernels, the M5 `matmul2d` path |
 | [`docs/research/apple-inference-systems.md`](docs/research/apple-inference-systems.md) | How MLX, llama.cpp and others run LLMs on Apple silicon; what we reuse |
-| [`probes/`](probes) | The 13 probe programs. `./probes/run_all.sh` runs them on this machine (Command Line Tools only, ~4 min) and saves `probes/results/<chip>….txt`; `./probes/remote_run.sh user@host` does the same on another bare-metal Mac. Only the M3 Pro has been measured so far |
+| [`probes/`](probes) | The 16 probe programs. `./probes/run_all.sh` runs them on this machine (Command Line Tools only, ~5 min) and saves `probes/results/<chip>….txt`; `./probes/remote_run.sh user@host` does the same on another bare-metal Mac. Measured: M3 Pro (2026-09-19), M5 Pro (2026-09-22) |
+| [`profiles/`](profiles) | Provisional per-chip profiles derived by hand from the probe results (M3 Pro, M5 Pro) |
 
-Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); the M4 checklist is §3 of the hardware report.
+Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); the M4 checklist is §4 of the hardware report.
 
-Status: design and plan drafted 2026-09-19. The hardware-characterization half of M0 is done for the M3 Pro
-(13 probes); M4/M5 measurements, baselines, goldens and engine code are not started.
+Status: design and plan drafted 2026-09-19, revised 2026-09-22. The hardware-characterization half of M0 is done for
+the M3 Pro (13 probes) and the M5 Pro (16 probes, including the first real FP8/NVFP4 decode kernels and an M5
+`matmul2d` path); M4 measurements, baselines, goldens and engine code are not started. The M5 Pro on hand has 24 GB
+and cannot host the 27B target.

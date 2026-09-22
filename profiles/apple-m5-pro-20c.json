@@ -1,0 +1,208 @@
+{
+ "chip": "Apple M5 Pro",
+ "gpu_family": "Apple10",
+ "gpu_cores": 20,
+ "memory_gb": 24,
+ "measured": "2026-09-22",
+ "os": "macOS 26.5.1",
+ "power": "AC",
+ "nominal_gbps": 307,
+ "nominal_note": "[S] 307 GB/s for the M5 Pro; not verified for the 24 GB configuration",
+ "hosts_target_model": false,
+ "hosts_target_model_note": "21 GB of weights do not fit a 24 GB machine (recommendedMaxWorkingSetSize 19.07 GB, maxBufferLength 14.30 GB)",
+ "crew": {
+  "threadgroups": 20,
+  "threads_per_threadgroup": 384,
+  "simdgroups_per_core_full_speed": 12,
+  "one_threadgroup_per_core": true,
+  "probe": "p4 (flat to G=20, 2x at G=22; k<=14 SIMD-groups full speed in one threadgroup)"
+ },
+ "alu_per_simdgroup_vs_m3pro": 1.12,
+ "in_flight_simdgroups_max": {
+  "value": 1536,
+  "note": "1536 as 48x1024 was marginal (38k spins); 2048 times out",
+  "probe": "p3a"
+ },
+ "streaming": {
+  "best_raw_gbps": [
+   285,
+   295
+  ],
+  "best_raw_pattern": "blocked (16 KB-1 MB), lanes interleaved at 16 B, 4 loads in flight per lane; flat from 12 to 384 SIMD-groups per core",
+  "lane_order": "interleaved16 (lane-contiguous caps at 200-218 GB/s = 65-71 % regardless of load width, unrolling, occupancy or block size)",
+  "crew_geometry_raw_gbps": 291,
+  "per_core_uncontended_gbps": 71.4,
+  "cores_to_saturate": 6,
+  "cores_to_saturate_note": "278 GB/s on 6 cores, 286 on 10, 289-294 on 13-20",
+  "probe": "p5b, p12"
+ },
+ "decode_gemv": {
+  "shape": "17408x5120, K=5120, static slices, min-of-3 over ~2.1 GB",
+  "fp8_t1_gbps": {
+   "crew_interleaved_R16": 275,
+   "crew_contiguous_R8": 238,
+   "conventional_1block_per_simdgroup_tg64_R16": 277
+  },
+  "fp8_gbps_vs_T_best_geometry": {
+   "1": 277,
+   "2": 255,
+   "4": 249,
+   "8": 76
+  },
+  "nvfp4_t1_gbps_useful": {
+   "crew_interleaved_R4": 137,
+   "conventional_tg64_R4": 182,
+   "note": "ALU-bound: ~275 G weights/s at the crew geometry for both formats"
+  },
+  "nvfp4_gbps_vs_T_best_geometry": {
+   "1": 182,
+   "2": 143,
+   "4": 102,
+   "8": 35
+  },
+  "tail_quantization_note": "static slices at 240 SIMD-groups: R=32 -> 544 blocks -> 76 % efficiency; R=16 -> 91 %; R=4 -> 95 %",
+  "probe": "p13"
+ },
+ "tensor_ops": {
+  "available_from_clt": true,
+  "msl": "4.0 (4.1 needs macOS 27)",
+  "fp8_staged_matmul2d_gbps_vs_TM": {
+   "8": 186,
+   "16": 169,
+   "32": 159,
+   "64": 121
+  },
+  "half_direct_matmul2d_gbps": [
+   196,
+   210
+  ],
+  "tflops_at_TM64": [
+   15.5,
+   16.9
+  ],
+  "crossover_vs_shader_alu": "shader ALU faster for FP8 T <= 4 and NVFP4 T <= 2; accelerator faster from FP8 T ~ 5-8 (186 vs 76 GB/s at T = 8) and NVFP4 T ~ 3 (119 GB/s at TM = 8 vs 102 at shader T = 4)",
+  "accumulation_rel_err": 1.6e-06,
+  "probe": "p14",
+  "nvfp4_staged_matmul2d_gbps_useful_vs_TM": {
+   "8": 119,
+   "16": 106,
+   "32": 102,
+   "64": 74
+  },
+  "pass_cost_vs_T1": {
+   "TM8_fp8": 1.49,
+   "TM8_nvfp4": 1.53,
+   "TM32_fp8": 1.74,
+   "TM32_nvfp4": 1.78
+  }
+ },
+ "dispatch": {
+  "boundary_us": [
+   1.38,
+   1.4
+  ],
+  "gpu_per_dispatch_us": [
+   1.3,
+   1.6
+  ],
+  "icb_replay_ms_per_1240": 0.01,
+  "sync_roundtrip_ms": 0.15,
+  "probe": "p7, p10"
+ },
+ "in_kernel_barrier_us": {
+  "static_slices": [
+   1.97,
+   2.47
+  ],
+  "own_steal": [
+   4.25,
+   4.78
+  ],
+  "with_30us_blocks_us_per_op": {
+   "dispatch_per_op": 81.5,
+   "static": [
+    81.7,
+    84.7
+   ],
+   "own_steal": [
+    83.5,
+    88.1
+   ]
+  },
+  "probe": "p10"
+ },
+ "sharing": {
+  "inside_dispatch": "sometimes: 2 of 12 trials every foreign dispatch got in at 0.2-0.4 ms; 5 of 12 the first one waited the whole ~1.1 s; 5 of 12 a later one waited 0.5-1.0 s",
+  "typical_behind_short_dispatches": "one whole command buffer: 1.04-1.05 s behind an 800-dispatch buffer in 3 of 4 runs (8 dispatches got in first in the other)",
+  "behind_145ms_buffers_max_ms": [
+   44,
+   129
+  ],
+  "behind_15ms_buffers_max_ms": [
+   0.3,
+   1.3
+  ],
+  "max_cb_ms_default": 16,
+  "probe": "p6 x4, p6b x4"
+ },
+ "overlap": {
+  "alu_hidden_in_saturating_bus_op_pct": {
+   "alu_encoded_first": {
+    "B=22%": [
+     121,
+     126
+    ],
+    "B=43%": [
+     102,
+     121
+    ],
+    "B=85%": [
+     84,
+     93
+    ],
+    "B=170%": [
+     57,
+     61
+    ]
+   },
+   "bus_encoded_first": {
+    "B=22%": [
+     100,
+     122
+    ],
+    "B=43%": [
+     -5,
+     29
+    ],
+    "B=85%": [
+     1,
+     5
+    ]
+   }
+  },
+  "encode_order_matters": true,
+  "rule": "encode the ALU-bound sibling before the bus-bound op",
+  "two_bus_bound_gain_pct": [
+   -1,
+   3
+  ],
+  "split_cores_by_hand": "slower than serial (23.3 vs 17.8 ms)",
+  "probe": "p11, p12(5)(6)"
+ },
+ "threadgroup_memory_faster": false,
+ "hot_read_ns": {
+  "device": 37.2,
+  "threadgroup": 36.2,
+  "thread_private": 42.7,
+  "probe": "p8"
+ },
+ "clock_simdgroup_ns_per_tick": [
+  38.3,
+  38.6
+ ],
+ "atomic_handoff_ns": [
+  142,
+  196
+ ],
+ "results_files": 11
+}

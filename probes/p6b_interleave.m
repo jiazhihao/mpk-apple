@@ -27,5 +27,5 @@ int main() { @autoreleasepool {
       [en dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(384,1,1)]; [en endEncoding]; [cb commit]; [cb waitUntilCompleted]; lat[n++] = now_ms() - s0; usleep(10000); }
     [last waitUntilCompleted]; double total = now_ms() - t0;
     double s = 0, mx = 0; int k = n > 1 ? n - 1 : n; for (int i = 0; i < k; i++) { s += lat[i]; if (lat[i] > mx) mx = lat[i]; }   // drop the last sample (may straddle the end)
-    printf("%-52s total %.0f ms | small dispatches on a 2nd queue meanwhile: n=%d  mean %.2f ms  max %.2f ms\n", cases[ci].name, total, k, k ? s/k : 0, mx); }
+    printf("%-52s total %.0f ms | small dispatches on a 2nd queue meanwhile: n=%d  mean %.2f ms  max %.2f ms | last sample (may straddle the end): %.1f ms\n", cases[ci].name, total, k, k ? s/k : 0, mx, n ? lat[n-1] : 0); }
 }}

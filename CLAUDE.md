@@ -12,15 +12,16 @@ latency only** — prefill/TTFT, multi-request serving and energy are explicit n
 general: new models, quantization formats and ops come in through plugins, not engine edits. Stack: C++/Objective-C++
 runtime, Python front-end and compiler, generated MSL kernels.
 
-Status (2026-09-19): design, plan, survey and hardware characterization exist; **there is no engine code yet.**
+Status (2026-09-22): design, plan, survey and hardware characterization (M3 Pro and M5 Pro) exist; **there is no engine
+code yet** — the first real decode kernels live in the probes (`p13`, `p14`).
 
 ## Read these, in this order
 
 1. `docs/design/design.md` — the design. §0 is the decision table (D1–D14); §7 answers "warp specialization?" (no) and
    "static megakernel?" (static yes, one kernel no).
-2. `docs/research/apple-gpu-probes.md` — what was measured on real hardware and what each number implies. §1 is a
-   cross-chip table with empty M4/M5 columns; **§3 is the checklist for continuing on an M4** (hypotheses H1–H8 and the
-   outcomes that would change the design).
+2. `docs/research/apple-gpu-probes.md` — what was measured on real hardware and what each number implies. §1 is the
+   cross-chip table (M3 Pro and M5 Pro filled, M4 empty); §3 is what the M5 Pro confirmed and changed; **§4 is the
+   checklist for continuing on an M4** (hypotheses H1–H10 and the outcomes that would change the design).
 3. `plans/implementation-plan.md` — milestones M0–M9 with exit gates and go/no-go points.
 4. `docs/research/apple-inference-systems.md` — how MLX, llama.cpp and others work; what to reuse; headroom estimates.
 
@@ -33,18 +34,20 @@ Status (2026-09-19): design, plan, survey and hardware characterization exist; *
   in-kernel. Keep dispatches sub-millisecond and command buffers to tens of milliseconds.
 * No role-specialized SIMD-groups. Every kernel runs with the crew geometry `gpu_cores × 384 threads`
   (one threadgroup per core, 12 SIMD-groups × 32 lockstep lanes).
-* Weights are re-laid-out at load time (block-lane-major packs) so each lane streams one contiguous range per block.
+* Weights are re-laid-out at load time (block-lane-major packs) so a SIMD-group sweeps one contiguous block; the lane
+  order inside the block is a per-chip profile value (lane-interleaved 16-byte words on Apple10, where lane-contiguous
+  stripes cap at 70 % of the bus; a tie on Apple9).
 * The lever past the memory-bandwidth bound is MTP speculative decoding, run entirely on the GPU.
-* Overlap only an ALU-bound op with a bus-bound sibling (un-barriered dispatches at full geometry); never pre-stage
-  weights, never hand-partition cores.
+* Overlap only an ALU-bound op with a bus-bound sibling (un-barriered dispatches at full geometry, the ALU-bound one
+  encoded first on Apple10); never pre-stage weights, never hand-partition cores.
 
 ## Working rules
 
 * **Measure before claiming.** Evidence tags in the docs: [M] measured by us, [S] Apple spec, [R] third-party report,
   [H] hypothesis. Microsecond-level numbers move by tens of percent between runs — report ranges, draw conclusions only
   where ranges do not overlap, use paired alternating A/B runs and min-of-N.
-* **Every GPU loop must be bounded.** A running dispatch cannot be preempted or cancelled; an unbounded spin freezes the
-  display and can trip the watchdog. Keep any single dispatch under ~1.5 s in probes, far less in the engine.
+* **Every GPU loop must be bounded.** A running dispatch cannot be cancelled and cannot be relied on to be preempted
+  (never on Apple9, only sometimes on Apple10); an unbounded spin freezes the display and can trip the watchdog. Keep any single dispatch under ~1.5 s in probes, far less in the engine.
 * Correctness may depend only on documented Metal semantics (dispatch ordering, ICB barriers, the MSL memory model).
   Threadgroup→core mapping, in-flight limits and sharing behaviour are per-chip *profile values*, measured by the probes.
 * Only bare-metal Macs give meaningful numbers; virtualized macOS (hosted CI runners) exposes a paravirtual GPU.
@@ -56,14 +59,19 @@ Status (2026-09-19): design, plan, survey and hardware characterization exist; *
 
 ## Probes
 
-`./probes/run_all.sh` builds and runs the 13 probes (~4 min, Xcode Command Line Tools only; shaders compile at runtime)
-and saves `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`. `./probes/remote_run.sh user@host` does the same over
-SSH. Geometry is derived from the GPU core count (`GPU_CORES=<n>` overrides). Commit every results file. Only an
-M3 Pro has been measured so far; its reference run is in `probes/results/`.
+`./probes/run_all.sh` builds and runs the 16 probes (~5 min, Xcode Command Line Tools only; shaders compile at runtime,
+including the MPP tensor ops of `p14`) and saves `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`.
+`./probes/remote_run.sh user@host` does the same over SSH. Geometry is derived from the GPU core count (`GPU_CORES=<n>`
+overrides). Commit every results file. Measured so far: an M3 Pro (2026-09-19, 13 probes) and an M5 Pro (2026-09-22,
+all 16, repeats of `p6`/`p6b`/`p12`); hand-derived profiles are in `profiles/`. `p12`–`p14` have not yet run on the
+M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every kernel variant without dispatching.
 
 ## Next steps
 
-1. On the M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk H1–H8 in §3, and
-   update the design where a hypothesis fails (D4, D5, D6, D14 are the chip-sensitive decisions).
-2. Plan M0 remainder: MLX / llama.cpp baselines for the target model, exact NVFP4/FP8 → BF16 dequantizer, HF goldens.
-3. Plan M1 (go/no-go): real NVFP4/FP8 GEMV kernels in the crew geometry vs MLX `qmv`.
+1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
+   are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
+   H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).
+2. Plan M0 remainder: MLX / llama.cpp baselines for the target model (needs the 36 GB M3 Pro — the 24 GB M5 Pro cannot
+   host it), exact NVFP4/FP8 → BF16 dequantizer, HF goldens, the on-screen frame-pacing check.
+3. Plan M1 (go/no-go): the NVFP4 decode is the problem (ALU-bound at 59 % of nominal on the M5 Pro; FP8 is at 90 %);
+   then the comparison against MLX `qmv` on the same machine.

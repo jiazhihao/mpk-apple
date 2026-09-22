@@ -1,11 +1,13 @@
 # Implementation plan — megakernel inference engine for Apple silicon
 
-Status: drafted 2026-09-19. Design: [`docs/design/design.md`](../docs/design/design.md). Measured hardware facts:
+Status: drafted 2026-09-19; M0 updated 2026-09-22 with the M5 Pro measurements (M0, M1, M5–M7, M9, risks). Design: [`docs/design/design.md`](../docs/design/design.md). Measured hardware facts:
 [`docs/research/apple-gpu-probes.md`](../docs/research/apple-gpu-probes.md). Landscape and reuse notes:
 [`docs/research/apple-inference-systems.md`](../docs/research/apple-inference-systems.md).
 
 First target: `nvidia/Qwen3.8-27B-NVFP4`, **batch-1 decode latency**, M3/M4/M5 families, macOS 26+.
-Bring-up machine: M3 Pro, 18-core GPU, 36 GB (21 GB of text weights + state fit in its ~28–30 GB working set).
+Bring-up machines: an M3 Pro, 18-core GPU, 36 GB (21 GB of text weights + state fit in its ~28–30 GB working set; the
+only machine on hand that hosts the model) and an M5 Pro, 20-core GPU, **24 GB** (GPU characterization and kernel work
+only: its 19 GB working-set limit cannot host the 27B).
 
 ## 0. Scope
 
@@ -21,7 +23,7 @@ T = T_max), multi-request serving, energy targets, the vision tower, multi-Mac p
 | Metric | Gate |
 |---|---|
 | Correctness | greedy tokens equal to the reference (HF on dequantized weights) except at exact logit ties; repeated runs bit-identical |
-| Plain decode | ≥ **1.10×** the better of MLX / llama.cpp on the same machine; stretch ≥ 80 % of the chip's nominal bandwidth bound (6.9 tok/s on the M3 Pro). The survey puts the practical ceiling at 85–90 % and today's engines at 57–80 % on dense models, so this gate is deliberately near the limit of what plain decode can give |
+| Plain decode | ≥ **1.10×** the better of MLX / llama.cpp on the same machine; stretch ≥ 80 % of the chip's nominal bandwidth bound (6.9 tok/s on the M3 Pro; 13.7 tok/s on an M5 Pro with enough memory). The survey puts the practical ceiling at 85–90 % and today's engines at 57–80 % on dense models, so this gate is deliberately near the limit of what plain decode can give |
 | Speculative decode | ≥ **1.5×** our own plain decode, token-identical in greedy mode |
 | Host cost | < 5 % of one CPU core during generation; **zero** CPU↔GPU synchronizations per token or per speculative round on the critical path |
 | Generality | 2nd model with **no** kernel/runtime change; 3rd model + 2nd quant format via the documented plugin paths only |
@@ -37,39 +39,57 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       `probes/results/`): core model, in-flight limit, atomics handoff, no preemption within a dispatch, sharing at
       dispatch granularity, launch overhead, bandwidth vs access pattern, threadgroup memory, clock SIMD-group,
       in-kernel claim protocol vs dispatch boundaries, inter-op overlap and bus saturation vs cores.
+* [x] **Probe suite on the M5 Pro** (2026-09-22; 11 results files, `profiles/apple-m5-pro-20c.json`; verdicts in the
+      hardware report §3): the 13 probes with `p6`/`p6b` repeated 4×, plus three new probes — `p12` streaming geometry
+      (lane order × load width × loads in flight × occupancy; bus saturation vs cores; overlap with a saturating
+      streamer), `p13` real FP8/NVFP4 decode GEMV (R, T, layout, geometry sweeps, CPU-checked), `p14` `matmul2d` on the
+      neural accelerators from dequantized tiles. Outcomes that changed the design: intra-block lane order is a profile
+      value (D8); one threadgroup per core is a default with an autotuned knob (D4); in-dispatch sharing exists but is
+      unreliable and command-buffer blocking is the common case (D6); the bus saturates with 6 of 20 cores and the
+      ALU-bound sibling must be encoded first (D14); the accelerator path is real from T ≈ 3–8 (§5.6, §5.8).
+* [ ] Run `p12`–`p14` on the M3 Pro (they postdate its run): are "lane order decides bandwidth", "crew geometry =
+      parity" and the T-cost curves Apple10-only?
 * [ ] Baselines on the M3 Pro: `mlx-lm` (NVFP4 mode and affine 4-bit) and `llama.cpp` (Q4_K_M) on Qwen3.8-27B and on a
       small same-architecture model: tok/s, effective GB/s, CPU utilization, dispatches and command buffers per token.
 * [ ] Reference tooling: exact NVFP4/FP8 → BF16 dequantizer; HF golden scripts (adapt
       `mirage/tests/runtime_python/models/qwen38/hf_golden.py`): full goldens for the small model; per-layer goldens
       for the 27B produced layer-streamed (54 GB of BF16 does not fit in 36 GB) or on a larger machine.
 * [ ] On-screen frame-pacing check: compositor frame times while command buffers of 8 / 16 / 33 / 66 ms run back to
-      back → the default `max_cb_ms`.
-* [ ] **Measure M4 and M5.** `./probes/remote_run.sh user@host` (or `./probes/run_all.sh` on the machine itself, ~4 min,
-      Command Line Tools only) on bare-metal M4-family and M5-family Macs; commit the results files and `profiles/*.json`.
-      M4 / M4 Pro are rentable as AWS EC2 Mac dedicated hosts (`mac-m4.metal` $1.23/h, `mac-m4pro.metal` $1.97/h, 24-hour
-      minimum ≈ $30 / $47); no bare-metal M5 rental was found as of 2026-09, so M5 needs a physical machine. Virtualized
-      macOS runners are useless here (paravirtual GPU). The hypotheses to test and the outcomes that would change the
-      design are listed in the hardware report, §3 (H1–H8): chiefly `p10` (dispatch boundary vs in-kernel barrier),
-      `p6b` (sharing granularity), `p11` (cores needed to saturate the bus; whether an ALU-bound op still hides inside a
-      bus-bound one when bandwidth per core is 12–17 GB/s instead of 8.5). **M4 is next** (the user continues there).
+      back → the default `max_cb_ms`. Moved up: the M5 Pro blocks foreign work for whole command buffers more often
+      than the M3 Pro, so this measurement precedes the host pump (M2).
+* [ ] **Measure M4.** `./probes/remote_run.sh user@host` (or `./probes/run_all.sh` on the machine itself, ~5 min,
+      Command Line Tools only) on a bare-metal M4-family Mac; commit the results files and `profiles/*.json`. M4 / M4 Pro
+      are rentable as AWS EC2 Mac dedicated hosts (`mac-m4.metal` $1.23/h, `mac-m4pro.metal` $1.97/h, 24-hour minimum
+      ≈ $30 / $47). Virtualized macOS runners are useless here (paravirtual GPU). The hypotheses to test and the
+      outcomes that would change the design are in the hardware report §4 (H1–H10, revised after the M5 Pro): chiefly
+      `p12` (which lane order streams, cores to saturate, encode order), `p6`/`p6b` ×4 (sharing), `p10`, `p13`/`p14`.
 
-Exit: baseline table, goldens, ≥ 1 profile.
+Exit: baseline table, goldens, ≥ 1 profile (two provisional profiles exist: `profiles/`).
 
 ### M1 — The GEMV proof · 2 ew · **go/no-go #1**
 
 The largest single-token claim is a kernel-geometry and layout claim. Prove or kill it before building on it.
+**First reading from the M5 Pro** (`probes/p13_decode_gemv`, 2026-09-22): a first-cut FP8 GEMV with 16 B loads and
+R-row blocks streams 275 GB/s (90 % of nominal) at the crew geometry — at *parity* with the conventional
+one-block-per-SIMD-group geometry (277), with the intra-block lane order worth +16 %. The same kernel for NVFP4 is
+ALU-bound: 137 GB/s of useful bytes at the crew geometry, 182 with 9 threadgroups per core (59 %) — ~275 G weights/s
+either way. So the geometry claim is settled at "no worse" and M1's real problem is the **NVFP4 decode cost**.
 
 * Standalone bench harness (C++ + MSL): `gemv_T` for NVFP4 and FP8-E4M3 in block-lane-major packs, crew geometry
   `cores × 384`, static slices; shapes 17408×5120 (gate/up), 5120×17408 (down), 10240×5120, 6144×5120, 5120×6144,
   12288×5120, 248320×5120 (lm_head); T ∈ {1, 2, 4}.
-* Kernel study, in this order: wide packed loads (`uint32/uint64`); activation-stripe reuse across R rows × T tokens;
-  scale placement (inline vs leading; E4M3 vs pre-decoded `half`); R ∈ {8, 16, 32}; lane = column stripe vs lane = row;
-  FP32 vs mixed accumulation; `safe` vs `fast` math; one 384-thread threadgroup per core vs MLX/llama.cpp-style
-  64-thread threadgroups.
+* Kernel study, in this order: **NVFP4 decode** (16-bit packed math, a register LUT or shift-only E2M1 → half
+  conversion, scale applied per 16-weight partial sum — the current ~7 ops per weight is the limiter); intra-block lane
+  order per chip (lane-interleaved 16 B on the M5 Pro, either on the M3 Pro); threadgroups per core ∈ {1, 2, 4, 9} as
+  an autotuned knob (2–9 win 19–44 % for ALU-heavy variants on the M5 Pro); activation-stripe reuse across R rows × T
+  tokens without the T = 8 register collapse seen in `p13`; scale placement (inline vs leading; E4M3 vs pre-decoded
+  `half`); R ∈ {4, 8, 16} (R = 32 loses 24 % to static-slice tail quantization at 240 SIMD-groups); FP32 vs mixed
+  accumulation; `safe` vs `fast` math.
 * Baselines on identical shapes: MLX `quantized_matmul` (nvfp4 and affine-4; `qmv_fast`), llama.cpp `mul_mv`.
 
-Exit gate: NVFP4 T = 1 ≥ **1.10×** MLX's kernel throughput on the M3 Pro and FP8 shapes ≥ **100 GB/s** effective;
-outputs within 2 ULP (BF16) of a torch oracle. *If missed:* keep the engine plan — fusion, GPU autonomy and
+Exit gate: NVFP4 T = 1 ≥ **1.10×** MLX's kernel throughput on the same machine (M3 Pro, and the M5 Pro where MLX's
+dense 4-bit `qmv` is reported at 266 GB/s), NVFP4 ≥ 80 % of nominal on the M5 Pro, FP8 shapes ≥ **100 GB/s** on the
+M3 Pro (already 275 on the M5 Pro); outputs within 2 ULP (BF16) of a torch oracle. *If missed:* keep the engine plan — fusion, GPU autonomy and
 speculation stand on their own — drop the bandwidth claim from the design and adopt MLX's GEMV structure.
 
 ### M2 — Runtime core and weight packer · 3 ew · parallel with M1
@@ -130,8 +150,8 @@ Per-op GPU timestamps → a per-token budget (GB streamed, ms, % of bound) → c
 norm-stat hoisting into producer epilogues, `lm_head` cost (4 % of traffic), barrier count, attention at 8 K / 32 K,
 per-op autotune (R, block size), math modes. **Sibling overlap** (design §5.12): emit each mixer's gate projection
 (`in_proj_z`; the gate half of `q_proj`) as an un-barriered sibling of the ALU-bound mixer core, both at full crew
-geometry; keep it per chip only where the A/B shows a gain (expected ~2–4 % on the M3 Pro, less on M4/M5 where
-bandwidth per core is higher).
+geometry; keep it per chip only where the A/B shows a gain (expected ~2–4 % on the M3 Pro; *more* on the M5 Pro, where 6 of
+20 cores saturate the bus — but only with the ALU-bound sibling encoded first, a profile rule).
 
 Exit gate: the plain-decode success metric. *If 1.10× is missed but parity holds:* proceed to M6 — speculation does
 not depend on it — and record why.
@@ -140,16 +160,20 @@ not depend on it — and record why.
 
 MTP module and weights (BF16; optional load-time FP8), `T > 1` kernels tuned, GDN/conv checkpoint slots, KV rollback,
 on-GPU strict verify + accept scan, rejection sampling for temperature > 0, dynamic-`T` ops driven by `StepState`,
-draft length k chosen per chip by measurement (semantics from MPK `mtp_verify_strict`, `spec_decode/`). Known hazard:
-llama.cpp reports MTP speculation as a net loss on an M1 Max — verification cost on compute-poor parts is real.
+draft length k *and kernel path* chosen per chip by measurement (semantics from MPK `mtp_verify_strict`,
+`spec_decode/`). Measured pass costs on the M5 Pro relative to T = 1: shader ALUs FP8 ×1.08 / ×1.11 / ×3.6 and NVFP4
+×1.28 / ×1.79 / ×5.3 at T = 2 / 4 / 8; the accelerator path ×1.5 at T = 8 in either format (`p13`, `p14`) — so k = 1–2
+runs on the shader kernels and larger k on the M5 accelerator path (M9). Known hazard: llama.cpp reports MTP
+speculation as a net loss on an M1 Max — verification cost on compute-poor parts is real.
 
 Exit gate: the speculative-decode success metric; the trace shows no CPU synchronization inside or between rounds.
 
 ### M7 — In-kernel runtime re-evaluation and intra-op stealing · 1.5 ew · time-boxed, off the critical path
 
-On the M3 Pro a dispatch boundary (1.8 µs) beats every in-kernel barrier we built (2.6–5.4 µs), so multi-op kernels
-are not part of the design. This milestone (a) re-runs `p10`/`p6b` on Max-class and M5 parts and on small models,
-where the ratio could differ, and (b) adds *own-slice + steal* to ops with uneven blocks (long-context attention, MoE
+On the M3 Pro a dispatch boundary (1.8 µs) beats every in-kernel barrier we built (2.6–5.4 µs), and on the M5 Pro
+by a wider margin (1.4 vs 2.0–2.5 / 4.3–4.8 µs; *done* 2026-09-22), so multi-op kernels are not part of the design.
+This milestone (a) re-runs `p10`/`p6b` on Max-class parts and on small models, where the ratio could differ, and (b)
+adds *own-slice + steal* to ops with uneven blocks (long-context attention, MoE
 experts) if per-op traces show tail skew.
 
 Exit: a short written result per chip; stealing enabled only for ops where it gains ≥ 2 %.
@@ -166,11 +190,14 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
 
 ### M9 — M4/M5 family tuning · 3 ew · hardware-dependent
 
-Profiles + autotune on M4 Pro/Max, M5, M5 Pro/Max (Ultra if available); MPP TensorOps block for `T > 1` on M5
-(dequantize → cooperative tensor → `matmul2d<…, execution_simdgroups<N>>`; reference: MLX `steel/gemm/nax.h`,
-`quantized_nax.h`), including the one pipelining experiment that is M5-only — dequantize tile n+1 on the shader ALUs
-while the neural accelerator multiplies tile n (design §5.12); MSL 4.1 on macOS 27. Exit: per-chip results table next
-to each chip's bound.
+Profiles + autotune on M4 Pro/Max, M5, M5 Pro/Max (Ultra if available); MPP TensorOps block for `T > 1` on M5 —
+validated on the M5 Pro by `probes/p14_tensor_ops` (dequantize a [64 × 64] tile into threadgroup memory →
+`tensor_inline` → `matmul2d<…, execution_simdgroups<S>>` → cooperative-tensor accumulate; 8 tokens for 1.5× a T = 1
+pass in FP8 and NVFP4, 32 tokens for 1.7–1.8×; compiles from the Command Line Tools at MSL 4.0). Remaining: tile
+tuning, the cooperative right-input fill (no threadgroup staging; reference: MLX `steel/gemm/nax.h`, `quantized_nax.h`),
+and the one pipelining experiment that is M5-only — dequantize tile n+1 on the shader ALUs while the neural
+accelerator multiplies tile n (design §5.12); MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1). Exit: per-chip
+results table next to each chip's bound.
 
 ### Backlog (post-v1)
 
@@ -233,14 +260,14 @@ new engine.
 | Risk | Signal | Mitigation / decision point |
 |---|---|---|
 | Bandwidth advantage does not survive real kernels | M1 gate missed | adopt MLX-style GEMV structure; value rests on fusion, GPU autonomy, speculation |
-| NVFP4 GEMV is ALU/load-bound on base/Pro chips | GB/s ≪ FP8 shapes | wide loads, activation reuse, pre-decoded scales; accept a lower % of bound on small chips |
+| NVFP4 GEMV is ALU/load-bound on base/Pro chips | GB/s ≪ FP8 shapes — **measured on the M5 Pro: 59 % of nominal at best vs 90 % for FP8, the decode is the limiter** | wide loads, activation reuse, pre-decoded scales, 16-bit packed decode; accept a lower % of bound on small chips |
 | Plain-decode headroom is small for a dense 27B | M5 gate missed with parity held | expected by the survey; proceed to speculation, which is where the multiple is |
 | Compute-ICB driver bugs | replay ≠ re-encode, hangs | re-encode fallback (0.16 ms/token, still sync-free); keep ICB use to the documented command set |
 | Our command buffers stall other GPU clients (sharing is only *usually* per dispatch) | frame-pacing check; `ImpactingInteractivity` errors | `max_cb_ms` ≤ ~16–33 ms while a display is attached; longer buffers only in a headless profile |
-| Firmware behaviour differs on other chips/OS | probe-suite deltas | profiles are measured, not assumed; correctness depends only on documented Metal semantics |
+| Firmware behaviour differs on other chips/OS | probe-suite deltas — **measured: the M5 Pro differs from the M3 Pro in the lane order that streams, in sharing granularity and in the encode-order dependence of overlap** | profiles are measured, not assumed (lane order, threadgroups per core, sibling order, `max_cb_ms` are profile values); correctness depends only on documented Metal semantics |
 | MTP acceptance low or T > 1 compute-bound | M6 gate missed | k per chip; FP8 MTP head; TensorOps on M5 |
 | W4A16 reference disagrees with NVIDIA's W4A4 runtime | token drift vs Blackwell outputs | our contract is HF-on-dequantized-weights; report accuracy deltas on a small eval set |
-| 36 GB headroom (21 GB weights + KV + states + OS) | memory pressure | no vision tower, capped context, optional FP8 MTP; document a 36 GB minimum |
+| 36 GB headroom (21 GB weights + KV + states + OS) | memory pressure; a 24 GB machine (the M5 Pro on hand) reports a 19 GB working-set limit | no vision tower, capped context, optional FP8 MTP; document a 36 GB minimum; use 24 GB machines for kernels and small models only |
 | Baselines improve (MLX/llama.cpp ship faster NVFP4/GDN paths) | re-measured each milestone | claims are relative, same machine, same day |
 | Generated-kernel compile time / code size | build > 60 s | shared bodies, function constants, binary archives; ~12 pipelines serve all layers |
 
@@ -249,5 +276,6 @@ new engine.
 1. Repo skeleton, `third_party/NOTICE`, CI for the contract tier; `probes/` + research docs (this commit's content).
 2. NVFP4/FP8 exact dequantizer + golden scripts + small-model goldens.
 3. `pack_weights` with BLM packs and round-trip tests.
-4. GEMV bench harness + first NVFP4/FP8 kernels + MLX/llama.cpp baseline scripts (M1).
+4. GEMV bench harness + first NVFP4/FP8 kernels + MLX/llama.cpp baseline scripts (M1) — seeded by `probes/p13_decode_gemv`
+   and `probes/p14_tensor_ops`, which already carry the pack layouts, the CPU reference and the geometry sweeps.
 5. Runtime core: pack loader, pipeline cache, ICB builder + re-encode fallback, host pump, token ring (M2).
