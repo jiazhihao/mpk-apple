@@ -1,8 +1,9 @@
 # Monolith *(working codename)*
 
 A megakernel-style LLM inference engine for Apple silicon (M3 / M4 / M5, macOS 26+). First target:
-[`nvidia/Qwen3.8-27B-NVFP4`](https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4), batch-1 decode latency; the engine
-itself is model-agnostic.
+[`nvidia/Qwen3.8-27B-NVFP4`](https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4), batch-1 decode latency, with
+[DSpark](docs/research/dspark.md) speculative decoding; the engine itself is model-agnostic by construction. This is a
+standalone repository: code from MPK and other projects is copied in with its license headers, never depended on.
 
 The idea, carried over from MPK: compile the *whole generation loop* — every layer, sampling, speculative
 accept/rollback, stop detection — into one GPU-resident static program so that no CPU work and no CPU↔GPU
@@ -16,12 +17,14 @@ weights from a block-lane-major pack — not one never-returning kernel with spe
 | [`plans/implementation-plan.md`](plans/implementation-plan.md) | Milestones M0–M9 with exit gates and go/no-go points, repo layout, tests, reuse map, risks |
 | [`docs/research/apple-gpu-probes.md`](docs/research/apple-gpu-probes.md) | Measured Apple-GPU execution model (M3 Pro, M5 Pro): core mapping, in-kernel sync, preemption and sharing, bandwidth vs access pattern and lane order, in-kernel barriers vs dispatch boundaries, real FP8/NVFP4 decode kernels, the M5 `matmul2d` path |
 | [`docs/research/apple-inference-systems.md`](docs/research/apple-inference-systems.md) | How MLX, llama.cpp and others run LLMs on Apple silicon; what we reuse |
+| [`docs/research/dspark.md`](docs/research/dspark.md) | DSpark speculative decoding: the method, the public drafters for our targets, what a round costs on our hardware |
 | [`probes/`](probes) | The 16 probe programs. `./probes/run_all.sh` runs them on this machine (Command Line Tools only, ~5 min) and saves `probes/results/<chip>….txt`; `./probes/remote_run.sh user@host` does the same on another bare-metal Mac. Measured: M3 Pro (2026-09-19), M5 Pro (2026-09-22) |
 | [`profiles/`](profiles) | Provisional per-chip profiles derived by hand from the probe results (M3 Pro, M5 Pro) |
 
 Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); the M4 checklist is §4 of the hardware report.
 
-Status: design and plan drafted 2026-09-19, revised 2026-09-22. The hardware-characterization half of M0 is done for
-the M3 Pro (13 probes) and the M5 Pro (16 probes, including the first real FP8/NVFP4 decode kernels and an M5
-`matmul2d` path); M4 measurements, baselines, goldens and engine code are not started. The M5 Pro on hand has 24 GB
-and cannot host the 27B target.
+Status: design and plan drafted 2026-09-19, revised 2026-09-22 (M5 Pro measurements) and 2026-09-23 (build phase,
+DSpark). The hardware-characterization half of M0 is done for the M3 Pro (13 probes) and the M5 Pro (16 probes,
+including the first real FP8/NVFP4 decode kernels and an M5 `matmul2d` path). Engine code starts with the PRs listed
+in the plan's §6; M4 measurements, baselines and goldens are open. The M5 Pro on hand has 24 GB and cannot host the
+27B target.

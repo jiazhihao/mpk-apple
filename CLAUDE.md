@@ -7,13 +7,15 @@ placeholder; do not use the MPK or Mirage names for this engine.
 
 An LLM inference engine for Apple silicon (M3 / M4 / M5, macOS 26+, Metal 4). First target:
 `nvidia/Qwen3.8-27B-NVFP4` (Qwen3.5-hybrid: 48 Gated-DeltaNet + 16 full-attention layers; NVFP4 MLP + `lm_head`, FP8
-attention/GDN projections, BF16 MTP head; ~17.6 GB of weights read per decoded token). **v1 is judged on batch-1 decode
+attention/GDN projections; ~17.6 GB of weights read per decoded token) with a public DSpark drafter for speculative
+decoding (`docs/research/dspark.md`). **v1 is judged on batch-1 decode
 latency only** — prefill/TTFT, multi-request serving and energy are explicit non-goals for v1. The engine must stay
 general: new models, quantization formats and ops come in through plugins, not engine edits. Stack: C++/Objective-C++
 runtime, Python front-end and compiler, generated MSL kernels.
 
-Status (2026-09-22): design, plan, survey and hardware characterization (M3 Pro and M5 Pro) exist; **there is no engine
-code yet** — the first real decode kernels live in the probes (`p13`, `p14`).
+Status (2026-09-23): design, plan, surveys and hardware characterization (M3 Pro and M5 Pro) exist; **building the
+engine starts now, in this repo** (plan §6 lists the first PRs). The first real decode kernels live in the probes
+(`p13`, `p14`). Speculative decoding targets a **DSpark** drafter, not the checkpoint's MTP head.
 
 ## Read these, in this order
 
@@ -24,6 +26,8 @@ code yet** — the first real decode kernels live in the probes (`p13`, `p14`).
    checklist for continuing on an M4** (hypotheses H1–H10 and the outcomes that would change the design).
 3. `plans/implementation-plan.md` — milestones M0–M9 with exit gates and go/no-go points.
 4. `docs/research/apple-inference-systems.md` — how MLX, llama.cpp and others work; what to reuse; headroom estimates.
+5. `docs/research/dspark.md` — the speculative-decoding method we target, the public drafters for our models, their
+   cost on our hardware.
 
 ## The design in six lines
 
@@ -37,11 +41,22 @@ code yet** — the first real decode kernels live in the probes (`p13`, `p14`).
 * Weights are re-laid-out at load time (block-lane-major packs) so a SIMD-group sweeps one contiguous block; the lane
   order inside the block is a per-chip profile value (lane-interleaved 16-byte words on Apple10, where lane-contiguous
   stripes cap at 70 % of the bus; a tie on Apple9).
-* The lever past the memory-bandwidth bound is MTP speculative decoding, run entirely on the GPU.
+* The lever past the memory-bandwidth bound is DSpark speculative decoding (block drafter + Markov head + confidence
+  head), run entirely on the GPU with the verify length chosen per step from the confidences and the chip's measured
+  cost-per-T table.
 * Overlap only an ALU-bound op with a bus-bound sibling (un-barriered dispatches at full geometry, the ALU-bound one
   encoded first on Apple10); never pre-stage weights, never hand-partition cores.
 
 ## Working rules
+
+* **Standalone repo (design D15).** Copying files or fragments from MPK/mirage, MLX, llama.cpp, tinygrad, DeepSpec,
+  DFlash or gpt-oss is fine and encouraged: keep the license header, add a provenance line (repo, path, commit) and a
+  `third_party/NOTICE` entry. Never `import mirage`, never add a submodule or build dependency on MPK, never name
+  anything MPK/Mirage. The tree must build and test alone with the Command Line Tools.
+* **Model-agnostic by construction (design D16, §5.14).** Model names appear only under `monolith/models/<name>/`.
+  Models, layers, formats, ops, drafters and chip profiles are reached through registries; the compiler's coverage
+  guard fails a build for an op without a kernel; a model PR that touches `compiler/`, `runtime/` or `kernels/` is
+  wrong by definition (CI enforces it). New ops and drafters land as their own packages with oracle tests.
 
 * **Measure before claiming.** Evidence tags in the docs: [M] measured by us, [S] Apple spec, [R] third-party report,
   [H] hypothesis. Microsecond-level numbers move by tens of percent between runs — report ranges, draw conclusions only
@@ -68,6 +83,10 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
+0. **Start building** — plan §6, in order: PR 1 skeleton (package, registries, `Drafter` contract, NOTICE, CI for the
+   contract tier + the extension test), PR 2 formats + dequantizer + goldens, PR 3 `pack_weights`, PR 4 GEMV harness
+   and M1 kernels, PR 5 runtime core. Fetch the Apache-2.0 DSpark drafters and run the llama.cpp `draft-dspark`
+   baseline on the M3 Pro (plan M0).
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
    H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).

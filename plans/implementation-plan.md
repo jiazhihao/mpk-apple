@@ -1,6 +1,9 @@
 # Implementation plan — megakernel inference engine for Apple silicon
 
-Status: drafted 2026-09-19; M0 updated 2026-09-22 with the M5 Pro measurements (M0, M1, M5–M7, M9, risks). Design: [`docs/design/design.md`](../docs/design/design.md). Measured hardware facts:
+Status: drafted 2026-09-19; M0 updated 2026-09-22 with the M5 Pro measurements; **revised 2026-09-23 to start
+building in this repo** — a standalone codebase (MPK/mirage code is copied in with its headers, never depended on;
+design D15, §5.13), model-agnostic by construction (D16, §5.14), with **DSpark** instead of the checkpoint's MTP head
+for speculative decoding (D10, §5.8, [research note](../docs/research/dspark.md)). Design: [`docs/design/design.md`](../docs/design/design.md). Measured hardware facts:
 [`docs/research/apple-gpu-probes.md`](../docs/research/apple-gpu-probes.md). Landscape and reuse notes:
 [`docs/research/apple-inference-systems.md`](../docs/research/apple-inference-systems.md).
 
@@ -12,11 +15,14 @@ only: its 19 GB working-set limit cannot host the 27B).
 ## 0. Scope
 
 **In scope (v1).** Text-only decode for the Qwen3.5-hybrid architecture from the NVFP4/FP8 checkpoint; greedy and
-stochastic sampling on the GPU; MTP speculative decoding; an extension path (model / quant format / op) proven on two
-more models; per-chip profiles for the M3/M4/M5 parts we can get hands on.
+stochastic sampling on the GPU; DSpark speculative decoding with a public drafter, entirely on the GPU; an extension
+path (model / quant format / op / drafter) proven on two more models and a second target–drafter pair; per-chip
+profiles for the M3/M4/M5 parts we can get hands on.
 
-**Explicit non-goals for v1** (decided 2026-09-19): prefill/TTFT as a gate (prompts run through decode-shaped steps at
-T = T_max), multi-request serving, energy targets, the vision tower, multi-Mac parallelism, iOS/iPadOS.
+**Explicit non-goals for v1** (decided 2026-09-19, amended 2026-09-23): prefill/TTFT as a gate (prompts run through
+decode-shaped steps at T = T_max), multi-request serving, energy targets, the vision tower, multi-Mac parallelism,
+iOS/iPadOS, the checkpoint's MTP head and tree verification (both fit the `Drafter` contract; neither is built in v1),
+drafter training (a GPU-box dependency, not an engine feature).
 
 **Success metrics** — same machine, same prompt set, paired A/B, min-of-N:
 
@@ -24,9 +30,9 @@ T = T_max), multi-request serving, energy targets, the vision tower, multi-Mac p
 |---|---|
 | Correctness | greedy tokens equal to the reference (HF on dequantized weights) except at exact logit ties; repeated runs bit-identical |
 | Plain decode | ≥ **1.10×** the better of MLX / llama.cpp on the same machine; stretch ≥ 80 % of the chip's nominal bandwidth bound (6.9 tok/s on the M3 Pro; 13.7 tok/s on an M5 Pro with enough memory). The survey puts the practical ceiling at 85–90 % and today's engines at 57–80 % on dense models, so this gate is deliberately near the limit of what plain decode can give |
-| Speculative decode | ≥ **1.5×** our own plain decode, token-identical in greedy mode |
+| Speculative decode | ≥ **1.5×** our own plain decode and ≥ llama.cpp's `draft-dspark` decode with the same drafter on the same machine; greedy output token-identical to our non-speculative greedy decode |
 | Host cost | < 5 % of one CPU core during generation; **zero** CPU↔GPU synchronizations per token or per speculative round on the critical path |
-| Generality | 2nd model with **no** kernel/runtime change; 3rd model + 2nd quant format via the documented plugin paths only |
+| Generality | 2nd model (with its own DSpark drafter) with **no** kernel/runtime change — the CI extension test proves the PR touches only `monolith/models/`, `tests/`, `docs/`; 3rd model + 2nd quant format via the documented plugin paths only |
 
 ## 1. Milestones
 
@@ -51,6 +57,15 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       parity" and the T-cost curves Apple10-only?
 * [ ] Baselines on the M3 Pro: `mlx-lm` (NVFP4 mode and affine 4-bit) and `llama.cpp` (Q4_K_M) on Qwen3.8-27B and on a
       small same-architecture model: tok/s, effective GB/s, CPU utilization, dispatches and command buffers per token.
+* [ ] **Drafters.** Fetch the Apache-2.0 DSpark drafters for the target — `DimInfer/Qwen3.8-27B-Dspark-v1` (safetensors
+      + GGUF Q8/BF16, trained against the Q4_K_M target) and `gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4` (1.3 GB,
+      MLP/o_proj in NVFP4, trained on-policy against an NVFP4 target) — and `Dogacel/Qwen3-8B-DSpark` for model 2.
+      Record configs (layers, block size, tapped target layers, Markov rank, dtypes) and licenses in
+      `docs/research/dspark.md`; note that `RadixArk/Qwen3.8-27B-DSpark` carries an "other" license and is not used.
+* [ ] **Speculative baseline on the M3 Pro:** llama.cpp `--spec-type draft-dspark` (PR #25173) with the Q8 drafter and
+      the Q4_K_M target: accepted length and tok/s per workload (math, code, chat) at `--spec-draft-n-max` 2–7; DFlash's
+      MLX backend (`dflash generate mlx`) as a second reference. These are the acceptance figures the verify-length rule
+      must beat and the number the M6 gate is measured against.
 * [ ] Reference tooling: exact NVFP4/FP8 → BF16 dequantizer; HF golden scripts (adapt
       `mirage/tests/runtime_python/models/qwen38/hf_golden.py`): full goldens for the small model; per-layer goldens
       for the 27B produced layer-streamed (54 GB of BF16 does not fit in 36 GB) or on a larger machine.
@@ -64,7 +79,8 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       outcomes that would change the design are in the hardware report §4 (H1–H10, revised after the M5 Pro): chiefly
       `p12` (which lane order streams, cores to saturate, encode order), `p6`/`p6b` ×4 (sharing), `p10`, `p13`/`p14`.
 
-Exit: baseline table, goldens, ≥ 1 profile (two provisional profiles exist: `profiles/`).
+Exit: baseline table (plain and speculative), goldens, drafters on disk with recorded configs, ≥ 1 profile (two
+provisional profiles exist: `profiles/`).
 
 ### M1 — The GEMV proof · 2 ew · **go/no-go #1**
 
@@ -103,14 +119,17 @@ speculation stand on their own — drop the bandwidth claim from the design and 
   token ring; `StepState`.
   `nanobind` bindings; small C API. References: tinygrad `runtime/graph/metal.py` (ICB), gpt-oss `context.c`
   (multi-token submission).
-* `pack_weights`: safetensors (streaming, per shard) → BLM pack with format plugins (NVFP4, FP8-E4M3, BF16) and the
-  model's transforms (row-stacking `q|k|v` and `in_proj_qkv|a|b`, with the mixer's gate projection either stacked or
-  packed as its own op — design §5.12; `gate/up` interleave; partial-RoPE head-dim permutation; `(1+w)` norm weights).
+* `pack_weights`: safetensors (streaming, per shard) → BLM pack with format plugins (NVFP4, FP8-E4M3, BF16, INT8 for
+  Q8-style drafters) in the profile's lane order, and the model's transforms (row-stacking `q|k|v` and
+  `in_proj_qkv|a|b`, with the mixer's gate projection either stacked or packed as its own op — design §5.12; `gate/up`
+  interleave; partial-RoPE head-dim permutation; `(1+w)` norm weights). The drafter goes through the same packer: its
+  5 layers, the feature projection `Wc`, the Markov `W₁`/`W₂` (W₂ in the bias-GEMV layout) and the confidence vector.
 * Contract tests (no GPU): pack ↔ checkpoint round trip bit-exact after dequantization; program schema;
   parameter records never alias; arena plan alias-free.
 
 Exit: a two-op toy program replayed for 1,000 self-advancing steps from one encode, tokens drained from the ring with
-no `waitUntilCompleted` on the hot path; the full checkpoint packs and verifies.
+no `waitUntilCompleted` on the hot path; the full checkpoint and a drafter pack and verify; the repo skeleton of §2 is
+in place with the registries, the coverage guard stub and the contract tests running in CI.
 
 ### M3 — Kernel library v1 · 4 ew
 
@@ -123,6 +142,7 @@ Block bodies + kernel wrappers, each with a torch oracle and a leaf test:
 | `gqa_decode` (+ q/k norm, partial RoPE, KV append, sigmoid gate) | MPK `gqa_decode_sm100_v2.cuh` (online-softmax state merge); MLX `sdpa_vector.h`, llama.cpp `fa.metal` | max-abs ≤ 1e-3; repeat runs bit-identical |
 | `gdn_mixer` (conv+SiLU, L2-norm, gates, delta rule, gated norm) | MPK GDN variant of `kda_fused_recurrent_v2.cuh`, `kda_short_conv_v2.cuh`, `kda_gated_norm_v2.cuh`; MLX gated-delta update | state ≤ 8 ULP FP32, output ≤ 2 ULP; fresh + continuation; T = 1 and T > 1 |
 | `lm_head` + argmax / Gumbel-max / top-k / top-p | MPK `argmax_*`, `tasks/common/sampling.cuh`; gpt-oss `sample.metal`, `topk.metal` | exact argmax; distribution tests for sampling |
+| `draft_attn` (block queries over injected-context KV + bidirectional block), `feature_proj`, `markov_bias` + argmax + confidence, `verify_select`, `accept_scan` | DeepSpec `modeling/dspark/qwen3/modeling.py`, `markov_head.py`, `eval/dspark/confidence_head.py`; DFlash KV injection; llama.cpp `llama_dspark_markov_bias`; MPK `mtp_verify_strict` | draft tokens identical to the DeepSpec reference in greedy mode; confidences ≤ 1e-3; select rule equal to a Python model of it; accept scan exact |
 
 Then composites on real layer weights vs HF modules (one GDN layer, one attention layer, MLP): cos > 0.999 and bounded
 max-abs (MPK's `test_layer_cores.py` bars).
@@ -138,6 +158,10 @@ Exit: all leaf + composite gates green.
 * `models/qwen3_5`: structure and weight map adapted from MPK `models/qwen38/modeling.py` (drop TP sharding).
 * Passes: canonicalize → fuse → select packs → partition → place barriers → memory plan → emit (`program.json`,
   kernel wrappers, pack manifest). Coverage guard: an IR op without a kernel for the target profile fails the build.
+  Dynamic T: every kernel reads `T_this_step` from `StepState` (T_max = 1 + γ); per-T kernel variants are encoded
+  back-to-back and predicated (design §5.7).
+* Registries (models, layers, formats, ops, drafters, profiles) and the **extension test**: a CI job that fails any
+  model PR touching files outside `monolith/models/`, `tests/`, `docs/`.
 * `generate` CLI + Python API; tokenizer via HF `tokenizers`.
 
 Exit: (a) small same-architecture model — 48 greedy tokens equal to the HF golden, in CI; (b) 27B-NVFP4 —
@@ -156,17 +180,31 @@ geometry; keep it per chip only where the A/B shows a gain (expected ~2–4 % on
 Exit gate: the plain-decode success metric. *If 1.10× is missed but parity holds:* proceed to M6 — speculation does
 not depend on it — and record why.
 
-### M6 — MTP speculative decoding · 4 ew
+### M6 — DSpark speculative decoding · 4 ew
 
-MTP module and weights (BF16; optional load-time FP8), `T > 1` kernels tuned, GDN/conv checkpoint slots, KV rollback,
-on-GPU strict verify + accept scan, rejection sampling for temperature > 0, dynamic-`T` ops driven by `StepState`,
-draft length k *and kernel path* chosen per chip by measurement (semantics from MPK `mtp_verify_strict`,
-`spec_decode/`). Measured pass costs on the M5 Pro relative to T = 1: shader ALUs FP8 ×1.08 / ×1.11 / ×3.6 and NVFP4
-×1.28 / ×1.79 / ×5.3 at T = 2 / 4 / 8; the accelerator path ×1.5 at T = 8 in either format (`p13`, `p14`) — so k = 1–2
-runs on the shader kernels and larger k on the M5 accelerator path (M9). Known hazard: llama.cpp reports MTP
-speculation as a net loss on an M1 Max — verification cost on compute-poor parts is real.
+Design §5.8. Everything on the GPU; the host only drains tokens.
 
-Exit gate: the speculative-decode success metric; the trace shows no CPU synchronization inside or between rounds.
+* `spec/dspark/`: the drafter as a `Drafter` module — 5 attention layers on the shared `GQAAttention`/`GatedMLP`
+  library with a second KV source (the injected context), mask embeddings, the feature projection `Wc`, the Markov
+  head (`W₁`, `W₂`, rank 256) and the confidence head; weight map from the public checkpoints (safetensors) and from
+  the llama.cpp GGUF naming (`markov_w1/w2`, `conf_proj`, `dflash.block_size`).
+* Step-program ops (M3) wired into the dynamic-T program: feature taps as stage-5 epilogues of the tapped target
+  layers, feature append, draft pass at T = γ, `lm_head` at T = γ, γ Markov-bias + argmax + confidence pairs,
+  `verify_select` from the confidence chain and the profile's `cost(T)` table, verify pass at T = 1 + L, accept scan
+  with GDN/conv checkpoint choice and KV advance; `γ + 1` checkpoint slots.
+* Correctness first: greedy speculative decode token-identical to greedy non-speculative decode on 256-token
+  generations across the prompt set; rejection sampling for temperature > 0 with distribution tests; drafter block
+  identical to the DeepSpec reference.
+* Then measurement: accepted-length histograms per workload for each drafter (NVFP4, INT8, BF16); calibration of the
+  confidence chain (per-position temperatures, STS) against measured acceptance; the verify-length rule vs fixed L;
+  tokens/s vs plain decode and vs the llama.cpp `draft-dspark` baseline on the same machine; the trace shows no CPU
+  synchronization inside or between rounds.
+* Optional, gated on the numbers: prune the Markov bias to the top-M base logits (exactness argument required);
+  an INT8 re-quantization of `W₂` at load; the accelerator verify path on Apple10 for T ≥ 5 (M9).
+
+Exit gate: the speculative-decode success metric (≥ 1.5× our plain decode and ≥ llama.cpp's DSpark decode, greedy
+token-identical). *If acceptance is the problem* (drafter trained against a different target quantization): retrain
+on-policy with the NeMo AutoModel / SpecForge / DeepSpec recipes on a GPU box — a dependency, not engine work.
 
 ### M7 — In-kernel runtime re-evaluation and intra-op stealing · 1.5 ew · time-boxed, off the critical path
 
@@ -180,8 +218,9 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
 
 ### M8 — Generality proof · 3 ew
 
-* Model 2, existing ops only (a dense Llama/Qwen3-class model): **no kernel or runtime edits allowed** — that is the
-  test.
+* Model 2, existing ops only: **Qwen3-8B** (dense) with its public DSpark drafter (`Dogacel/Qwen3-8B-DSpark`) — no
+  kernel or runtime edits allowed, the CI extension test enforces it, and the drafter contract is exercised with a
+  second target–drafter pair.
 * Model 3, new ops (a Qwen3.5-MoE-class model: router + expert GEMV indexed by GPU-resident expert ids) — exercises the
   new-op path and data-dependent indexing inside a static program. The survey shows this is where an overhead-free
   engine has the most headroom (today's engines reach only 36–55 % of the bound on 3B-active MoE).
@@ -196,8 +235,9 @@ validated on the M5 Pro by `probes/p14_tensor_ops` (dequantize a [64 × 64] tile
 pass in FP8 and NVFP4, 32 tokens for 1.7–1.8×; compiles from the Command Line Tools at MSL 4.0). Remaining: tile
 tuning, the cooperative right-input fill (no threadgroup staging; reference: MLX `steel/gemm/nax.h`, `quantized_nax.h`),
 and the one pipelining experiment that is M5-only — dequantize tile n+1 on the shader ALUs while the neural
-accelerator multiplies tile n (design §5.12); MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1). Exit: per-chip
-results table next to each chip's bound.
+accelerator multiplies tile n (design §5.12); the accelerator **verify path** for T = 1 + L ≥ 5 wired into the
+dynamic-T program as the predicated variant; MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1). Exit: per-chip
+results table next to each chip's bound, including tokens/s with DSpark.
 
 ### Backlog (post-v1)
 
@@ -206,19 +246,31 @@ measurements; Swift package / C API hardening; multi-Mac over Thunderbolt-5 RDMA
 
 ## 2. Repository layout
 
+Standalone (design D15): everything below builds and tests from this repo with the Command Line Tools; copied files keep
+their license headers and a provenance line, and are listed in `third_party/NOTICE`. Modular (design D16, §5.14): model
+names appear only under `monolith/models/`.
+
 ```
-docs/design/design.md                     docs/research/{apple-gpu-probes,apple-inference-systems}.md
-plans/implementation-plan.md              probes/                  (hardware characterization, done)
-monolith/                                 Python: front-end + compiler   (package name = working codename)
-  ir/  nn/  models/{registry.py,qwen3_5/}  formats/{nvfp4,fp8,bf16}.py
-  compiler/{passes/,memory_plan.py,cost_model.py,codegen_msl.py}
-  profiles/*.json  autotune/  trace/  generate.py
+CLAUDE.md  README.md  LICENSE  third_party/NOTICE          pyproject.toml  CMakeLists.txt  .github/workflows/
+docs/design/design.md                     docs/research/{apple-gpu-probes,apple-inference-systems,dspark}.md
+plans/implementation-plan.md              probes/ (hardware characterization; p13/p14 = the first real kernels)
+profiles/*.json                           per-chip profiles (measured; hand-derived first cut)
+monolith/                                 Python package (working codename)
+  core/      ir.py dtypes.py shapes.py step_state.py profile.py
+  nn/        module.py (Module contract)  embedding.py norm.py linear.py attention.py gdn.py mlp.py lm_head.py sampler.py
+  models/    registry.py  qwen3_5/{config,model,weights}.py   qwen3/{…}   (M8)   qwen3_5_moe/{…} (M8)
+  formats/   registry.py  nvfp4/ fp8_e4m3/ bf16/ int8/       (unpack → pack, msl decode snippet, oracle)
+  ops/       registry.py  gemv.py attention.py gdn.py norm.py embed.py sample.py draft.py serial.py  cost.py
+  spec/      drafter.py (Drafter contract)  verify.py accept.py   dspark/{config,model,heads,select,weights}.py
+  compiler/  passes/{canonicalize,fuse,select_packs,partition,barriers,memory_plan}.py  emit.py coverage.py autotune.py
+  runtime/   __init__.py (nanobind module import), api.py (generate, load, profile)
+  generate.py   (CLI)
 kernels/                                  MSL block bodies + templates
-  common/{simd.metal,nvfp4.metal,fp8.metal,rng.metal,steal.metal}
-  gemv.metal  attention.metal  gdn.metal  norm.metal  embed.metal  sample.metal  mtp.metal
-runtime/                                  C++/ObjC++ core + nanobind bindings + C API (CMake)
-tools/{pack_weights.py,bench/,viewer/}    tests/{contract,kernels,layers,models,runtime,perf}/
-third_party/NOTICE                        (Apache-2.0 attributions for code adapted from mirage; MIT for MLX/llama.cpp/tinygrad-derived code)
+  common/{simd,nvfp4,fp8,int8,rng,steal}.metal  gemv.metal attention.metal gdn.metal norm.metal embed.metal sample.metal draft.metal
+runtime/                                  C++/ObjC++ core: device.mm packs.mm pipelines.mm icb.mm pump.mm ring.mm state.mm trace.mm
+  bindings/ (nanobind)  include/monolith.h (small C API)
+tools/     pack_weights.py  bench/ (GEMV harness grown from probes/p13, matmul2d from p14)  goldens/  viewer/
+tests/     contract/ kernels/ layers/ models/ spec/ runtime/ perf/ extension/
 ```
 
 ## 3. Test strategy
@@ -230,6 +282,8 @@ third_party/NOTICE                        (Apache-2.0 attributions for code adap
 | Composite | Apple GPU | one layer of each kind on real weights vs HF modules (cos > 0.999, max-abs bound) |
 | Model | Apple GPU | small-model full goldens in CI; 27B reduced-layer + full greedy match nightly |
 | Runtime | Apple GPU | ICB replay ≡ re-encode, self-advancing steps, early exit after `done`, stealing exactly-once where enabled |
+| Spec | Apple GPU | drafter block vs the DeepSpec torch reference (greedy tokens identical, confidences ≤ 1e-3); `verify_select` vs a Python model of the rule; 256-token greedy speculative decode identical to non-speculative; accepted-length histograms logged per workload |
+| Extension | any machine | a model PR changes nothing outside `monolith/models/`, `tests/`, `docs/` (git-diff check); a registered model with a missing kernel binding fails the build (coverage guard) |
 | Perf | dedicated machine | paired alternating A/B (MPK `ab.sh` discipline), min-of-N, thermal state logged; tok/s reported with GB/s and % of bound |
 
 CI: hosted macOS runners for the contract tier; a self-hosted Apple-silicon runner for GPU tiers. Profiling is a
@@ -244,7 +298,10 @@ a dispatch is not preemptible.
 | Module contract, streaming weight load, registry, configs | `layers_v2/_base.py`, `models/_registry.py`, `configs/*`, `weight_loader.py` | adapt |
 | GDN recurrence, short conv, gated norm; CUDA-core GQA decode; sampling | `tasks/blackwell_v2/kda/*`, `gqa_decode_sm100_v2.cuh`, `tasks/common/sampling.cuh` | port algorithms to MSL block bodies |
 | In-kernel batch advance, token streaming | `persistent_kernel.cuh::prepare_next_batch`, `docs/mpk/online_output_streaming.md` | re-host in the per-step serial op / token ring |
-| MTP verify semantics | `mtp_*` layers, `spec_decode/` | adapt |
+| Accept-scan / rollback semantics (the target side of chain verification) | `mtp_verify_strict`, `spec_decode/` | adapt |
+| DSpark drafter: block drafter with KV injection, Markov head, confidence head, evaluator | DeepSpec (MIT) `deepspec/modeling/dspark/qwen3/modeling.py`, `markov_head.py`, `eval/dspark/`; DFlash (MIT) `dflash/` incl. its MLX backend | torch reference + oracle; port to `spec/dspark/` and MSL block bodies |
+| DSpark in a C++ engine: GGUF tensor naming, Markov-bias kernel, verify loop; confidence scheduling | llama.cpp PR #25173 (MIT); SGLang DSpark scheduler (Apache-2.0) | reference |
+| DSpark drafters for Qwen3.8-27B and Qwen3-8B | `DimInfer/Qwen3.8-27B-Dspark-v1`, `gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4`, `Dogacel/Qwen3-8B-DSpark` (Apache-2.0) | weights |
 | Static-schedule ideas | PR #278: layer-type templates, monotone counters, init-once, compile-time profiling, gate/A-B scripts | design input |
 | Goldens and gates | `tests/runtime_python/models/qwen38/*` | adapt |
 | Trace format, decoder, viewer | `python/mpkprof`, `tools/mpkv2_viewer` | reuse with a new emitter |
@@ -265,17 +322,34 @@ new engine.
 | Compute-ICB driver bugs | replay ≠ re-encode, hangs | re-encode fallback (0.16 ms/token, still sync-free); keep ICB use to the documented command set |
 | Our command buffers stall other GPU clients (sharing is only *usually* per dispatch) | frame-pacing check; `ImpactingInteractivity` errors | `max_cb_ms` ≤ ~16–33 ms while a display is attached; longer buffers only in a headless profile |
 | Firmware behaviour differs on other chips/OS | probe-suite deltas — **measured: the M5 Pro differs from the M3 Pro in the lane order that streams, in sharing granularity and in the encode-order dependence of overlap** | profiles are measured, not assumed (lane order, threadgroups per core, sibling order, `max_cb_ms` are profile values); correctness depends only on documented Metal semantics |
-| MTP acceptance low or T > 1 compute-bound | M6 gate missed | k per chip; FP8 MTP head; TensorOps on M5 |
+| DSpark acceptance low on our W4A16 target (drafters were trained against Q4_K_M / NVFP4-W4A4 targets) or T > 1 compute-bound | M6 gate missed; accepted length ≪ the llama.cpp baseline | measure first (llama.cpp `draft-dspark` on the M3 Pro); verify-length rule per chip; INT8/NVFP4 drafter; accelerator verify path on M5; retrain on-policy with the public recipes on a GPU box |
+| Drafter memory and Markov-head traffic | working set > 30 GB on a 36 GB machine; > 5 % of a round in `markov_bias` | NVFP4 / INT8 drafter; W₂ re-quantized to INT8 at load; top-M pruning of the bias if an exactness bound holds |
+| Coupling to MPK creeps back in (imports, naming, build) | a mirage import or submodule appears | design D15: copy with headers + NOTICE, never depend; reviewed per PR |
+| Model-specific code leaks into the engine | a model PR touches `compiler/`, `runtime/`, `kernels/` | design D16 + the CI extension test; new ops land as separate `ops/` + `kernels/` PRs |
 | W4A16 reference disagrees with NVIDIA's W4A4 runtime | token drift vs Blackwell outputs | our contract is HF-on-dequantized-weights; report accuracy deltas on a small eval set |
-| 36 GB headroom (21 GB weights + KV + states + OS) | memory pressure; a 24 GB machine (the M5 Pro on hand) reports a 19 GB working-set limit | no vision tower, capped context, optional FP8 MTP; document a 36 GB minimum; use 24 GB machines for kernels and small models only |
+| 36 GB headroom (21 GB weights + KV + states + OS) | memory pressure; a 24 GB machine (the M5 Pro on hand) reports a 19 GB working-set limit | no vision tower, capped context, an INT8 or NVFP4 drafter; document a 36 GB minimum; use 24 GB machines for kernels and small models only |
 | Baselines improve (MLX/llama.cpp ship faster NVFP4/GDN paths) | re-measured each milestone | claims are relative, same machine, same day |
 | Generated-kernel compile time / code size | build > 60 s | shared bodies, function constants, binary archives; ~12 pipelines serve all layers |
 
-## 6. First PRs
+## 6. First PRs — building starts here (2026-09-23)
 
-1. Repo skeleton, `third_party/NOTICE`, CI for the contract tier; `probes/` + research docs (this commit's content).
-2. NVFP4/FP8 exact dequantizer + golden scripts + small-model goldens.
-3. `pack_weights` with BLM packs and round-trip tests.
-4. GEMV bench harness + first NVFP4/FP8 kernels + MLX/llama.cpp baseline scripts (M1) — seeded by `probes/p13_decode_gemv`
-   and `probes/p14_tensor_ops`, which already carry the pack layouts, the CPU reference and the geometry sweeps.
-5. Runtime core: pack loader, pipeline cache, ICB builder + re-encode fallback, host pump, token ring (M2).
+Each PR is small, standalone-buildable, and lands with its tests. Definition of done in brackets.
+
+1. **Skeleton.** `pyproject.toml`, `CMakeLists.txt`, `monolith/` package with `core/`, `nn/module.py`, the registries,
+   `spec/drafter.py`, `third_party/NOTICE`, `LICENSE`, CI for the contract tier and the extension test. [`pytest
+   tests/contract` passes on a hosted runner; `import monolith` works; no mirage import anywhere.]
+2. **Formats + dequantizer + goldens.** `formats/{nvfp4,fp8_e4m3,bf16,int8}` with exact torch oracles; HF golden
+   scripts (adapted from MPK) for a small same-architecture model and per-layer goldens for the 27B (layer-streamed);
+   `docs/research/dspark.md` filled with the drafter configs. [Pack ↔ checkpoint round trip bit-exact after
+   dequantization; goldens checked in for the small model.]
+3. **`pack_weights` + BLM packs** in both lane orders, model transforms, drafter tensors. [Round-trip tests; the 27B and
+   a drafter pack on the M3 Pro.]
+4. **GEMV bench harness + M1 kernels** (grown from `probes/p13`/`p14`): `gemv_T` for NVFP4/FP8/BF16/INT8, the NVFP4
+   decode study, MLX/llama.cpp baseline scripts. [M1 gate table for the M3 Pro and the M5 Pro.]
+5. **Runtime core** (M2): device, packs, pipelines, ICB builder + re-encode fallback, host pump with `max_cb_ms`, token
+   ring, `StepState`, nanobind. [The two-op toy program replayed 1,000 steps; ICB ≡ re-encode.]
+6. **Kernel library v1** (M3), one PR per op family with oracle tests; the drafter ops last.
+7. **Compiler + Qwen3.8 end-to-end** (M4), then **performance pass** (M5), then **DSpark** (M6) — each behind its gate.
+
+The MPK files copied in PRs 1–3 (model structure, weight map, module contract, registry, goldens, profiler format) keep
+their Apache-2.0 headers and get provenance lines; nothing in the tree imports or names mirage.

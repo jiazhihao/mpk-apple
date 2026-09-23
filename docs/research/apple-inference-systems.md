@@ -149,6 +149,8 @@ chips), and small for dense ≥ 7B models (≤ 1.15–1.35×).** For a dense-ish
 from streaming efficiency (a few to ~15 %), not from launch overhead; the larger lever is tokens per weight pass.
 A caution for that lever: llama.cpp's MTP speculation is reported as a net loss on an M1 Max
 ([#23752](https://github.com/ggml-org/llama.cpp/issues/23752)) — verification cost on compute-poor chips is real.
+Since then llama.cpp has merged DSpark drafting ([PR #25173](https://github.com/ggml-org/llama.cpp/pull/25173)) and
+DFlash ships an MLX backend; both are our speculative baselines (see [dspark.md](dspark.md)).
 
 ## 6. Metal facts that constrain the design
 
