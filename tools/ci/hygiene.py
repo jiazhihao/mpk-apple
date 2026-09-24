@@ -72,6 +72,8 @@ def check_model_names(root: Path) -> List[str]:
         for tok in _py_tokens(p):
             if tok.type not in (tokenize.NAME, tokenize.STRING):
                 continue
+            if tok.type == tokenize.STRING and (tok.string.endswith('"""') or tok.string.endswith("'''")):
+                continue                      # docstrings may cite checkpoints and other engines; code may not
             low = tok.string.lower()
             hit = next((t for t in MODEL_TOKENS if t in low), None)
             if hit:
