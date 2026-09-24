@@ -18,13 +18,14 @@ def dev():
     return nt.Device()
 
 
-def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False):
+def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None):
     rng = np.random.default_rng(3)
     spec = random_spec(fmt, n, K, rng)
     data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order))
     x = rng.uniform(-1, 1, size=(t, K)).astype(np.float32)
     xb = f32_to_bf16(x)
     macros = kernels.gemv_macros(info, t=t)
+    macros.update(extra_macros or {})
     pso = nt.Pipeline(nt.Library(dev, kernels.gemv_source(fmt), macros), "gemv_T")
     n_sg = info.n_blocks if one_block_per_sg else 12 * dev.info().gpu_cores
     tg = 64 if one_block_per_sg else 384
@@ -56,3 +57,11 @@ def test_gemv_conventional_geometry_and_dynamic_t(dev):
     out, ref, t_act = _run(dev, "nvfp4", 64, 16, 4, "interleaved16", t_active=2)
     assert check_against_oracle(out[:2], ref[:2]).ok() and t_act == 2
     assert np.all(out[2:] == 0)                                    # tokens beyond t_active are not written
+
+
+@pytest.mark.parametrize("variant", ["0", "1", "2"])
+@pytest.mark.parametrize("rows,t", [(16, 1), (4, 1), (8, 4)])
+def test_nvfp4_decode_variants_are_exact(dev, variant, rows, t):
+    out, ref, _ = _run(dev, "nvfp4", 100, rows, t, "interleaved16", extra_macros={"NVFP4_DECODE": variant})
+    chk = check_against_oracle(out, ref)
+    assert chk.ok() and chk.max_rel_err < 1e-6, chk         # the decodes are bit-exact; only accumulation order differs

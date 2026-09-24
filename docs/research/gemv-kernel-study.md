@@ -1,0 +1,85 @@
+# GEMV kernel study — the M1 harness on the M5 Pro
+
+Status: measured 2026-09-24 on the M5 Pro (20-core GPU, 24 GB, macOS 26.5.1, AC power) with
+[`tools/bench/gemv_bench.py`](../../tools/bench/gemv_bench.py) (plan M1, issues #9 and #10). Every point is min-of-3
+over ≥ 2 GB streamed, checked against the exact format oracle (≤ 2 BF16 ULP at the output's magnitude, accumulation
+noise < 1e-4); the raw JSON lines are in [`tools/bench/results/`](../../tools/bench/results). Nominal = 307 GB/s.
+
+## 1. The kernel
+
+`kernels/gemv_T.metal`: static slices over the block-lane-major pack (design D8), 16-byte weight loads in either lane
+order, the format plugin's decode snippet, in-word block scales, the per-row tensor scale from the pack, BF16
+activations converted once per word and reused across `RG` rows, FP32 accumulation, one `simd_sum` per (row, token).
+Knobs: rows per block `R`, tokens `T`, row group `RG`, lane order, and the geometry — the crew (12 SIMD-groups per
+core, `×n` = n threadgroups of 384 per core) or one block per SIMD-group in small threadgroups (the MLX/llama.cpp
+shape, "1blk/SG tg64").
+
+## 2. M1 sweep (reference NVFP4 decode, R = 16, RG = 2) — `apple-m5-pro-20c_gemv_m1.jsonl`, 252 points
+
+Best geometry per shape and T; the crew ×1 number in the last column:
+
+| format | shape | T = 1 | T = 2 | T = 4 | crew ×1, T = 1 |
+|---|---|---|---|---|---|
+| FP8 | 17408×5120 (gate/up) | 260 GB/s (85 %) | 248 (81 %) | 109 (36 %) | 254 |
+| FP8 | 5120×17408 (down) | 279 (91 %) | 238 (77 %) | 124 (41 %) | 201 |
+| FP8 | 10240×5120 (GDN qkv) | 277 (90 %) | 234 (76 %) | 118 (39 %) | 250 |
+| FP8 | 12288×5120 (q + gate) | 264 (86 %) | 255 (83 %) | 104 (34 %) | 229 |
+| FP8 | 6144×5120 (z) | 231 (75 %) | 255 (83 %) | 89 (29 %) | 231 |
+| FP8 | 5120×6144 (o / out) | 273 (89 %) | 242 (79 %) | 124 (40 %) | 196 |
+| FP8 | 248320×5120 (lm_head) | 291 (95 %) | 288 (94 %) | 125 (41 %) | 274 |
+| NVFP4 | 17408×5120 | 157 (51 %) | 110 (36 %) | 78 (26 %) | 118 |
+| NVFP4 | 5120×17408 | 143 (47 %) | 110 (36 %) | 80 (26 %) | 88 |
+| NVFP4 | 248320×5120 | 184 (60 %) | 127 (41 %) | 89 (29 %) | 131 |
+
+Also at the crew geometry, T = 1, 17408×5120: BF16 284 GB/s (93 %), INT8 266 GB/s (87 %).
+
+## 3. NVFP4 decode study — `apple-m5-pro-20c_nvfp4_decode.jsonl`
+
+Three exact decodes of the E2M1 nibbles (`monolith/formats/nvfp4.py`, macro `NVFP4_DECODE`):
+
+* **V0** — per nibble, float bit construction with two selects (the `p13` decode; ~14 ALU ops per weight);
+* **V1** — nibble pairs decoded into a `half2` with packed 16-bit integer arithmetic (both halves of a 32-bit word
+  at once), then converted to `float2`;
+* **V2** — the eight magnitudes as small integers (`value × 2`) in one 32-bit constant, four bits each, an
+  `int → float` conversion and a sign select; the `× 0.5` folds into the block scale.
+
+T = 1, `interleaved16`:
+
+| shape | geometry | V0 | V1 | V2 |
+|---|---|---|---|---|
+| 17408×5120 | crew ×1, R = 16 | 118 GB/s (39 %) | 150 (49 %) | 161 (52 %) |
+| 17408×5120 | crew ×4, R = 16 | 146 (47 %) | 179 (58 %) | 211 (69 %) |
+| 17408×5120 | 1blk/SG tg64, R = 8 | 168 (55 %) | 203 (66 %) | 243 (79 %) |
+| 17408×5120 | 1blk/SG tg64, R = 4, RG = 4 | — | — | **252 (82 %)** |
+| 5120×17408 | 1blk/SG tg64, R = 4, RG = 4 | — | — | 226 (74 %) |
+| 248320×5120 | 1blk/SG tg64, R = 4 | — | 246 (80 %) | **273 (89 %)** |
+
+T > 1 does not benefit from the decode (V2, 1blk/SG: T = 2 130–151 GB/s, T = 4 89–99): once the decode is cheap the
+FMAs per weight dominate, which is the accelerator path's territory (design §5.6, `p14`).
+
+## 4. What it says
+
+1. **FP8 is bus-bound at T = 1** (85–95 % of nominal); the crew geometry is at parity on the wide shapes and 5–30 %
+   behind on the narrow ones (fewer blocks per SIMD-group: 6144-row matrices give 1.6 blocks per crew SIMD-group, so
+   tail quantization and the lack of latency hiding both bite). One block per SIMD-group in 64-thread threadgroups is
+   the safer default; the crew geometry with 2–4 threadgroups per core recovers most of the gap.
+2. **NVFP4 was ALU-bound with the reference decode and is close to bus-bound with V2**: 82 % on gate/up, 89 % on
+   lm_head, 74 % on down (K = 17408: 34 scale bytes per lane-row spill into a third scale word and the unit pads 306 →
+   320 bytes). V2 is the default. Remaining ideas for the last 10–20 %: fold the scale bytes into the payload words for
+   long K, a `half`-domain dot for the 16-weight group (a numerics-gate question), and the tail-quantization-aware
+   block count.
+3. **Small R wins for NVFP4** (R = 4 > 8 > 16 at one block per SIMD-group): fewer registers per row group and finer
+   slices; for FP8 R = 8–16 is flat. `RG = 2` beats 4 for FP8 at the crew geometry (254 vs 223 GB/s) and RG = 1 is
+   worse everywhere.
+4. **T = 2 costs ×1.05–1.15 for FP8 and ×1.6–1.8 for NVFP4** relative to the same shape at T = 1 (best geometries);
+   T = 4 costs ×2.3 (FP8) and ×2.7 (NVFP4) with RG = 2 — worse than `p13`'s ×1.11 / ×1.79 at RG = 4, so the T > 1
+   kernels need their own tuning (issue #11) and the accelerator path from T ≈ 3–5.
+
+## 5. Against plan M1's gate
+
+| gate | status on the M5 Pro |
+|---|---|
+| FP8 shapes ≥ 100 GB/s effective | met (231–291 GB/s) |
+| NVFP4 T = 1 ≥ 80 % of nominal | met on gate/up (82 %) and lm_head (89 %); 74 % on down — the K = 17408 layout item above |
+| NVFP4 T = 1 ≥ 1.10× MLX's kernel on the same machine | issue #12 |
+| outputs within 2 ULP (BF16) of the oracle | met on every point (max 0.0 ULP at the output's magnitude, max relative error 1.8e-7) |
