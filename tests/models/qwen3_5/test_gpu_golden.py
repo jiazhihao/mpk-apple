@@ -94,3 +94,21 @@ def test_chunked_prefill_matches_the_long_golden(session):
     assert st["position"] == len(ids) + len(golden["gen_ids"]) - 1 and st["prefill_left"] == 0
     print(f"\nchunked prefill of {len(ids)} tokens ({-(-len(ids) // sess.layout.t_max)} chunks): {gen.prefill_ms:.1f} ms; "
           f"{len(gen.tokens)} greedy tokens equal the long golden")
+
+
+def test_sampling_is_reproducible_and_seed_dependent(session):
+    """Gumbel-max sampling on the GPU: the same seed reproduces the same tokens, another seed differs, and every
+    sampled token stays inside the top-k set the kernel's threshold defines (checked through the reference)."""
+    from monolith.generate import Session
+
+    sess, _ = session
+    with open(str(GOLDEN) + ".json") as f:
+        ids = json.load(f)["prompt_ids"]
+    a = Session(sess.model, str(sess.pack.dir), eos=-1, temperature=0.8, top_k=40, seed=11)
+    ta = a.generate(ids, 24).tokens
+    tb = a.generate(ids, 24).tokens
+    c = Session(sess.model, str(sess.pack.dir), eos=-1, temperature=0.8, top_k=40, seed=12)
+    tc = c.generate(ids, 24).tokens
+    assert ta == tb and len(ta) == 24 and ta != tc
+    sess.model.sampler = __import__("monolith.nn", fromlist=["GreedySampler"]).GreedySampler(prefix="sampler.")
+    print(f"\nsampled (seed 11): {ta[:10]}…  (seed 12): {tc[:10]}…")

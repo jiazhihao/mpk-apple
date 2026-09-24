@@ -228,6 +228,14 @@ counter (the advance emits a token only after the last chunk), then replays the 
 same machinery is what the DSpark round needs (T = 1 + L per step, design §5.7). Verified against a second HF golden
 with a 19-token prompt (3 chunks of 8, 8 and 3 tokens).
 
+*Status (2026-09-24, #23 sampling).* Stochastic sampling never leaves the GPU: four dispatches — a histogram of the
+BF16 logits' 65536 codes, a one-SIMD-group threshold select (top-k = the k-th largest value with ties kept, top-p =
+the value at which the descending cumulative softmax mass first reaches p, min-p = max + T·log p; exact for BF16
+logits, no sort), a Gumbel-max pass with a splitmix64 counter hash keyed by (seed, step, position, index), and the
+argmax final. A numpy reference reproduces the kernel's draws bit for bit; thresholds equal the HF warpers' masks on
+tie-free logits; 3,000 draws follow the warped softmax within 4σ; a run is reproducible per seed (`--temperature
+--top-k --top-p --min-p --seed` on the CLI). Greedy stays the two-dispatch argmax.
+
 ### M4 — Compiler and end-to-end decode · 4 ew
 
 * IR (typed graph, symbolic `T`/context, op metadata: reads/writes, block domain, class, cost).

@@ -237,8 +237,30 @@ def _argmax(ctx: _Ctx, op: Op) -> None:
     ctx.add(kf, [(0, pv, 0), (1, pi, 0), (2, token.name, 0), (3, prm, 0)], (ctx.t, 1, 1), (32, 1, 1), "argmax_final")
 
 
+def _sample(ctx: _Ctx, op: Op) -> None:
+    logits, = op.inputs
+    token = op.outputs[0]
+    vocab = ctx.shape(logits)[1]
+    a = op.attrs
+    src = kernels.sample_source()
+    macros = {"STEP_STATE": "1"}                                       # seed and step always come from StepState
+    kh, ks, kg, kf = (ctx.kernel("sample", src, f, macros) for f in ("sample_hist", "sample_select", "sample_gumbel", "argmax_final"))
+    hb, tb, pb = kernels.sample_workspace(ctx.t, ctx.n_sg)
+    hist, tau = ctx.scratch("sample.hist", hb), ctx.scratch("sample.tau", tb)
+    pv, pi = ctx.scratch("sample.val", pb), ctx.scratch("sample.idx", pb)
+    prm = ctx.params("sample", kernels.sample_params(vocab=vocab, t_active=ctx.t, n_sg=ctx.n_sg, top_k=int(a.get("top_k", 0)),
+                                                     temperature=float(a.get("temperature", 1.0)), top_p=float(a.get("top_p", 0.0)),
+                                                     min_p=float(a.get("min_p", 0.0)), seed=int(a.get("seed", 0)), step=0))
+    st = ctx.program.step_state
+    grid, tg = ctx.crew_grid()
+    ctx.add(kh, [(0, logits.name, 0), (1, hist, 0), (3, prm, 0), (15, st, 0)], grid, tg, op.kind)
+    ctx.add(ks, [(1, hist, 0), (2, tau, 0), (3, prm, 0), (15, st, 0)], (ctx.t, 1, 1), (32, 1, 1), "sample_select")
+    ctx.add(kg, [(0, logits.name, 0), (2, tau, 0), (3, prm, 0), (4, pv, 0), (5, pi, 0), (15, st, 0)], grid, tg, "sample_gumbel")
+    ctx.add(kf, [(0, pv, 0), (1, pi, 0), (2, token.name, 0), (3, prm, 0), (15, st, 0)], (ctx.t, 1, 1), (32, 1, 1), "argmax_final")
+
+
 HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "gemv": _gemv, "lm_head": _gemv, "gqa_decode": _gqa,
-            "gdn_mixer": _gdn, "argmax": _argmax}
+            "gdn_mixer": _gdn, "argmax": _argmax, "sample": _sample}
 
 
 def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: int = -1, ring_capacity: int = 4096,

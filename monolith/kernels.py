@@ -186,3 +186,28 @@ def advance_source(step_state_msl: str) -> str:
 
 def advance_params(t_active: int, ring_cap: int, eos: int) -> bytes:
     return struct.pack("<IIiI", t_active, ring_cap, eos, 0)
+
+
+# ---- stochastic sampling ---------------------------------------------------------------------------------------
+
+SAMPLE_HIST_KEYS = 65536
+
+
+def sample_source() -> str:
+    """argmax's helpers + the sampling kernels (one library: argmax_partial/final, sample_hist/select/gumbel)."""
+    return PRELUDE + template("argmax.metal") + "\n" + template("sample.metal")
+
+
+def sample_params(*, vocab: int, t_active: int, n_sg: int, top_k: int = 0, temperature: float = 1.0, top_p: float = 0.0,
+                  min_p: float = 0.0, seed: int = 0, step: int = 0) -> bytes:
+    """The ``SampleParams`` record (buffer 3 of the sampling kernels); ``top_k``/``top_p``/``min_p`` of 0 disable."""
+    flags = (1 if top_k > 0 else 0) | (2 if 0.0 < top_p < 1.0 else 0) | (4 if min_p > 0.0 else 0)
+    if temperature <= 0.0:
+        raise ValueError("sample_params: temperature must be positive (use the argmax path for greedy)")
+    return struct.pack("<IIIIIfffIIII", vocab, t_active, n_sg, -(-vocab // ARGMAX_SPAN), top_k, temperature, top_p, min_p,
+                       seed & 0xFFFFFFFF, (seed >> 32) & 0xFFFFFFFF, step, flags)
+
+
+def sample_workspace(t_max: int, n_sg: int) -> Tuple[int, int, int]:
+    """Bytes of the histogram, tau and partial buffers."""
+    return t_max * SAMPLE_HIST_KEYS * 4, t_max * 4, t_max * n_sg * 4
