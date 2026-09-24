@@ -31,8 +31,8 @@ class NVFP4(Format):
     weights_per_word = 32
     scale_group = BLOCK
     msl_decode = """
-constant uint WEIGHTS_PER_WORD = 32;
-constant uint SCALE_GROUP = 16;
+#define WEIGHTS_PER_WORD 32u
+#define SCALE_GROUP 16u
 static inline float fp4_e2m1(uint q) {
   uint e = (q >> 1) & 3u, m = q & 1u;
   float v = (e == 0u) ? float(m) * 0.5f : as_type<float>(((e + 126u) << 23) | (m << 22));
@@ -42,6 +42,14 @@ static inline void decode_word(uint4 q, thread float* out) {
   uint w[4] = {q.x, q.y, q.z, q.w};
   for (uint e = 0; e < 32; e++) out[e] = fp4_e2m1((w[e >> 3] >> ((e & 7u) * 4u)) & 0xFu);
 }
+static inline float fp8_e4m3_scale(uint q) {
+  uint e = (q >> 3) & 15u, m = q & 7u;
+  float v = as_type<float>(((q & 0x7Fu) << 20) + (120u << 23));
+  v = (e == 0u) ? float(m) * (1.0f / 512.0f) : v;
+  return (q & 0x80u) ? -v : v;
+}
+// scale of group g of this lane-row: byte g of the unit's scale region (held in registers as uints)
+static inline float decode_scale(thread const uint* sw, uint g) { return fp8_e4m3_scale((sw[g >> 2] >> ((g & 3u) * 8u)) & 0xFFu); }
 """
 
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:

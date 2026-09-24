@@ -20,12 +20,13 @@ class BF16(Format):
     weights_per_word = 8
     scale_group = 0
     msl_decode = """
-constant uint WEIGHTS_PER_WORD = 8;
-constant uint SCALE_GROUP = 0;
+#define WEIGHTS_PER_WORD 8u
+#define SCALE_GROUP 0u
 static inline void decode_word(uint4 q, thread float* out) {
   uint w[4] = {q.x, q.y, q.z, q.w};
   for (uint i = 0; i < 4; i++) { out[2 * i] = as_type<float>(w[i] << 16); out[2 * i + 1] = as_type<float>(w[i] & 0xFFFF0000u); }
 }
+static inline float decode_scale(thread const uint* sw, uint g) { return 1.0f; }
 """
 
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:

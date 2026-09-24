@@ -49,11 +49,14 @@ class Format(ABC):
 
     The MSL side of the plugin is ``msl_decode``: a snippet the GEMV template pastes in, which must define
 
-    * ``constant uint WEIGHTS_PER_WORD`` — weights held by one 16-byte word of the lane-row unit;
-    * ``constant uint SCALE_GROUP`` — weights per block scale (0 = no block scales; the scale bytes follow the
-      payload inside the unit, one E4M3 byte per group for NVFP4, one ``half`` per group for INT8);
+    * ``#define WEIGHTS_PER_WORD n`` — weights held by one 16-byte word of the lane-row unit (a preprocessor
+      macro, so the template can ``#if`` on it);
+    * ``#define SCALE_GROUP n`` — weights per block scale (0 = no block scales; the scale bytes follow the payload
+      inside the unit, one E4M3 byte per group for NVFP4, one ``half`` per group for INT8);
     * ``static inline void decode_word(uint4 q, thread float* out)`` — the raw codes of one word as floats; block
-      and tensor scales are applied by the template, not here.
+      and tensor scales are applied by the template, not here;
+    * ``static inline float decode_scale(thread const uint* scale_words, uint g)`` — block scale ``g`` of a
+      lane-row from its scale region held in registers (``1.0f`` for formats without block scales).
     """
 
     name: str = ""

@@ -22,12 +22,14 @@ class INT8(Format):
     weights_per_word = 16
     scale_group = GROUP
     msl_decode = """
-constant uint WEIGHTS_PER_WORD = 16;
-constant uint SCALE_GROUP = 32;
+#define WEIGHTS_PER_WORD 16u
+#define SCALE_GROUP 32u
 static inline void decode_word(uint4 q, thread float* out) {
   uint w[4] = {q.x, q.y, q.z, q.w};
   for (uint e = 0; e < 16; e++) out[e] = float(int(w[e >> 2] << (24u - (e & 3u) * 8u)) >> 24);
 }
+// scale of group g: half g of the unit's scale region
+static inline float decode_scale(thread const uint* sw, uint g) { return float(as_type<half>(ushort((sw[g >> 1] >> ((g & 1u) * 16u)) & 0xFFFFu))); }
 """
 
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:
