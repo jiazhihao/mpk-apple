@@ -28,6 +28,9 @@
 #ifndef NORM
 #define NORM 0
 #endif
+#ifndef EPILOGUE_ROUND
+#define EPILOGUE_ROUND 0             // with EPILOGUE=1: round the product to BF16 before the residual add (two roundings, the
+#endif                               // reference's separate linear + add; the fused layers keep the single rounding)
 #ifndef EPILOGUE
 #define EPILOGUE 0
 #endif
@@ -51,6 +54,9 @@
 #endif
 #ifndef STEP_STATE
 #define STEP_STATE 0                 // 1: T comes from the bound StepState (buffer 15) and the kernel returns at once after `done`
+#endif
+#ifndef T_SRC
+#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step (the target's T), 1 = n_inject (the drafter's context rows), 2 = the T macro (a draft block)
 #endif
 #define KL (K / 32u)                                   // columns per lane
 #define WPW WEIGHTS_PER_WORD
@@ -107,7 +113,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
   const uint sg = gid / sw;
 #if STEP_STATE
   if (st->done) return;
-  const uint T_act = st->t_this_step;          // dynamic T (≤ the compiled T), design §5.7
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T : st->t_this_step);   // dynamic T (≤ the compiled T), design §5.7
 #elif T_STATIC
   const uint T_act = T;                        // compile-time T (plain decode programs, benches)
 #else
@@ -225,6 +231,9 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #else
           const uint orow = row, n_out = p.n_rows;
 #if EPILOGUE == 1
+#if EPILOGUE_ROUND
+          v = round_bf16(v);
+#endif
           if (orow < n_out && t < T_act) v += as_type<float>(uint(residual[t * n_out + orow]) << 16);
 #endif
 #endif

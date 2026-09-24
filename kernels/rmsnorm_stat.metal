@@ -4,6 +4,12 @@
 #ifndef STEP_STATE
 #define STEP_STATE 0
 #endif
+#ifndef T_SRC
+#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step, 1 = n_inject, 2 = the T_STATIC_ROWS macro
+#endif
+#ifndef T_STATIC_ROWS
+#define T_STATIC_ROWS 1u
+#endif
 struct StatParams { uint k; uint t_active; uint pad0; uint pad1; };
 
 static inline float bf16lo(uint u) { return as_type<float>(u << 16); }
@@ -16,7 +22,7 @@ kernel void rmsnorm_stat(device const ushort* h [[buffer(0)]], device float* sta
                          uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
 #if STEP_STATE
-  if (st->done || t >= st->t_this_step) return;
+  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))) return;
 #else
   if (t >= p.t_active) return;
 #endif

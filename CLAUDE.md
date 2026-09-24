@@ -18,8 +18,12 @@ is being built as stacked PRs (roadmap issue #1): skeleton + registries, format 
 harness and M1 study, runtime core v1 (ICB + host pump + token ring + StepState), and the layer library with the
 first model package (`monolith/models/qwen3_5`), the M3 kernels, and compiler v0: the 0.8B decodes end to end on the
 GPU from one replayed encode and reproduces its HF goldens, prompts of any length fed in chunks of `t_max`
-(`python -m monolith.generate`). Next: the fusion passes
-and MLX parity (M5), dynamic T and DSpark (M6). Speculative decoding targets a **DSpark** drafter, not the MTP head.
+(`python -m monolith.generate`); since then: the fuse pass, chunked prefill through the dynamic-T program,
+GPU sampling, per-op tracing and autotuning, model 2 (`monolith/models/qwen3`, Qwen3-8B NVFP4, zero engine edits),
+the DSpark drafter as a `Drafter` module verified against DeepSpec's reference, and the round's kernels + IR
+lowering (#24: `draft_attn`, `tap_concat`, `confidence`, `verify_select`, `accept_scan`; the emitted draft program
+reproduces the drafter oracle). Next: the round wired into the target's step program (#38), the speculative == plain
+greedy gate (#39) and the measurement (#40). Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order
 
@@ -87,10 +91,10 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order: the compiler passes that remove the standalone norm dispatches
-   and place barriers (#29), chunked prefill and the CLI (#30), the end-to-end gates on the 27B (#31, M3 Pro), the
-   extension test (#32), then M5 (#33–#36). Fetch the Apache-2.0 DSpark drafters and run the llama.cpp
-   `draft-dspark` baseline on the M3 Pro (plan M0).
+0. **Keep building** — the roadmap issues in order: wire the DSpark round into the dynamic-T step program (#38:
+   feature taps, `accept_scan` in place of `advance`, the checkpoint slots, the cost-aware verify length), then the
+   correctness gate (#39, on Qwen3-8B here) and the measurement (#40, the 27B needs the M3 Pro); the remaining
+   compiler items (#29 barrier minimization, #34 attention v2 for long context) and the M7–M9 issues.
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
    H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).

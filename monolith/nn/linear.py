@@ -62,10 +62,15 @@ class Projection:
 
 class Linear(Module):
     def __init__(self, in_features: int, parts: Sequence[Part], *, prefix: str = "", row_perm: Optional[np.ndarray] = None,
-                 epilogue: Optional[str] = None, chunk: Optional[int] = None) -> None:
+                 epilogue: Optional[str] = None, chunk: Optional[int] = None, round_residual: bool = False) -> None:
+        """``round_residual``: with the residual epilogue, round the product to BF16 before the add (the reference's
+        separate linear + BF16 add, two roundings) instead of the fused single rounding."""
         super().__init__(prefix=prefix)
         if epilogue not in EPILOGUES:
             raise ValueError(f"Linear: epilogue must be one of {EPILOGUES}, got {epilogue!r}")
+        if round_residual and epilogue != "residual":
+            raise ValueError("Linear: round_residual needs the residual epilogue")
+        self.round_residual = bool(round_residual)
         self.k = in_features
         self.parts = tuple(parts)
         self.n = sum(p.rows for p in self.parts)
@@ -112,6 +117,8 @@ class Linear(Module):
         if self.epilogue == "residual":
             if residual is None:
                 raise ValueError("Linear with a residual epilogue needs the residual")
+            if self.round_residual:
+                acc = acc.to(x.dtype).to(torch.float32)
             acc = acc + residual.to(torch.float32)
         elif self.epilogue == "silu_mul":
             half = self.n // 2
@@ -135,6 +142,8 @@ class Linear(Module):
             out_name = name if (name and len(self.slab_groups()) == 1) else f"{grp.name}.y"
             y = g.value(out_name, (t, n_out), DType.BF16)
             attrs: Dict[str, Any] = dict(norm=norm is not None, epilogue=self.epilogue, segments=grp.segments, format=grp.format)
+            if self.round_residual:
+                attrs["round_residual"] = True
             if norm is not None:
                 attrs["eps"] = norm.eps
             if self.epilogue == "silu_mul":

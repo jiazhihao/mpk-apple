@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .dtypes import DType
 from .shapes import Dim, Shape, Sym
@@ -54,10 +54,15 @@ class Value:
     is_weight: bool = False
     is_state: bool = False       # persistent per-sequence buffer (KV cache, recurrent state): read and updated in place
     is_const: bool = False       # a constant table or aux tensor from the pack (RoPE tables, norm weights, A_log …)
+    view_of: Optional[Tuple[str, int]] = None   # (base value, first row): this value aliases rows of another value's buffer
 
     @property
     def rank(self) -> int:
         return len(self.shape)
+
+    @property
+    def is_view(self) -> bool:
+        return self.view_of is not None
 
     @property
     def is_source(self) -> bool:
@@ -92,6 +97,7 @@ class Graph:
         self.name = name
         self.ops: List[Op] = []
         self.values: Dict[str, Value] = {}
+        self.views: Dict[str, List[Value]] = {}       # base value name -> its views
         self.symbols: Set[Sym] = set()
 
     # ---- values -------------------------------------------------------------------------------------------
@@ -125,6 +131,22 @@ class Graph:
         """A constant tensor from the pack's aux section (tables, norm weights, small parameters)."""
         v = self.value(name, shape, dtype)
         v.is_const = True
+        return v
+
+    def view(self, name: str, base: Value, row: int, rows: int = 1) -> Value:
+        """A value aliasing rows ``[row, row + rows)`` of ``base``: an op reads or writes a slice of a buffer (the
+        Markov chain's per-position logits and tokens, design §5.8). The base is an ordinary value with a static row
+        count that no op produces as a whole; :meth:`check` counts the rows written through its views."""
+        if base.name not in self.values or self.values[base.name] is not base:
+            raise ValueError(f"graph {self.name}: {base!r} does not belong to this graph")
+        if base.is_source or base.is_view:
+            raise ValueError(f"graph {self.name}: cannot view {base!r} (a source or a view)")
+        n = base.shape[0] if base.shape else 0
+        if not isinstance(n, int) or row < 0 or rows < 1 or row + rows > n:
+            raise ValueError(f"graph {self.name}: view rows [{row}, {row + rows}) outside {base!r} (static rows only)")
+        v = self.value(name, (rows,) + tuple(base.shape[1:]), base.dtype)
+        v.view_of = (base.name, row)
+        self.views.setdefault(base.name, []).append(v)
         return v
 
     # ---- ops ----------------------------------------------------------------------------------------------
@@ -176,17 +198,32 @@ class Graph:
         return [v for v in self.values.values() if v.is_state]
 
     def check(self) -> None:
-        """Every consumed value is a source or produced by an earlier op; every op has ≥ 1 output."""
+        """Every consumed value is a source or produced by an earlier op (a value written through views: every row
+        read was written by an earlier op); every op has ≥ 1 output."""
         for op in self.ops:
             if not op.outputs:
                 raise ValueError(f"graph {self.name}: {op!r} has no outputs")
             for v in op.inputs:
                 if v.is_source:
                     continue
-                if v.producer is None:
+                if v.producer is not None:
+                    if v.producer.id >= op.id:
+                        raise ValueError(f"graph {self.name}: {op!r} reads {v!r} before its producer {v.producer!r}")
+                    continue
+                base_name, row0 = v.view_of if v.view_of is not None else (v.name, 0)
+                base = self.values[base_name]
+                rows = v.shape[0] if v.shape and isinstance(v.shape[0], int) else None
+                if rows is None or (base.producer is None and base_name not in self.views):
                     raise ValueError(f"graph {self.name}: {op!r} reads {v!r}, which nothing produces")
-                if v.producer.id >= op.id:
-                    raise ValueError(f"graph {self.name}: {op!r} reads {v!r} before its producer {v.producer!r}")
+                covered: Set[int] = set()
+                if base.producer is not None and base.producer.id < op.id:
+                    covered.update(range(int(base.shape[0])))
+                for w in self.views.get(base_name, ()):
+                    if w.producer is not None and w.producer.id < op.id:
+                        covered.update(range(w.view_of[1], w.view_of[1] + int(w.shape[0])))
+                missing = sorted(set(range(row0, row0 + rows)) - covered)
+                if missing:
+                    raise ValueError(f"graph {self.name}: {op!r} reads rows {missing[:4]} of {base!r}, which nothing produces before it")
 
     def __len__(self) -> int:
         return len(self.ops)
