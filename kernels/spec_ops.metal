@@ -1,0 +1,150 @@
+// The DSpark round's small ops (design §5.8; issue #24). The compiler prepends the program's StepState struct.
+//
+// tap_concat:    x[t] = [tap_0[t] | tap_1[t] | … | tap_{N_SRC-1}[t]] for the rows the drafter injects this step —
+//                the concatenated target features the feature projection (a plain gemv) reads. One SIMD-group per
+//                (row, source); each tap is [T, k] BF16 (k % 8 == 0), the output [T, N_SRC·k]. Row count by T_SRC.
+// confidence:    conf[k] = σ(w · [h_k ; emb_k] + b) for the γ block positions — h_k the drafter's normed block hidden
+//                [γ, hidden] BF16, emb_k the Markov embedding W₁[prev_k] [γ, rank] BF16 (rank 0 = no Markov part),
+//                w [hidden + rank] and b in FP32 (the BF16-valued checkpoint parameters, widened). The dot product
+//                accumulates in FP32 and rounds to BF16 before the bias like the reference's BF16 linear; the
+//                sigmoid runs in FP32. One SIMD-group per position.
+// verify_select: one thread. Advances the drafter's context length by the positions the draft pass injected, copies
+//                the block's drafts and confidences into StepState and, outside a prefill chunk, chooses the verify
+//                length L (the reference's confident-prefix rule: the leading positions with confidence ≥ threshold;
+//                threshold ≤ 0 verifies the whole block; L ≤ t_max − 1), then sets the next step's tokens
+//                pending_tokens = [anchor, d_0 … d_{L-1}] and t_this_step = 1 + L. During a prefill chunk the host
+//                feeds the next chunk and only the bookkeeping runs.
+// accept_scan:   one thread; the step's closing SERIAL op when a drafter is wired in (replaces `advance`). A prefill
+//                chunk advances the position and marks its t positions for injection. Otherwise the step fed
+//                pending_tokens = [prompt tail …, anchor, d_0 … d_{L-1}] (L = verify_len; the anchor is at row
+//                base = t − 1 − L, 0 in decode): the target's sampled tokens are compared with the drafts — accepted
+//                = the matching prefix, bonus = the target's token after it; the accepted drafts and the bonus go to
+//                the ring (sequence-tagged, stopping at the first EOS), position advances by the committed count
+//                (the KV entries of rejected positions are overwritten by later steps), the anchor becomes the last
+//                committed token, n_inject = base + committed (the rows whose target features the drafter injects
+//                next), t_this_step returns to 1 and `done` is set at EOS.
+#ifndef STEP_STATE
+#define STEP_STATE 0
+#endif
+#ifndef T_SRC
+#define T_SRC 0
+#endif
+#ifndef T_STATIC_ROWS
+#define T_STATIC_ROWS 1u
+#endif
+#ifndef N_SRC
+#define N_SRC 1
+#endif
+
+struct ConcatParams { uint k; uint t_active; uint pad0; uint pad1; };
+struct ConfParams { uint gamma; uint hidden; uint rank; uint pad; };
+struct SelectParams { uint gamma; float threshold; uint t_max; uint pad; };
+struct AcceptParams { uint ring_cap; int eos; uint pad0; uint pad1; };
+
+kernel void tap_concat(device const uint4* s0 [[buffer(0)]], device const uint4* s1 [[buffer(1)]], device const uint4* s2 [[buffer(2)]],
+                       device const uint4* s3 [[buffer(3)]], device const uint4* s4 [[buffer(4)]], device const uint4* s5 [[buffer(5)]],
+                       device const uint4* s6 [[buffer(6)]], device const uint4* s7 [[buffer(7)]], device uint4* out [[buffer(8)]],
+                       constant ConcatParams& p [[buffer(9)]],
+#if STEP_STATE
+                       device const StepState* st [[buffer(15)]],
+#endif
+                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
+  const uint sg = gid / sw;
+  const uint t = sg / N_SRC, s = sg % N_SRC;
+#if STEP_STATE
+  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))) return;
+#else
+  if (t >= p.t_active) return;
+#endif
+  const uint kw = p.k / 8u;
+  device const uint4* src = s0;
+  switch (s) {
+    case 1: src = s1; break; case 2: src = s2; break; case 3: src = s3; break; case 4: src = s4; break;
+    case 5: src = s5; break; case 6: src = s6; break; case 7: src = s7; break; default: break;
+  }
+  for (uint j = lane; j < kw; j += 32u) out[(ulong)t * (N_SRC * kw) + s * kw + j] = src[(ulong)t * kw + j];
+}
+
+kernel void confidence(device const ushort* hidden [[buffer(0)]], device const ushort* emb [[buffer(1)]], device const float* w [[buffer(2)]],
+                       device const float* b [[buffer(3)]], device float* conf [[buffer(4)]], constant ConfParams& p [[buffer(5)]],
+#if STEP_STATE
+                       device const StepState* st [[buffer(15)]],
+#endif
+                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
+  const uint k = gid / sw;
+#if STEP_STATE
+  if (st->done) return;
+#endif
+  if (k >= p.gamma) return;
+  float acc = 0.0f;
+  for (uint i = lane; i < p.hidden; i += 32u) acc = fma(as_type<float>(uint(hidden[k * p.hidden + i]) << 16), w[i], acc);
+  for (uint i = lane; i < p.rank; i += 32u) acc = fma(as_type<float>(uint(emb[k * p.rank + i]) << 16), w[p.hidden + i], acc);
+  acc = simd_sum(acc);
+  if (lane == 0) {
+    uint u = as_type<uint>(acc); u += 0x7FFFu + ((u >> 16) & 1u); const float r = as_type<float>(u & 0xFFFF0000u);   // the BF16 linear
+    float z = r + b[0];
+    uint v = as_type<uint>(z); v += 0x7FFFu + ((v >> 16) & 1u); z = as_type<float>(v & 0xFFFF0000u);                // BF16 + BF16
+    conf[k] = 1.0f / (1.0f + exp(-z));
+  }
+}
+
+kernel void verify_select(device const int* drafts [[buffer(0)]], device const float* conf [[buffer(1)]], device StepState* st [[buffer(2)]],
+                          constant SelectParams& p [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  if (i != 0 || st->done) return;
+  st->drafter_ctx_len = st->drafter_ctx_len + st->n_inject;    // the draft pass appended the injected positions
+  st->n_inject = 0u;
+  if (st->prefill_left > 0u) return;                          // the host feeds the next chunk
+  for (uint k = 0; k < p.gamma; k++) {
+    st->draft_tokens[k] = drafts[k];
+    st->confidence[k] = conf[k];
+  }
+  uint L = 0u;
+  if (p.threshold <= 0.0f) L = p.gamma;
+  else while (L < p.gamma && conf[L] >= p.threshold) L++;
+  if (L > p.t_max - 1u) L = p.t_max - 1u;
+  st->gamma = p.gamma;
+  st->verify_len = L;
+  st->pending_tokens[0] = st->anchor;
+  for (uint k = 0; k < L; k++) st->pending_tokens[k + 1u] = drafts[k];
+  st->t_this_step = 1u + L;
+}
+
+kernel void accept_scan(device const int* token [[buffer(0)]], device StepState* st [[buffer(1)]], device ulong* ring [[buffer(2)]],
+                        constant AcceptParams& p [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  if (i != 0 || st->done) return;
+  const uint t = st->t_this_step;
+  if (st->prefill_left > 0u) {                                // a prefill chunk: nothing to verify, inject its positions
+    st->position = st->position + t;
+    st->step = st->step + 1u;
+    st->n_inject = t;
+    return;
+  }
+  const uint L = st->verify_len;                              // 0 on the step that samples the first token
+  const uint base = t - 1u - L;                               // the anchor's row (the last prompt position on the first step)
+  uint acc = 0u;
+  while (acc < L && token[base + acc] == st->pending_tokens[base + acc + 1u]) acc++;
+  const int bonus = token[base + acc];
+  uint head = st->ring_head;
+  if (head + acc + 1u - st->ring_tail > p.ring_cap) { st->error = 1u; st->done = 1u; return; }   // ring overflow: the host fell behind
+  uint committed = 0u;
+  int last = bonus;
+  bool stop = false;
+  for (uint k = 0; k <= acc; k++) {
+    const int tok = (k < acc) ? st->pending_tokens[base + k + 1u] : bonus;
+    ring[head % p.ring_cap] = (ulong(head + 1u) << 32) | ulong(uint(tok));
+    head++;
+    committed++;
+    last = tok;
+    if (p.eos >= 0 && tok == p.eos) { stop = true; break; }   // nothing after the first EOS is committed
+  }
+  st->ring_head = head;
+  st->accepted = acc;
+  st->anchor = last;
+  st->pending_tokens[0] = last;
+  st->position = st->position + base + committed;
+  st->step = st->step + 1u;
+  st->verify_len = 0u;
+  st->t_this_step = 1u;
+  st->n_inject = base + committed;
+  if (stop) st->done = 1u;
+}

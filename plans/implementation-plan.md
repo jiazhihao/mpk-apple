@@ -185,7 +185,8 @@ against the oracles (≤ 2 ULP; `tests/kernels/`). Measured (gemv-kernel-study.m
 ALU-bound GEMV costs 5–19 %, a `norm_apply` dispatch 0–3 %, so the default step program applies the norm as its
 own dispatch and hoists only the statistic — the row "the norm never costs a separate dispatch" holds for the
 reduction, not for the elementwise scaling. Remaining in M3: `gqa_decode` (#21), `gdn_mixer` (#22), sampling
-beyond argmax (#23), the drafter ops (#24) and the composite tests on the GPU path (#25).
+beyond argmax (#23), the drafter ops (#24) and the composite tests on the GPU path (#25). *(#24 done 2026-09-24, see
+the M6 status.)*
 
 *Status (2026-09-24, #21).* `gqa_decode` + `gqa_merge` v1 (decode-kernels.md §1): (kv head, chunk, row group)
 blocks, q/k norm + permuted-layout RoPE + KV append in the prologue, chunked online softmax with the reference's
@@ -339,6 +340,22 @@ within 2·10⁻³, the seven greedy drafts identical, context keys 0.99999 (`tes
 round comes with the kernels (#24) and the wiring (#38); of the drafter ops only `draft_attn`, `verify_select` and
 `accept_scan` need new kernels — the feature projection, the Markov bias and the confidence dot products are the
 existing GEMV, embed and norm kernels.
+
+*Status (2026-09-24, #24).* The round's kernels and the drafter's IR lowering exist (decode-kernels.md §4):
+`gqa_decode` gains the `DRAFT` variant (three key sources, no mask, the injected positions appended), `spec_ops.metal`
+holds `tap_concat`, `confidence`, `verify_select` and `accept_scan`, the shared kernels read their row count from the
+StepState field the value's row symbol names (`T` → `t_this_step`, the new `N_INJ` → `n_inject`, a static γ compiled
+in), `embed` reads a block's anchor from StepState, and `gemv_T` can round the product before a residual add (the
+Markov head's two BF16 roundings). The IR gained row views (an op reads or writes a slice of a buffer: the Markov
+chain's per-position logits and tokens), the emitter `emit_program` (a graph → program, the closing op optional) and
+handlers for the five kinds. `DSparkDrafter.lower_draft/lower_select` emit the whole draft pass; the emitted program
+reproduces the drafter oracle on a synthetic drafter (drafts identical, confidences within 2·10⁻², the context caches
+and the verify bookkeeping checked; `tests/kernels/test_draft_program.py`, `tests/contract/test_dspark_lowering.py`).
+`accept_scan` commits the accepted drafts and the bonus token in one op (EOS stops the commit; the last prefill chunk
+is the L = 0 case). Not yet: the round inside the target's step program — the feature taps, `accept_scan` in place of
+`advance`, the checkpoint slots — and the cost-aware verify-length rule (#38); the confident-prefix rule with a fixed
+threshold stands in for it. The measured drafter attention is 1 ms per round for five layers at 1 K of context and
+4 ms at 4 K (v1 row groups re-stream the context, as for the target's attention at T > 1).
 ### M7 — In-kernel runtime re-evaluation and intra-op stealing · 1.5 ew · time-boxed, off the critical path
 
 On the M3 Pro a dispatch boundary (1.8 µs) beats every in-kernel barrier we built (2.6–5.4 µs), and on the M5 Pro

@@ -27,10 +27,11 @@ EPILOGUES = {None: "0", "residual": "1", "silu_mul": "2"}
 
 
 def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool = False, norm: bool = False,
-                epilogue: Optional[str] = None, stat_out: bool = False) -> Dict[str, str]:
+                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False) -> Dict[str, str]:
     """The compile-time specialization of gemv_T for one slab geometry, token count and set of fusions
     (``norm``: RMSNorm scaling on the input; ``epilogue``: ``residual`` | ``silu_mul``; ``stat_out``: per-block
-    partial sums of squares of the outputs for the next norm)."""
+    partial sums of squares of the outputs for the next norm; ``round_before_residual``: the product is rounded to
+    BF16 before the residual add — a separate BF16 linear followed by a BF16 add, the Markov head's semantics)."""
     f = FORMATS.get(info.format)
     if info.k % 32:
         raise ValueError("gemv_T: K must be a multiple of 32")
@@ -61,6 +62,10 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
         if info.rows % 2 or (info.rows // 2) % rg:
             raise ValueError(f"gemv_T silu_mul: R={info.rows} must be even and RG={rg} must divide R/2")
         macros["CHUNK"] = str(info.rows // 2)
+    if round_before_residual:
+        if epilogue != "residual":
+            raise ValueError("gemv_T: round_before_residual needs the residual epilogue")
+        macros["EPILOGUE_ROUND"] = "1"
     return macros
 
 
@@ -76,18 +81,25 @@ def embed_source() -> str:
     return PRELUDE + template("embed.metal")
 
 
-def embed_macros(info: Optional[PackInfo] = None) -> Dict[str, str]:
-    """``info`` = the BF16 slab a tied lm_head streams (gather from the pack), None = a row-major BF16 table."""
+def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None) -> Dict[str, str]:
+    """``info`` = the BF16 slab a tied lm_head streams (gather from the pack), None = a row-major BF16 table.
+    ``ids="block"``: a draft block — row 0 reads the token at ``tokens[0]`` (the anchor), the other rows the mask id."""
     if info is None:
-        return {"EMBED_PACKED": "0"}
-    if info.format != "bf16" or info.k % 256:
-        raise ValueError("embed: a packed table must be a bf16 slab with K % 256 == 0")
-    return {"EMBED_PACKED": "1", "R": str(info.rows), "UNIT_WORDS": str(info.unit_bytes // 16),
-            "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1"}
+        macros = {"EMBED_PACKED": "0"}
+    else:
+        if info.format != "bf16" or info.k % 256:
+            raise ValueError("embed: a packed table must be a bf16 slab with K % 256 == 0")
+        macros = {"EMBED_PACKED": "1", "R": str(info.rows), "UNIT_WORDS": str(info.unit_bytes // 16),
+                  "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1"}
+    if ids not in (None, "block"):
+        raise ValueError(f"embed: unknown ids mode {ids!r}")
+    if ids == "block":
+        macros["EMBED_IDS"] = "1"
+    return macros
 
 
-def embed_params(k: int, t_active: int, vocab: int) -> bytes:
-    return struct.pack("<IIII", k, t_active, vocab, 0)
+def embed_params(k: int, t_active: int, vocab: int, mask_id: int = 0) -> bytes:
+    return struct.pack("<IIII", k, t_active, vocab, mask_id)
 
 
 def rmsnorm_stat_source() -> str:
@@ -211,3 +223,44 @@ def sample_params(*, vocab: int, t_active: int, n_sg: int, top_k: int = 0, tempe
 def sample_workspace(t_max: int, n_sg: int) -> Tuple[int, int, int]:
     """Bytes of the histogram, tau and partial buffers."""
     return t_max * SAMPLE_HIST_KEYS * 4, t_max * 4, t_max * n_sg * 4
+
+
+# ---- the DSpark round (design §5.8; issue #24) ------------------------------------------------------------------
+
+def spec_ops_source(step_state_msl: str) -> str:
+    """tap_concat, confidence, verify_select and accept_scan (one library; the StepState struct prepended)."""
+    return PRELUDE + step_state_msl + "\n" + template("spec_ops.metal")
+
+
+def tap_concat_macros(n_src: int) -> Dict[str, str]:
+    if not 1 <= n_src <= 8:
+        raise ValueError("tap_concat: 1 to 8 sources")
+    return {"N_SRC": str(n_src)}
+
+
+def concat_params(k: int, t_active: int) -> bytes:
+    """The ``ConcatParams`` record: columns per source (BF16, K % 8 == 0) and the row count."""
+    if k % 8:
+        raise ValueError("tap_concat: each source's width must be a multiple of 8")
+    return struct.pack("<IIII", k, t_active, 0, 0)
+
+
+def conf_params(gamma: int, hidden: int, rank: int) -> bytes:
+    return struct.pack("<IIII", gamma, hidden, rank, 0)
+
+
+def select_params(gamma: int, threshold: float, t_max: int, mode: int = 0) -> bytes:
+    return struct.pack("<IfII", gamma, threshold, t_max, mode)
+
+
+def accept_params(ring_cap: int, eos: int) -> bytes:
+    return struct.pack("<IiII", ring_cap, eos, 0, 0)
+
+
+def draft_attn_params(*, heads: int, kv_heads: int, gamma: int, ctx_len: int, n_new: int, n_sg: int, q_off: int, k_off: int, v_off: int,
+                      in_stride: int, kvp_stride: int, out_stride: int, ctx_max: int, eps: float, scaling: float, n_chunks_max: int) -> bytes:
+    """The ``GqaParams`` record for the DRAFT variant of gqa_decode: ``t_active`` = γ, ``position`` = the drafter's
+    context length, ``pad0`` = the new context positions, ``pad1`` = the row stride of the features' k/v projection
+    (buffer 11); with STEP_STATE the kernel reads position / n_new from ``drafter_ctx_len`` / ``n_inject`` instead."""
+    return struct.pack("<IIIIIIIIIIIIffIIIIII", heads, kv_heads, gamma, ctx_len, n_sg, q_off, 0, k_off, v_off, in_stride, out_stride, ctx_max,
+                       eps, scaling, 0, n_chunks_max, heads // kv_heads * gamma, n_new, kvp_stride, 0)

@@ -48,10 +48,14 @@ class LMHead(Module):
 
         return oracle.linear(x, self.weight())
 
-    def lower(self, g: Graph, h: Value, norm, ctx: LowerContext) -> Value:
+    def lower(self, g: Graph, h: Value, norm, ctx: LowerContext, *, name: str = "logits") -> Value:
+        """``norm`` = the final norm fused on the input, or None when ``h`` is already normalized (a draft block)."""
         fmt = self._tied.format_of("weight") if self._tied is not None else self.format_of("weight")
         w = self.weight_value(g, self.slab_name, (self.vocab, self.hidden), fmt)
-        logits = g.value("logits", (h.shape[0], self.vocab), DType.BF16)
-        g.op("lm_head", [h, w, norm.stat, norm.weight], [logits], domain=BlockDomain("rows", self.vocab), klass=OpClass.MAP,
-             norm=True, eps=norm.eps, out="bf16", format=fmt)
+        logits = g.value(name, (h.shape[0], self.vocab), DType.BF16)
+        ins = [h, w] + ([norm.stat, norm.weight] if norm is not None else [])
+        attrs = dict(norm=norm is not None, out="bf16", format=fmt)
+        if norm is not None:
+            attrs["eps"] = norm.eps
+        g.op("lm_head", ins, [logits], domain=BlockDomain("rows", self.vocab), klass=OpClass.MAP, **attrs)
         return logits

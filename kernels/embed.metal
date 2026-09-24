@@ -5,14 +5,25 @@
 //                 block v / R at row v % R, lane ℓ's stripe (columns [ℓ·K/32, (ℓ+1)·K/32)) is UNIT_WORDS 16-byte
 //                 words at unit_word(ℓ, r, j) (macros R, UNIT_WORDS, LANE_ORDER as for gemv_T; needs K % 256 == 0).
 // Tokens outside [0, vocab) read row 0 (never out of bounds; the sampler guarantees valid ids).
+// EMBED_IDS 1: a draft block (design §5.8) — row 0 reads tokens[0] (the anchor), rows ≥ 1 take the mask id from params.
+// With STEP_STATE, T_SRC selects the row count: 0 = t_this_step, 1 = n_inject, 2 = the static T_STATIC_ROWS.
 #ifndef EMBED_PACKED
 #define EMBED_PACKED 0
+#endif
+#ifndef EMBED_IDS
+#define EMBED_IDS 0
 #endif
 #ifndef STEP_STATE
 #define STEP_STATE 0
 #endif
+#ifndef T_SRC
+#define T_SRC 0
+#endif
+#ifndef T_STATIC_ROWS
+#define T_STATIC_ROWS 1u
+#endif
 
-struct EmbedParams { uint k; uint t_active; uint vocab; uint pad; };
+struct EmbedParams { uint k; uint t_active; uint vocab; uint mask_id; };
 
 #if EMBED_PACKED
 static inline uint unit_word(uint lane, uint r, uint j) {
@@ -32,11 +43,15 @@ kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* ta
                   uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
 #if STEP_STATE
-  if (st->done || t >= st->t_this_step) return;
+  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))) return;
 #else
   if (t >= p.t_active) return;
 #endif
+#if EMBED_IDS
+  uint tok = (t == 0u) ? uint(tokens[0]) : p.mask_id;
+#else
   uint tok = uint(tokens[t]);
+#endif
   if (tok >= p.vocab) tok = 0u;
   device uint4* out = h + (ulong)t * (p.k / 8u);
 #if EMBED_PACKED

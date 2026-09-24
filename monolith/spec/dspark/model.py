@@ -25,6 +25,7 @@ import numpy as np
 
 from ...core.dtypes import DType
 from ...core.ir import BlockDomain, Graph, OpClass, Value
+from ...core.shapes import N_INJ
 from ...core.profile import Profile
 from ...nn import DecoderLayer, Embedding, GatedMLP, Linear, LMHead, LowerContext, Module, Part, RMSNorm, StateEntry
 from ...nn.rope import rope_tables_permuted
@@ -129,9 +130,13 @@ class DraftAttention(Module):
 class DSparkDrafter(Drafter):
     """``lm_head`` is the target's (the checkpoint carries none); ``embed_tokens`` is the drafter's own frozen copy."""
 
-    def __init__(self, cfg: DSparkConfig, *, target_lm_head: LMHead, max_context: int = 4096, pack_rows: int = 16) -> None:
+    def __init__(self, cfg: DSparkConfig, *, target_lm_head: LMHead, max_context: int = 4096, pack_rows: int = 16,
+                 confidence_threshold: float = 0.0) -> None:
+        """``confidence_threshold``: the confident-prefix rule's threshold (≤ 0 verifies the whole block, the
+        reference's default); the cost-aware verify-length rule of design §5.8 replaces it with the wiring (#38)."""
         super().__init__(prefix="draft.")
         self.cfg, self.gamma, self.max_context = cfg, cfg.block_size, max_context
+        self.confidence_threshold = float(confidence_threshold)
         h, eps = cfg.hidden_size, cfg.rms_norm_eps
         self.embed_tokens = Embedding(cfg.vocab_size, h, "embed_tokens.weight", prefix="draft.embed_tokens.")
         self.fc = Linear(cfg.n_taps * cfg.target_hidden, [Part("fc", "fc.weight", h)], prefix="draft.fc.")
@@ -146,7 +151,10 @@ class DSparkDrafter(Drafter):
         self.norm = RMSNorm(h, eps, "norm.weight", prefix="draft.norm.", one_plus=False)
         self._lm_head = target_lm_head
         self.markov_w1 = Embedding(cfg.vocab_size, cfg.markov_rank, "markov_head.markov_w1.weight", prefix="draft.markov_w1.")
-        self.markov_w2 = Linear(cfg.markov_rank, [Part("w2", "markov_head.markov_w2.weight", cfg.vocab_size)], prefix="draft.markov_w2.")
+        # the Markov bias is a separate BF16 linear added to the block's logits in BF16: the residual epilogue with
+        # the product rounded first reproduces both roundings
+        self.markov_w2 = Linear(cfg.markov_rank, [Part("w2", "markov_head.markov_w2.weight", cfg.vocab_size)], prefix="draft.markov_w2.",
+                                epilogue="residual", round_residual=True)
 
     def weight_map(self):
         from ...nn.module import WeightSpec
@@ -261,11 +269,89 @@ class DSparkDrafter(Drafter):
         return gamma if below.numel() == 0 else int(below[0])
 
     # ---- the Drafter contract (IR) ----------------------------------------------------------------------------
-    def lower_draft(self, g: Graph, ctx: DraftContext, anchor: Value) -> DraftBlock:
-        raise NotImplementedError("lowering the DSpark round lands with the drafter kernels (#24) and the wiring (#38)")
+    def _lower_context(self, g: Graph) -> LowerContext:
+        """The drafter's states (its context caches) and constants (its RoPE tables) in ``g``, created on first use."""
+        import numpy as np
+
+        lc = LowerContext(t=self.gamma)
+        for e in self.state_entries():
+            lc.states[e.name] = g.values[e.name] if e.name in g.values else g.state(e.name, e.shape, e.dtype)
+        for name, (dtype, arr) in self.tables().items():
+            shape = tuple(int(x) for x in np.asarray(arr).shape)
+            lc.consts[name] = g.values[name] if name in g.values else g.const(name, shape, DType.parse(dtype.lower()))
+        return lc
+
+    @staticmethod
+    def _normalized(g: Graph, norm: RMSNorm, h: Value, name: str) -> Value:
+        """The norm as a value of its own (``rmsnorm_stat`` + ``norm_apply``): the normalized activation several
+        consumers read (the context features feed every layer's k/v projection; the block hidden feeds the target's
+        head and the confidence head)."""
+        ni = norm.lower(g, h)
+        x = g.value(name, h.shape, DType.BF16)
+        g.op("norm_apply", [h, ni.stat, ni.weight], [x], domain=BlockDomain("span", norm.dim), klass=OpClass.MAP, eps=ni.eps)
+        return x
+
+    def lower_draft(self, g: Graph, ctx: DraftContext, anchor: Optional[Value] = None) -> DraftBlock:
+        """The draft pass (design §5.8): the committed positions' tapped features (``N_INJ`` rows) → the feature
+        projection → the context features; the block ``[anchor, mask × (γ − 1)]`` through the drafter's layers, whose
+        attention injects the context features and attends over the whole context; the target's head on the normed
+        block; the Markov chain (per position: the previous token's embedding, the bias added to the base logits,
+        argmax — chained through row views); the confidence head."""
+        cfg, gamma, h_t = self.cfg, self.gamma, self.cfg.target_hidden
+        taps = list(ctx.taps)
+        if len(taps) != cfg.n_taps:
+            raise ValueError(f"DSparkDrafter: {cfg.n_taps} taps expected, got {len(taps)}")
+        if anchor is None:
+            anchor = ctx.anchor if ctx.anchor is not None else g.input("anchor", (1,), DType.I32)
+        lc = self._lower_context(g)
+        # 1. the context features of the injected rows
+        x = g.value("draft.taps", (N_INJ, cfg.n_taps * h_t), DType.BF16)
+        g.op("tap_concat", taps, [x], domain=BlockDomain("rows", cfg.n_taps), klass=OpClass.MAP, width=h_t)
+        fcy = self.fc.lower(g, x, name="draft.fc.y").value
+        feats = self._normalized(g, self.hidden_norm, fcy, "draft.feats")
+        lc.consts["draft_ctx_feats"] = feats
+        # 2. the block through the drafter's layers
+        emb = self.embed_tokens
+        w_emb = emb.weight_value(g, emb.slab_name, (cfg.vocab_size, cfg.hidden_size), emb.format_of("weight"))
+        h = g.value("draft.h0", (gamma, cfg.hidden_size), DType.BF16)
+        g.op("embed", [anchor, w_emb], [h], domain=BlockDomain("rows", gamma), klass=OpClass.MAP, packed=True, ids="block",
+             mask_id=cfg.mask_token_id)
+        for blk in self.blocks:
+            h = blk.lower(g, h, lc)
+        hidden = self._normalized(g, self.norm, h, "draft.hidden")
+        base = self._lm_head.lower(g, hidden, None, lc, name="draft.base_logits")
+        # 3. the Markov chain: d_k = argmax(base_k + W₂·W₁[d_{k−1}]), d_{−1} = the anchor
+        drafts = g.value("draft.tokens", (gamma,), DType.I32)
+        markov = g.value("draft.markov.emb", (gamma, cfg.markov_rank), DType.BF16)
+        w1 = self.markov_w1.weight_value(g, self.markov_w1.slab_name, (cfg.vocab_size, cfg.markov_rank), self.markov_w1.format_of("weight"))
+        prev = anchor
+        for k in range(gamma):
+            e_k = g.view(f"draft.markov.emb.{k}", markov, k, 1)
+            g.op("embed", [prev, w1], [e_k], domain=BlockDomain("rows", 1), klass=OpClass.MAP, packed=True)
+            lg = self.markov_w2.lower(g, e_k, residual=g.view(f"draft.base_logits.{k}", base, k, 1), name=f"draft.markov.{k}.logits").value
+            d_k = g.view(f"draft.tokens.{k}", drafts, k, 1)
+            g.op("argmax", [lg], [d_k], domain=BlockDomain("span", cfg.vocab_size), klass=OpClass.REDUCE)
+            prev = d_k
+        # 4. the confidence head over [h_k ; W₁[prev_k]]
+        conf = None
+        if cfg.enable_confidence_head:
+            rank = cfg.markov_rank if cfg.confidence_head_with_markov else 0
+            w = self.const_value(g, "draft.conf_w", (1, cfg.hidden_size + rank), DType.F32)
+            b = self.const_value(g, "draft.conf_b", (1,), DType.F32)
+            conf = g.value("draft.confidence", (gamma,), DType.F32)
+            g.op("confidence", [hidden, markov, w, b], [conf], domain=BlockDomain("rows", gamma), klass=OpClass.MAP, rank=rank)
+        return DraftBlock(tokens=drafts, confidences=conf, hidden=hidden, gamma=gamma)
 
     def lower_select(self, g: Graph, block: DraftBlock, profile: Profile) -> Value:
-        raise NotImplementedError("lowering the DSpark round lands with the drafter kernels (#24) and the wiring (#38)")
+        """The confident-prefix rule on the block's confidences (the whole block without a confidence head or with
+        a threshold ≤ 0); ``profile`` is unused until the cost-aware rule lands with the wiring (#38)."""
+        sel = g.value("draft.verify_len", (1,), DType.U32)
+        ins = [block.tokens] + ([block.confidences] if block.confidences is not None else [])
+        g.op("verify_select", ins, [sel], domain=BlockDomain("span", 1), klass=OpClass.SERIAL, gamma=block.gamma,
+             threshold=self.confidence_threshold if block.confidences is not None else 0.0)
+        return sel
 
     def lower_context_update(self, g: Graph, taps: List[Value], accepted: Value) -> None:
-        raise NotImplementedError("lowering the DSpark round lands with the drafter kernels (#24) and the wiring (#38)")
+        """A no-op: the DSpark drafter injects the committed positions' features in its next draft pass (the block
+        attention appends them to its context caches), so nothing runs between the accept scan and that pass."""
+        return None

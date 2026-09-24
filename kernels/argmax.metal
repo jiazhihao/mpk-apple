@@ -6,6 +6,12 @@
 #ifndef STEP_STATE
 #define STEP_STATE 0
 #endif
+#ifndef T_SRC
+#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step, 1 = n_inject, 2 = the static T_STATIC_ROWS
+#endif
+#ifndef T_STATIC_ROWS
+#define T_STATIC_ROWS 1u
+#endif
 struct ArgmaxParams { uint vocab; uint t_active; uint n_sg; uint n_spans; };
 
 static inline float bf16f(ushort u) { return as_type<float>(uint(u) << 16); }
@@ -34,7 +40,7 @@ kernel void argmax_partial(device const ushort* logits [[buffer(0)]], device flo
   if (sg >= p.n_sg) return;
 #if STEP_STATE
   if (st->done) return;
-  const uint T_act = st->t_this_step;
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
 #else
   const uint T_act = p.t_active;
 #endif
@@ -68,7 +74,7 @@ kernel void argmax_final(device const float* part_val [[buffer(0)]], device cons
                          uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
 #if STEP_STATE
-  if (st->done || t >= st->t_this_step) return;
+  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))) return;
 #else
   if (t >= p.t_active) return;
 #endif

@@ -17,7 +17,11 @@ from ..nn.module import Module
 
 @dataclass
 class DraftContext:
-    """What the target exposes to a drafter: the feature-tap buffers of the tapped layers and the anchor token."""
+    """What the target exposes to a drafter: the feature-tap buffers of the tapped layers and the anchor token.
+
+    ``taps`` are the residual streams after the tapped target layers, ``[T, H]`` for the step's tokens; the rows
+    the drafter consumes are the committed ones (``StepState.n_inject``). ``anchor`` is the graph input bound to
+    ``StepState.anchor`` (created by the drafter when None)."""
 
     taps: List[Value] = field(default_factory=list)      # residual stream after each tapped target layer, [T, H]
     anchor: Optional[Value] = None                       # the last committed token id
@@ -37,6 +41,8 @@ class Drafter(Module):
     gamma: int = 0
 
     def lower_draft(self, g: Graph, ctx: DraftContext, anchor: Value) -> DraftBlock:
+        """Emit the draft pass: the committed positions' features into the drafter's context, one block of
+        ``gamma`` drafts from ``anchor`` with their confidences."""
         raise NotImplementedError
 
     def lower_select(self, g: Graph, block: DraftBlock, profile: Profile) -> Value:
@@ -44,5 +50,6 @@ class Drafter(Module):
         raise NotImplementedError
 
     def lower_context_update(self, g: Graph, taps: List[Value], accepted: Value) -> None:
-        """Feed the committed positions' target features back into the drafter's context."""
+        """Feed the committed positions' target features back into the drafter's context (a no-op for drafters whose
+        draft pass already injects them)."""
         raise NotImplementedError

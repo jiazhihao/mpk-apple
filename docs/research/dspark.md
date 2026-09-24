@@ -69,6 +69,11 @@ Per speculative round with γ = 7, relative to a T = 1 target pass (17.6 GB):
 Memory: target 21 GB + drafter 1.3–3.7 GB + injected-context KV (≈ 20 KB per committed token: 5 layers × 8 KV heads ×
 128 × K and V in BF16) + state. On the 36 GB M3 Pro the NVFP4 or INT8 drafter fits comfortably; the BF16 one is tight.
 
+*Measured so far (M5 Pro, #24; decode-kernels.md §4) [M]:* the drafter's block attention at the 8B drafter's
+geometry costs 20 µs per layer over an empty context, 0.2 ms at 1 K and 0.8 ms at 4 K (the v1 row groups re-stream
+the context); the serial ops (`tap_concat`, `confidence`, `verify_select`, `accept_scan`) 2–27 µs each. The round's
+cost is its GEMVs — the estimate above stands.
+
 Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify(1 + L))`. With the llama.cpp accepted lengths above
 (2.7–4.1 at n-max 4) and the M5 Pro cost table, the break-even is comfortable on FP8 layers and marginal for the NVFP4
 MLPs on the shader path — the reason the verify-length rule, the INT8/NVFP4 drafter and the Apple10 accelerator verify

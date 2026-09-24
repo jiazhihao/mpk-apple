@@ -1,26 +1,28 @@
-"""The DSpark round's op kinds (design §5.6, §5.8; issue #24). Registered without kernel bindings until the
-kernels land, so a program with a drafter fails the coverage guard until then — by design.
+"""The DSpark round's op kinds (design §5.8, issue #24). The feature projection, the block's layers and the Markov
+head lower to the existing kinds (``gemv``, ``rmsnorm_stat``/``norm_apply``, ``embed``, ``lm_head``, ``argmax``);
+these are the ones with kernels of their own (``kernels/spec_ops.metal`` and the DRAFT variant of ``gqa_decode``):
 
-* ``feature_proj``: ``fc`` over the concatenated tapped residual streams of the ``n_new`` verified positions
-  → ``hidden_norm`` → the drafter's context features ``[n_new, H_draft]`` (a GEMV with a fused standard RMSNorm
-  epilogue; ``n_new`` read from StepState.accepted + 1).
-* ``draft_attn``: the drafter's attention for the block: keys = its context KV cache (positions < start) ∪ the
-  ``n_new`` context positions (appended from the features' k/v projection) ∪ the block's own k/v; queries = the γ
-  block positions; no mask (bidirectional inside the block, full context); q/k norm and RoPE as the target's.
-* ``markov_bias``: ``logits_k += W₂ · W₁[prev_k]`` and the argmax → ``draft_k`` (γ serial steps: ``prev_{k+1} = draft_k``).
-* ``confidence``: ``σ(w · [h_k ; W₁[prev_k]] + b)`` per block position.
-* ``verify_select``: SERIAL — the verify length ``L`` from the confidences (the reference's threshold rule, or the
-  profile's cost table); writes ``StepState.verify_len`` / ``t_this_step`` / ``pending_tokens``.
-* ``accept_scan``: SERIAL — compares the target's sampled tokens with the drafts, commits the accepted prefix and
-  the bonus token to the ring, advances position / kv_len / anchor, chooses the state checkpoint.
+* ``tap_concat`` (MAP over rows): inputs the tapped residual streams ``[T, H_t]`` (≤ 8), output
+  ``x [N_INJ, n·H_t]`` — the rows the drafter injects this step (``StepState.n_inject``), concatenated in tap order;
+* ``draft_attn`` (MAP over heads): inputs ``(proj [γ, (heads + 2·kv)·d], kvp [N_INJ, 2·kv·d], k_ctx, v_ctx, cos, sin,
+  q_norm, k_norm)``, output ``[γ, heads·d]``; attrs ``heads``, ``kv_heads``, ``head_dim``, ``eps``, ``scaling``,
+  ``gamma``; ``updates`` the two context caches (the injected positions are appended). ``gqa_decode`` with
+  ``DRAFT=1`` + ``gqa_merge``: keys = the context cache ∪ the new context positions ∪ the block, no mask;
+* ``confidence`` (MAP over rows): inputs ``(hidden [γ, H], emb [γ, rank], w [1, H + rank] f32, b [1] f32)``, output
+  ``conf [γ] f32``; attr ``rank`` (0 without the Markov part);
+* ``verify_select`` (SERIAL): inputs ``(drafts [γ] i32, [conf [γ] f32])``, output ``verify_len [1]`` (informational:
+  the op writes StepState — drafts, confidences, the verify length, the next step's tokens); attrs ``gamma``,
+  ``threshold``;
+* ``accept_scan`` (SERIAL): input the sampled ``token [T]``, output ``accepted [1]`` (informational: the op commits
+  the accepted drafts and the bonus token to the ring and advances StepState); replaces ``advance`` when a drafter is
+  wired in.
 """
 
 from ..core.ir import OpClass
-from .registry import OpDef, register_op
+from .registry import KernelBinding, OpDef, register_op
 
-FEATURE_PROJ = register_op(OpDef("feature_proj", OpClass.MAP, "rows"))
-DRAFT_ATTN = register_op(OpDef("draft_attn", OpClass.MAP, "heads"))
-MARKOV_BIAS = register_op(OpDef("markov_bias", OpClass.SERIAL, "span"))
-CONFIDENCE = register_op(OpDef("confidence", OpClass.SERIAL, "span"))
-VERIFY_SELECT = register_op(OpDef("verify_select", OpClass.SERIAL, "span"))
-ACCEPT_SCAN = register_op(OpDef("accept_scan", OpClass.SERIAL, "span"))
+TAP_CONCAT = register_op(OpDef("tap_concat", OpClass.MAP, "rows").bind("*", KernelBinding("tap_concat")))
+DRAFT_ATTN = register_op(OpDef("draft_attn", OpClass.MAP, "heads").bind("*", KernelBinding("gqa_decode", {"DRAFT": 1})))   # + gqa_merge
+CONFIDENCE = register_op(OpDef("confidence", OpClass.MAP, "rows").bind("*", KernelBinding("confidence")))
+VERIFY_SELECT = register_op(OpDef("verify_select", OpClass.SERIAL, "span").bind("*", KernelBinding("verify_select")))
+ACCEPT_SCAN = register_op(OpDef("accept_scan", OpClass.SERIAL, "span").bind("*", KernelBinding("accept_scan")))

@@ -131,3 +131,39 @@ block per SIMD-group with RG 4–8 (8224×1024: 65.6 → 58.9 µs with the norm 
 RG 4 with the norm fused (53.8 → 51.9 µs), the `lm_head` keeps its default (1.70 ms), the 16-head GDN mixer takes
 SL 4 / SPB 4 (24.1 → 20.7 µs). The decode step: **6.45 ms per token vs 6.91 default** (three paired runs each), the
 golden unchanged; `mlx-lm` 0.31.3: 6.2 ms.
+
+## 4. The DSpark round's kernels (#24) — `apple-m5-pro-20c_draft.jsonl`
+
+**What exists.** The round of design §5.8 lowers to the existing op kinds plus five of its own
+(`monolith/ops/draft.py`): the tapped residual streams of the committed positions are concatenated (`tap_concat`)
+and go through the feature projection as a plain `gemv` + `norm_apply` over the rows `StepState.n_inject` names; the
+block `[anchor, mask × (γ − 1)]` (an `embed` variant that reads the anchor from StepState) runs through the drafter's
+layers, whose attention is `gqa_decode` with `DRAFT=1`: the same blocks and passes with three key sources — the
+drafter's context cache, the injected positions' k/v from a second projection (normed, RoPE'd and appended to the
+cache like new tokens) and the block's own k/v (never appended) — and no mask; the target's `lm_head` at T = γ; the
+Markov chain as γ (`embed` W₁ row → `gemv` W₂ with the residual epilogue rounding the product first → `argmax`)
+triples chained through row views of the block's logits and tokens; the confidence head (`confidence`); the
+verify-length select and the accept scan as SERIAL ops on StepState. Row counts are per value: the `T` symbol reads
+`t_this_step`, `N_INJ` reads `n_inject`, a static γ compiles in (`T_SRC`), so one dynamic-T program holds the target's
+step, the injection and the block. The emitted draft program (40 dispatches for a two-layer synthetic drafter, `tests/kernels/test_draft_program.py`)
+reproduces the drafter oracle: features cos > 0.9999, block hidden and base logits within 3 % of scale, drafts and
+verify bookkeeping identical, confidences within 2·10⁻².
+
+**Cost on the M5 Pro** (`python tools/bench/draft_bench.py`; the 8B drafter's geometry: 32 heads, 8 KV heads, head
+dim 128, γ = 7; min of 20 after warm-up) [M]:
+
+| kernel | context | µs | note |
+|---|---|---|---|
+| `draft_attn` (+ merge), 1 or 8 injected | 0 | 20 / 26 | the block alone: 28 query rows, 7 row groups |
+| | 1 024 | 201 | 21 GB/s of K/V counted once — the 7 row groups re-stream every chunk (v1, §1) |
+| | 4 096 | 793 | ×5 layers = 4.0 ms per round at 4 K: the v2 attention (#34) is on the drafter's critical path too |
+| `tap_concat` (8 rows × 5 taps × 4 096) | – | 5.6 | |
+| `confidence` (7 rows × 4 352) | – | 27 | one SIMD-group per row over a 4 352-long dot: latency-bound; a REDUCE form would cut it |
+| `verify_select` | – | 3.5 | |
+| `accept_scan` | – | 2.0 | |
+
+What it says: at the contexts v1 is judged on (≤ 1 K) the drafter's own attention costs 1 ms per round for five
+layers, below one W₂ pass of the Markov chain (the 78 MB BF16 W₂ streamed γ times ≈ 3.6 ms) and far below the
+drafter's weights (1.9 GB BF16 for the 8B drafter ≈ 13 ms) — the round's cost is the drafter's GEMVs and the target's
+`lm_head` at T = γ, exactly the bytes the dspark.md §3 estimate counts; the serial ops are dispatch-cost only.
+

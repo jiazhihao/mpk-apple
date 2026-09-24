@@ -6,7 +6,7 @@ from monolith.core import StepStateLayout
 GOLDEN_OFFSETS_8_7 = {
     "step": 0, "position": 4, "kv_len": 8, "t_this_step": 12, "pending_tokens": 16, "rng_lo": 48, "rng_hi": 52,
     "anchor": 56, "gamma": 60, "draft_tokens": 64, "confidence": 92, "verify_len": 120, "accepted": 124,
-    "checkpoint_index": 128, "drafter_ctx_len": 132, "done": 136, "error": 140, "ring_head": 144, "ring_tail": 148, "prefill_left": 152,
+    "checkpoint_index": 128, "drafter_ctx_len": 132, "done": 136, "error": 140, "ring_head": 144, "ring_tail": 148, "prefill_left": 152, "n_inject": 156,
 }
 
 

@@ -1,0 +1,10 @@
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "draft_attn", "heads": 32, "kv": 8, "d": 128, "gamma": 7, "ctx": 0, "n_new": 1, "us": 20.0, "kv_gbps": 0.2}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "draft_attn", "heads": 32, "kv": 8, "d": 128, "gamma": 7, "ctx": 0, "n_new": 8, "us": 26.4, "kv_gbps": 1.2}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "draft_attn", "heads": 32, "kv": 8, "d": 128, "gamma": 7, "ctx": 1024, "n_new": 1, "us": 200.7, "kv_gbps": 20.9}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "draft_attn", "heads": 32, "kv": 8, "d": 128, "gamma": 7, "ctx": 1024, "n_new": 8, "us": 201.0, "kv_gbps": 21.0}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "draft_attn", "heads": 32, "kv": 8, "d": 128, "gamma": 7, "ctx": 4096, "n_new": 1, "us": 793.4, "kv_gbps": 21.2}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "draft_attn", "heads": 32, "kv": 8, "d": 128, "gamma": 7, "ctx": 4096, "n_new": 8, "us": 792.4, "kv_gbps": 21.2}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "tap_concat", "rows": 8, "n_taps": 5, "width": 4096, "us": 5.6}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "confidence", "gamma": 7, "hidden": 4096, "rank": 256, "us": 27.0}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "verify_select", "gamma": 7, "us": 3.5}
+{"chip": "Apple M5 Pro", "gpu_cores": 20, "date": "2026-09-24 19:40", "reps": 20, "kernel": "accept_scan", "gamma": 7, "us": 2.0}
