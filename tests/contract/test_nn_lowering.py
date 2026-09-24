@@ -318,3 +318,15 @@ def test_emitter_honors_the_tuner(tmp_path):
     gdn = next(o for o in prog.ops if o.name == "gdn_mixer")
     assert prog.kernels[gdn.kernel].macros["SL"] == "4u" and prog.kernels[gdn.kernel].macros["SPB"] == "2u"
     assert any(c[0] == "gdn" for c in stub.calls) and sum(c[0] == "gemv" for c in stub.calls) == len(gemvs)
+
+
+def test_attention_norm_scale_flag():
+    """A standard-RMSNorm attention (Qwen3) stores its q/k norm weights as they are; the Gemma-style one as 1 + w."""
+    from monolith.nn import GQAAttention
+
+    std = GQAAttention(256, 8, 2, 32, 32, 1e6, 1e-6, hf_prefix="x.", prefix="l.", max_context=16, gate=False, norm_one_plus=False)
+    gem = GQAAttention(256, 8, 2, 32, 8, 1e7, 1e-6, hf_prefix="x.", prefix="l.", max_context=16)
+    assert std.weight_map()["q_norm"].transform == "bf16_f32" and gem.weight_map()["q_norm"].transform == "one_plus"
+    assert std.qkv.n == 8 * 32 + 2 * 2 * 32 and gem.qkv.n == 8 * 2 * 32 + 2 * 2 * 32
+    import numpy as np
+    assert np.array_equal(std.qkv.row_perm[: 8 * 32], np.arange(8 * 32))      # full RoPE: the head-dim permutation is the identity
