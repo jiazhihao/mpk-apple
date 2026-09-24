@@ -158,3 +158,19 @@ def test_mixed_format_parts_split_into_slabs(tmp_path):
     m.blocks[1].mixer.qkv.set_format("v_proj", "nvfp4")
     with pytest.raises(ValueError):
         m.blocks[1].mixer.qkv.slab_groups()                   # a row permutation cannot span formats
+
+
+def test_coverage_of_the_lowered_model(tmp_path):
+    """Which op kinds still lack a kernel: after #19/#20 (embed, rmsnorm_stat, gemv, lm_head, argmax are bound on
+    every profile) only the two mixers remain (#21 gqa_decode, #22 gdn_mixer)."""
+    from monolith.compiler import CoverageError, check_coverage
+    from monolith.core.profile import Profile
+
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    g = Graph("step")
+    m.lower(g)
+    prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
+    with pytest.raises(CoverageError) as ei:
+        check_coverage(g, prof)
+    assert sorted({op.kind for op, _ in ei.value.missing}) == ["gdn_mixer", "gqa_decode"]

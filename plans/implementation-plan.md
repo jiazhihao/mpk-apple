@@ -178,6 +178,15 @@ layer library's `forward()` (`monolith/nn/`), and the composite bars are already
 0.1, attention within one BF16 ULP, MLP + residual within one ULP). The kernels themselves (#19–#25) are the
 remaining M3 work; each kernel test compares against these oracles fed with the pack's own aux tensors.
 
+*Status (2026-09-24, #19/#20 + the greedy half of #23).* `gemv_T` has the residual and `silu·mul` epilogues, the
+hoisted norm statistic (`STAT_OUT` partials, free) and the fused scaling (`NORM`); `embed` (raw table or the tied
+slab), `rmsnorm_stat`, `norm_apply` and the two-dispatch `argmax` exist, all bound in the op registry and green
+against the oracles (≤ 2 ULP; `tests/kernels/`). Measured (gemv-kernel-study.md §3d): fusing the *scaling* into an
+ALU-bound GEMV costs 5–19 %, a `norm_apply` dispatch 0–3 %, so the default step program applies the norm as its
+own dispatch and hoists only the statistic — the row "the norm never costs a separate dispatch" holds for the
+reduction, not for the elementwise scaling. Remaining in M3: `gqa_decode` (#21), `gdn_mixer` (#22), sampling
+beyond argmax (#23), the drafter ops (#24) and the composite tests on the GPU path (#25).
+
 ### M4 — Compiler and end-to-end decode · 4 ew
 
 * IR (typed graph, symbolic `T`/context, op metadata: reads/writes, block domain, class, cost).

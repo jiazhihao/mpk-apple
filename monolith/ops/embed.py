@@ -2,6 +2,6 @@
 The table is either a raw BF16 aux tensor or, when tied with ``lm_head``, the BLM-packed slab (attr ``packed``)."""
 
 from ..core.ir import OpClass
-from .registry import OpDef, register_op
+from .registry import KernelBinding, OpDef, register_op
 
-EMBED = register_op(OpDef("embed", OpClass.MAP, "rows"))
+EMBED = register_op(OpDef("embed", OpClass.MAP, "rows").bind("*", KernelBinding("embed")))

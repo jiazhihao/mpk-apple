@@ -103,6 +103,55 @@ Readings:
    cost ~1.1× a T = 1 pass on this chip instead of the ×1.8–2.7 the profile's `cost_T` table currently records from
    the shader kernels, which makes DSpark's block of 4–7 drafts pay much better than the FMA numbers suggested.
 
+## 3d. The fusions (#19/#20) — `apple-m5-pro-20c_gemv_fusions.jsonl`, 5 alternating rounds
+
+`gemv_T` gained the fusions of design §5.1/§5.6 as macros: `NORM` (the RMSNorm scaling applied on the activation
+load, `x = bf16(h·r·(1+w))`, with `r` from a statistic buffer of 1 or `n_blocks` partial sums), `EPILOGUE=1`
+(residual add before the single rounding), `EPILOGUE=2` (`silu(gate)·up` over chunk-interleaved rows) and
+`STAT_OUT` (per-block partial Σy² of the BF16 outputs for the next norm). A standalone `norm_apply` kernel (one
+SIMD-group per token, writes the BF16 normalized activation) is the alternative to `NORM`; `rmsnorm_stat` is the
+standalone statistic. All variants pass the ≤ 2 ULP gates against the layer oracles (`tests/kernels/test_gemv_fusions.py`).
+
+Cost, useful GB/s, best of 5 alternating rounds (median in parentheses; the machine was noisy during this run —
+medians move up to 2× between rows, so read only the within-row ratios, which the alternation protects):
+
+| format | shape | T | plain RG2 | plain RG8 | NORM fused RG8 | NORM+residual+STAT_OUT RG8 | norm_apply + plain RG8 |
+|---|---|---|---|---|---|---|---|
+| nvfp4 | 17408×5120 | 1 | 157 (144) | 161 (124) | 131 (114) | 120 (106) | 163 (162) |
+| nvfp4 | 17408×5120 | 4 | 73 (71) | 83 (60) | 68 (51) | 65 (51) | 82 (61) |
+| nvfp4 | 5120×17408 | 1 | 121 (84) | 128 (82) | 118 (77) | 119 (78) | 120 (78) |
+| nvfp4 | 5120×17408 | 4 | 53 (53) | 60 (60) | 51 (50) | 50 (50) | 59 (59) |
+| nvfp4 | 6144×5120 | 1 | 89 (85) | 92 (88) | 87 (84) | 87 (84) | 90 (85) |
+| nvfp4 | 6144×5120 | 4 | 49 (49) | 56 (54) | 48 (46) | 47 (45) | 54 (53) |
+| nvfp4 | 12288×5120 | 1 | 88 (85) | 95 (89) | 88 (86) | 90 (85) | 88 (87) |
+| nvfp4 | 12288×5120 | 4 | 65 (51) | 74 (55) | 60 (60) | 58 (58) | 72 (72) |
+| fp8_e4m3 | 17408×5120 | 1 | 138 (127) | 127 (119) | 116 (115) | 114 (114) | 115 (114) |
+| fp8_e4m3 | 17408×5120 | 4 | 70 (66) | 84 (80) | 72 (72) | 72 (71) | 87 (79) |
+| fp8_e4m3 | 5120×17408 | 1 | 112 (109) | 103 (100) | 102 (97) | 99 (97) | 98 (97) |
+| fp8_e4m3 | 5120×17408 | 4 | 68 (55) | 92 (66) | 78 (60) | 78 (58) | 90 (65) |
+| fp8_e4m3 | 6144×5120 | 1 | 231 (209) | 198 (185) | 183 (130) | 186 (118) | 153 (123) |
+| fp8_e4m3 | 6144×5120 | 4 | 82 (63) | 108 (105) | 92 (68) | 91 (67) | 105 (104) |
+| fp8_e4m3 | 12288×5120 | 1 | 227 (118) | 200 (110) | 162 (107) | 189 (107) | 175 (109) |
+| fp8_e4m3 | 12288×5120 | 4 | 83 (82) | 109 (109) | 94 (93) | 92 (92) | 107 (107) |
+
+What it says **[M]**:
+
+1. **Fusing the scaling into the GEMV loses.** At equal geometry (RG = 8) the `NORM` form costs 5–19 % at T = 1 and
+   13–18 % at T = 4: the chunk is re-scaled (2 multiplies + a BF16 rounding per element) once per row group, on top
+   of an NVFP4 decode that is already ALU-bound. RG = 2, the plain T = 1 default, made it 40–60 % (first run, not
+   tabulated). The `norm_apply` dispatch costs ~2 µs and 20–40 KB of traffic instead: within 0–3 % of the plain GEMV
+   at T = 4 for both formats and at T = 1 for NVFP4; the FP8 T = 1 rows are inside the noise (66–95 %) and need a
+   quiet re-run. **Default:** the statistic is hoisted (`STAT_OUT`, free within noise) and the scaling is its own
+   dispatch; the fused `NORM` variant stays available to the autotuner. Design §5.1's "norm never costs a separate
+   dispatch" holds for the *statistic* (the all-to-all part); the elementwise scaling is cheaper as a dispatch than
+   as ALU work inside an ALU-bound kernel — +128 dispatches ≈ 0.25 ms per token for the 64-layer model versus
+   5–18 % of ~7 ms of GEMV time.
+2. **RG = 8 at T ≥ 2** for both formats (+13 % NVFP4, +20–34 % FP8 vs RG = 2); at T = 1 FP8 keeps RG = 2 (RG = 8 is
+   8 % slower) and NVFP4 is indifferent. `gemv_macros` now picks 2 at T = 1 and 8 above.
+3. **Residual epilogue and `STAT_OUT` are free** (`NORM+residual+STAT_OUT` = `NORM` within noise), so a layer
+   boundary is two dispatches — the producer with the residual add and the statistic, the consumer — plus the
+   scaling dispatch, and no separate reduction.
+
 ## 4. What it says
 
 1. **FP8 is bus-bound at T = 1** (85–95 % of nominal); the crew geometry is at parity on the wide shapes and 5–30 %

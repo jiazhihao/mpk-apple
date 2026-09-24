@@ -12,7 +12,7 @@ design §5.6 expressed as attrs so a kernel variant is selected by ``(format, T,
 """
 
 from ..core.ir import OpClass
-from .registry import OpDef, register_op
+from .registry import KernelBinding, OpDef, register_op
 
-GEMV = register_op(OpDef("gemv", OpClass.MAP, "rows"))
-LM_HEAD = register_op(OpDef("lm_head", OpClass.MAP, "rows"))
+GEMV = register_op(OpDef("gemv", OpClass.MAP, "rows").bind("*", KernelBinding("gemv_T")))
+LM_HEAD = register_op(OpDef("lm_head", OpClass.MAP, "rows").bind("*", KernelBinding("gemv_T", {"OUT_BF16": 1})))

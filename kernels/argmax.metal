@@ -1,0 +1,61 @@
+// argmax over BF16 logits [T][vocab] in two dispatches (a REDUCE whose partials are combined in block order, so the
+// result is deterministic; ties → the lowest index, like torch.argmax):
+//   argmax_partial: SIMD-group sg scans static slices of 256-logit spans (32 lanes × 8 contiguous logits = one
+//                   coalesced 512-byte read per span) for each token and writes its (max, index) partial;
+//   argmax_final:   one SIMD-group per token folds the n_sg partials in order and writes token[t].
+struct ArgmaxParams { uint vocab; uint t_active; uint n_sg; uint n_spans; };
+
+static inline float bf16f(ushort u) { return as_type<float>(uint(u) << 16); }
+
+static inline void better(thread float& best, thread uint& bi, float v, uint i) {
+  if (v > best || (v == best && i < bi)) { best = v; bi = i; }
+}
+
+static inline void simd_argmax(thread float& best, thread uint& bi) {
+  for (uint off = 16u; off > 0u; off >>= 1u) {
+    float ov = simd_shuffle_down(best, off);
+    uint oi = simd_shuffle_down(bi, off);
+    better(best, bi, ov, oi);
+  }
+  best = simd_broadcast_first(best);
+  bi = simd_broadcast_first(bi);
+}
+
+kernel void argmax_partial(device const ushort* logits [[buffer(0)]], device float* part_val [[buffer(1)]], device uint* part_idx [[buffer(2)]],
+                           constant ArgmaxParams& p [[buffer(3)]],
+                           uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
+  const uint sg = gid / sw;
+  if (sg >= p.n_sg) return;
+  for (uint t = 0; t < p.t_active; t++) {
+    float best = -INFINITY;
+    uint bi = 0xFFFFFFFFu;
+    device const ushort* row = logits + (ulong)t * p.vocab;
+    for (uint s = sg; s < p.n_spans; s += p.n_sg) {
+      const uint base = s * 256u + lane * 8u;
+      if (base + 8u <= p.vocab) {
+        uint4 q = *(device const uint4*)(row + base);
+        uint w[4] = {q.x, q.y, q.z, q.w};
+        for (uint v = 0; v < 4; v++) {
+          better(best, bi, as_type<float>(w[v] << 16), base + 2u * v);
+          better(best, bi, as_type<float>(w[v] & 0xFFFF0000u), base + 2u * v + 1u);
+        }
+      } else {
+        for (uint e = 0; e < 8u; e++) if (base + e < p.vocab) better(best, bi, bf16f(row[base + e]), base + e);
+      }
+    }
+    simd_argmax(best, bi);
+    if (lane == 0) { part_val[t * p.n_sg + sg] = best; part_idx[t * p.n_sg + sg] = bi; }
+  }
+}
+
+kernel void argmax_final(device const float* part_val [[buffer(0)]], device const uint* part_idx [[buffer(1)]], device int* token [[buffer(2)]],
+                         constant ArgmaxParams& p [[buffer(3)]],
+                         uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
+  const uint t = gid / sw;
+  if (t >= p.t_active) return;
+  float best = -INFINITY;
+  uint bi = 0xFFFFFFFFu;
+  for (uint i = lane; i < p.n_sg; i += 32u) better(best, bi, part_val[t * p.n_sg + i], part_idx[t * p.n_sg + i]);
+  simd_argmax(best, bi);
+  if (lane == 0) token[t] = int(bi);
+}
