@@ -412,7 +412,10 @@ acceptance probability so the verifier can choose how many draft tokens to verif
    set the next anchor, append tokens to the ring, check stop conditions.
 
 **Cost model.** Per round: drafter weights once (1.3–3.7 GB), `lm_head` at T = γ (0.72 GB), γ × W₂ (0.9 GB in BF16,
-0.45 in INT8), plus the verify pass at `cost(1 + L)`. Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify)`.
+0.45 in INT8), plus the verify pass at `cost(1 + L)`. The `cost(T)` table measured so far is for shader-FMA kernels;
+MLX's SIMD-group-matrix path streams NVFP4 at 85–91 % of nominal at T = 2–4 on the M5 Pro
+([kernel study](../research/gemv-kernel-study.md) §3c), so with such a verify kernel `cost(4)` should be ~1.1, not
+1.8 — the T > 1 GEMM is a `simdgroup_multiply_accumulate` (Apple7+) or MPP kernel, not a wider FMA loop. Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify)`.
 With the public drafters' reported accepted lengths (2.7–4.1 on math/code/chat at n-max 4 **[R]**) and the M5 Pro's
 cost table, L = 3–4 on the shader path pays for FP8 layers but is marginal for the NVFP4 MLPs (×1.79 at T = 4), which
 is exactly why the accelerator verify path (§5.6, ×1.5 at T = 8) and the per-chip choice matter. On an M3 Pro
