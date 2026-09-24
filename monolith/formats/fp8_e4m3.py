@@ -22,8 +22,8 @@ class FP8E4M3(Format):
     weights_per_word = 16
     scale_group = 0
     msl_decode = """
-constant uint WEIGHTS_PER_WORD = 16;
-constant uint SCALE_GROUP = 0;
+#define WEIGHTS_PER_WORD 16u
+#define SCALE_GROUP 0u
 static inline float fp8_e4m3(uint q) {
   uint e = (q >> 3) & 15u, m = q & 7u;
   float v = as_type<float>(((q & 0x7Fu) << 20) + (120u << 23));
@@ -34,6 +34,7 @@ static inline void decode_word(uint4 q, thread float* out) {
   uint w[4] = {q.x, q.y, q.z, q.w};
   for (uint e = 0; e < 16; e++) out[e] = fp8_e4m3((w[e >> 2] >> ((e & 3u) * 8u)) & 0xFFu);
 }
+static inline float decode_scale(thread const uint* sw, uint g) { return 1.0f; }
 """
 
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:
