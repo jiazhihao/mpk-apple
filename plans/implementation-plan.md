@@ -94,8 +94,11 @@ either way. So the geometry claim is settled at "no worse" and M1's real problem
 * Standalone bench harness (C++ + MSL): `gemv_T` for NVFP4 and FP8-E4M3 in block-lane-major packs, crew geometry
   `cores × 384`, static slices; shapes 17408×5120 (gate/up), 5120×17408 (down), 10240×5120, 6144×5120, 5120×6144,
   12288×5120, 248320×5120 (lm_head); T ∈ {1, 2, 4}.
-* Kernel study, in this order: **NVFP4 decode** (16-bit packed math, a register LUT or shift-only E2M1 → half
-  conversion, scale applied per 16-weight partial sum — the current ~7 ops per weight is the limiter); intra-block lane
+* [x] Bench harness on the native runtime (#9, `tools/bench/gemv_bench.py`) and the NVFP4 decode study (#10):
+  the integer-table decode (V2) takes NVFP4 T = 1 from 51–60 % to 82 % (gate/up), 74 % (down) and 89 % (lm_head) of
+  nominal on the M5 Pro; FP8 T = 1 is at 85–95 %. Full tables: `docs/research/gemv-kernel-study.md`.
+* Kernel study, in this order: **NVFP4 decode** (done: V2; remaining: scale bytes folded into the payload words for
+  K = 17408, a `half`-domain group dot under the numerics gate); intra-block lane
   order per chip (lane-interleaved 16 B on the M5 Pro, either on the M3 Pro); threadgroups per core ∈ {1, 2, 4, 9} as
   an autotuned knob (2–9 win 19–44 % for ALU-heavy variants on the M5 Pro); activation-stripe reuse across R rows × T
   tokens without the T = 8 register collapse seen in `p13`; scale placement (inline vs leading; E4M3 vs pre-decoded
@@ -104,8 +107,9 @@ either way. So the geometry claim is settled at "no worse" and M1's real problem
 * Baselines on identical shapes: MLX `quantized_matmul` (nvfp4 and affine-4; `qmv_fast`), llama.cpp `mul_mv`.
 
 Exit gate: NVFP4 T = 1 ≥ **1.10×** MLX's kernel throughput on the same machine (M3 Pro, and the M5 Pro where MLX's
-dense 4-bit `qmv` is reported at 266 GB/s), NVFP4 ≥ 80 % of nominal on the M5 Pro, FP8 shapes ≥ **100 GB/s** on the
-M3 Pro (already 275 on the M5 Pro); outputs within 2 ULP (BF16) of a torch oracle. *If missed:* keep the engine plan — fusion, GPU autonomy and
+dense 4-bit `qmv` is reported at 266 GB/s), NVFP4 ≥ 80 % of nominal on the M5 Pro (**met on gate/up and lm_head,
+74 % on down as of 2026-09-24**), FP8 shapes ≥ **100 GB/s** on the M3 Pro (231–291 GB/s on the M5 Pro); outputs
+within 2 ULP (BF16) of the oracle (**met**). *If missed:* keep the engine plan — fusion, GPU autonomy and
 speculation stand on their own — drop the bandwidth claim from the design and adopt MLX's GEMV structure.
 
 ### M2 — Runtime core and weight packer · 3 ew · parallel with M1
