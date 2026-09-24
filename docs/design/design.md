@@ -293,7 +293,9 @@ RNG counter, speculative bookkeeping (`anchor`, `draft_tokens[γ]`, `confidence[
 checkpoint index, drafter context length), `done`, `error`, token-ring head.
 
 * The last dispatch of a step is `SERIAL`: finalize sampling, run accept/reject, choose the GDN checkpoint to keep, set
-  the next round's anchor, append to the **token ring** (shared memory — the CPU reads it without a copy), check stop conditions (EOS set,
+  the next round's anchor, append to the **token ring** (shared memory — the CPU reads it without a copy; each 8-byte
+  slot carries the token and its sequence number in one store, because the host drains while later command buffers
+  are still running and cannot trust a head counter it reads from an in-flight buffer), check stop conditions (EOS set,
   max length, stop-token table), advance positions and `step`.
 * **Host pump.** The host keeps a few command buffers in flight (≈ 50–100 ms of queued work), each replaying one
   bounded range of the step ICB (§5.1). A completion handler drains the token ring and enqueues more. When `done` is set, steps already queued return at their first

@@ -14,3 +14,10 @@ except ImportError:  # noqa: BLE001
 
 def is_available() -> bool:
     return _native is not None
+
+
+__all__ = ["is_available"]
+if _native is not None:
+    from .engine import Engine, StepReport   # noqa: E402,F401
+    from .program import BufferSpec, KernelSpec, OpSpec, Program   # noqa: E402,F401
+    __all__ += ["Engine", "StepReport", "BufferSpec", "KernelSpec", "OpSpec", "Program"]
