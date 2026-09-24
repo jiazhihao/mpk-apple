@@ -187,6 +187,13 @@ own dispatch and hoists only the statistic — the row "the norm never costs a s
 reduction, not for the elementwise scaling. Remaining in M3: `gqa_decode` (#21), `gdn_mixer` (#22), sampling
 beyond argmax (#23), the drafter ops (#24) and the composite tests on the GPU path (#25).
 
+*Status (2026-09-24, #21).* `gqa_decode` + `gqa_merge` v1 (decode-kernels.md §1): (kv head, chunk, row group)
+blocks, q/k norm + permuted-layout RoPE + KV append in the prologue, chunked online softmax with the reference's
+roundings, deterministic merge with the sigmoid gate. Bit-identical runs; caches ≤ 1 ULP and output within 2·10⁻³ of
+the kernel-contract model, 1–2 ULP from the HF-faithful layer oracle. Cost on the M5 Pro for 32/4 heads, D = 256:
+82 µs/layer at 1 K, 245 µs at 4 K, 1.75 ms at 32 K (T = 1; 76 GB/s of KV — compute-bound); T = 4 is 2.5–3× T = 1
+because row groups re-stream K/V. Long context and T > 1 need the v2 structure sketched there (M5, #34 / before M6).
+
 ### M4 — Compiler and end-to-end decode · 4 ew
 
 * IR (typed graph, symbolic `T`/context, op metadata: reads/writes, block domain, class, cost).

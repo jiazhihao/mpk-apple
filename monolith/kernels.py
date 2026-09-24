@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
-from typing import Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional, Tuple
 
 from .formats import FORMATS
 from .formats.blm import PackInfo
@@ -119,3 +119,31 @@ def argmax_params(vocab: int, t_active: int, n_sg: int) -> bytes:
 
 def macro_key(macros: Mapping[str, str]) -> str:
     return " ".join(f"{k}={v}" for k, v in sorted(macros.items()))
+
+
+# ---- attention ----------------------------------------------------------------------------------------------------
+
+def gqa_source() -> str:
+    return PRELUDE + template("gqa_decode.metal")
+
+
+def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4) -> Dict[str, str]:
+    """Measured on the M5 Pro (docs/research/decode-kernels.md §1): RBMAX = 4 query rows per pass is 13× faster than
+    8 (register spills above 4 rows) and CH = 64 keys per chunk is the best chunk from 1 K to 32 K of context."""
+    if head_dim % 32 or chunk % 32 or rb_max < 1:
+        raise ValueError("gqa_decode: head_dim and chunk must be multiples of 32")
+    return {"D": str(head_dim), "CH": f"{chunk}u", "RBMAX": f"{rb_max}u"}
+
+
+def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg: int, q_off: int, gate_off: int, k_off: int,
+               v_off: int, in_stride: int, out_stride: int, ctx_max: int, eps: float, scaling: float, has_gate: bool,
+               n_chunks_max: int, rows_max: int) -> bytes:
+    """The ``GqaParams`` record (buffer 9 of gqa_decode, 4 of gqa_merge)."""
+    return struct.pack("<IIIIIIIIIIIIffIIIIII", heads, kv_heads, t_active, position, n_sg, q_off, gate_off, k_off, v_off,
+                       in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, 0, 0)
+
+
+def gqa_workspace(kv_heads: int, n_chunks_max: int, rows_max: int, head_dim: int) -> Tuple[int, int]:
+    """Bytes of the ``part_o`` and ``part_md`` workspaces."""
+    n = kv_heads * n_chunks_max * rows_max
+    return n * head_dim * 4, n * 2 * 4
