@@ -3,5 +3,6 @@ and the coverage guard. Passes arrive with plan M4; the guard is here from the s
 depends on it."""
 
 from .coverage import CoverageError, check_coverage
+from .emit import compile_program
 
-__all__ = ["CoverageError", "check_coverage"]
+__all__ = ["CoverageError", "check_coverage", "compile_program"]

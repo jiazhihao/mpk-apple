@@ -26,11 +26,22 @@ class StepReport:
 
 
 class Engine:
-    def __init__(self, program: Program, device: Optional[nt.Device] = None) -> None:
+    """``buffers`` lets several programs share device buffers by name (a prefill program at T = P and a decode
+    program at T = 1 over the same weights, states and StepState)."""
+
+    def __init__(self, program: Program, device: Optional[nt.Device] = None, buffers: Optional[Dict[str, nt.Buffer]] = None) -> None:
         self.program = program
         self.dev = device or nt.Device()
         self.buffers: Dict[str, nt.Buffer] = {}
         for name, spec in program.buffers.items():
+            if buffers is not None and name in buffers and buffers[name].nbytes >= spec.nbytes:
+                self.buffers[name] = buffers[name]           # shared (weights, states, StepState, ring, arena values)
+                continue
+            if buffers is not None and name in buffers and spec.role in ("state", "step_state", "ring", "weights"):
+                raise ValueError(f"shared buffer {name}: {buffers[name].nbytes} bytes, program needs {spec.nbytes}")
+            if spec.file is not None:
+                self.buffers[name] = nt.Buffer.from_file(self.dev, spec.file, spec.file_offset, spec.nbytes)
+                continue
             if spec.init is not None:
                 if len(spec.init) > spec.nbytes:
                     raise ValueError(f"buffer {name}: init larger than nbytes")

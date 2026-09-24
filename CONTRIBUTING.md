@@ -23,7 +23,7 @@ python tools/bench/gemv_bench.py --format fp8_e4m3 --shape 17408x5120     # a ke
 | `tests/contract` | nothing (numpy) | registries, IR, formats, packer, StepState, the layer library's lowering and pack plan on a synthetic checkpoint, hygiene |
 | `tests/kernels`, `tests/runtime` | the Metal module | kernels vs their torch-free oracles; the ICB/ring/pump runtime on toy programs |
 | `tests/layers` | torch, transformers, the small checkpoint | each layer's `forward()` oracle vs the HF module on real weights (cos > 0.999, max-abs ≤ scale/64) |
-| `tests/models` | torch, the small checkpoint | the model oracle vs its HF golden: per-layer hidden states (cos > 0.999) and 48 greedy tokens |
+| `tests/models` | torch, the small checkpoint (+ the Metal module for `test_gpu_golden`) | the model oracle vs its HF golden: per-layer hidden states (cos > 0.999) and 48 greedy tokens; the same through the compiled step program on the GPU |
 
 Goldens live in `tests/models/<name>/goldens/` (`<tag>.safetensors` + `<tag>.json`), produced by
 `tools/goldens/hf_golden.py` from the HF model in BF16 with eager attention on the CPU; the JSON records the

@@ -1,0 +1,256 @@
+"""``compile_program``: the lowered graph → a runtime :class:`Program` (plan M4, v0).
+
+v0 keeps every decision simple and correct: one device buffer per graph value (no aliasing), a barrier after every
+op, the norm as ``rmsnorm_stat`` → ``norm_apply`` → plain GEMV (the fuse pass that hoists the statistic into the
+producer's epilogue comes next), kernels specialized to the program's static ``T`` (a prefill program at ``T = P``
+and a decode program at ``T = 1`` share their buffers by name), weights and constants mapped straight from the
+pack file in page-aligned windows (no copy). The op handlers below are the only place an op kind meets a kernel
+source; a new op kind adds a handler and a kernel, nothing else.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+from .. import kernels
+from ..core.ir import Graph, Op, Value
+from ..core.profile import Profile
+from ..core.shapes import T, bind, numel
+from ..core.step_state import StepStateLayout
+from ..nn.module import Model
+from ..packs.packer import PackFile
+from ..runtime.program import BufferSpec, KernelSpec, OpSpec, Program
+from .coverage import check_coverage
+
+WINDOW_BYTES = 2 << 30          # pack windows: ICB bind offsets are 32-bit (design §5.1)
+
+
+@dataclass
+class _Ctx:
+    program: Program
+    pack: PackFile
+    layout: StepStateLayout
+    t: int
+    n_sg: int
+    tg: int
+    windows: Dict[str, Tuple[str, int]] = field(default_factory=dict)      # pack entry name -> (buffer, offset)
+    row_scales: Dict[str, Tuple[str, int]] = field(default_factory=dict)
+    counter: int = 0
+
+    # ---- helpers -----------------------------------------------------------------------------------------------
+    def kernel(self, key: str, source: str, function: str, macros: Dict[str, str]) -> str:
+        k = f"{function}|{key}|{kernels.macro_key(macros)}"
+        if k not in self.program.kernels:
+            self.program.kernels[k] = KernelSpec(source, function, dict(macros))
+        return k
+
+    def params(self, name: str, data: bytes) -> str:
+        bname = f"params.T{self.t}.{name}.{self.counter}"          # per-T: programs share buffers by name, params must not
+        self.counter += 1
+        self.program.buffers[bname] = BufferSpec(len(data), data, "params")
+        return bname
+
+    def scratch(self, name: str, nbytes: int) -> str:
+        bname = f"ws.T{self.t}.{name}.{self.counter}"
+        self.counter += 1
+        self.program.buffers[bname] = BufferSpec(max(nbytes, 16), None, "arena")
+        return bname
+
+    def crew_grid(self) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+        return (-(-(self.n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
+
+    def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str) -> None:
+        self.program.ops.append(OpSpec(kernel, bindings, tuple(grid), tuple(tg), True, [], name))
+
+    def shape(self, v: Value) -> Tuple[int, ...]:
+        return bind(v.shape, {T: self.t})
+
+
+def _value_bytes(v: Value, t: int) -> int:
+    return numel(v.shape, {T: t}) * v.dtype.itemsize
+
+
+def _pack_windows(ctx: _Ctx, path: str) -> None:
+    """Group the pack's slabs, row-scale tables and aux entries into ≤ 2 GiB file-backed windows."""
+    entries: List[Tuple[int, int, str, str]] = []                       # (offset, nbytes, kind, name)
+    for s in ctx.pack.manifest["slabs"]:
+        entries.append((s["offset"], s["nbytes"], "slab", s["name"]))
+        entries.append((s["row_scales_offset"], 4 * s["n"], "rs", s["name"]))
+    for a in ctx.pack.manifest["aux"]:
+        entries.append((a["offset"], a["nbytes"], "aux", a["name"]))
+    entries.sort()
+    start, end, members = None, 0, []
+    windows: List[Tuple[int, int, list]] = []
+    for off, nb, kind, name in entries:
+        if start is None or off + nb - start > WINDOW_BYTES:
+            if start is not None:
+                windows.append((start, end, members))
+            start, end, members = off, off + nb, []
+        end = max(end, off + nb)
+        members.append((off, kind, name))
+    if start is not None:
+        windows.append((start, end, members))
+    for i, (start, end, members) in enumerate(windows):
+        bname = f"pack.{i}"
+        ctx.program.buffers[bname] = BufferSpec(end - start, None, "weights", str(path), start)
+        for off, kind, name in members:
+            (ctx.row_scales if kind == "rs" else ctx.windows)[name] = (bname, off - start)
+
+
+# ---- op handlers ---------------------------------------------------------------------------------------------------
+
+def _embed(ctx: _Ctx, op: Op) -> None:
+    tokens, table = op.inputs
+    h = op.outputs[0]
+    info = ctx.pack.slab_info(table.name)
+    k = ctx.kernel("embed", kernels.embed_source(), "embed", kernels.embed_macros(info))
+    prm = ctx.params("embed", kernels.embed_params(info.k, ctx.t, info.n))
+    tok_binding = (ctx.program.step_state, ctx.layout.offset("pending_tokens")) if tokens.is_input else (tokens.name, 0)
+    ctx.add(k, [(0, tok_binding[0], tok_binding[1]), (1, *ctx.windows[table.name]), (2, h.name, 0), (3, prm, 0)], (ctx.t, 1, 1), (32, 1, 1), op.kind)
+
+
+def _rmsnorm_stat(ctx: _Ctx, op: Op) -> None:
+    h, = op.inputs
+    stat = op.outputs[0]
+    k = ctx.kernel("rmsnorm_stat", kernels.rmsnorm_stat_source(), "rmsnorm_stat", {})
+    prm = ctx.params("stat", kernels.stat_params(ctx.shape(h)[1], ctx.t))
+    ctx.add(k, [(0, h.name, 0), (1, stat.name, 0), (2, prm, 0)], (ctx.t, 1, 1), (32, 1, 1), op.kind)
+
+
+def _norm_apply(ctx: _Ctx, h: Value, stat: Value, nw: Value, eps: float, out_name: str) -> str:
+    k = ctx.kernel("norm_apply", kernels.norm_apply_source(), "norm_apply", {})
+    kdim = ctx.shape(h)[1]
+    xn = ctx.scratch(out_name, ctx.t * kdim * 2)
+    prm = ctx.params("norm_apply", kernels.norm_apply_params(kdim, ctx.t, 1, eps))
+    ctx.add(k, [(0, h.name, 0), (1, stat.name, 0), (2, *ctx.windows[nw.name]), (3, xn, 0), (4, prm, 0)], (ctx.t, 1, 1), (32, 1, 1), "norm_apply")
+    return xn
+
+
+def _gemv(ctx: _Ctx, op: Op) -> None:
+    ins = list(op.inputs)
+    x, w = ins[0], ins[1]
+    rest = ins[2:]
+    stat = nw = residual = None
+    if op.attrs.get("norm"):
+        stat, nw = rest[0], rest[1]
+        rest = rest[2:]
+    if op.attrs.get("epilogue") == "residual":
+        residual = rest[0]
+    y = op.outputs[0]
+    info = ctx.pack.slab_info(w.name)
+    x_binding = (x.name, 0)
+    if stat is not None:
+        x_binding = (_norm_apply(ctx, x, stat, nw, float(op.attrs.get("eps", 1e-6)), f"{y.name}.xn"), 0)
+    macros = kernels.gemv_macros(info, t=ctx.t, epilogue=op.attrs.get("epilogue"), out_bf16=True)
+    k = ctx.kernel(f"gemv_T|{info.format}", kernels.gemv_source(info.format), "gemv_T", macros)
+    prm = ctx.params("gemv", kernels.gemv_params(info.n, info.n_blocks, ctx.n_sg, ctx.t, eps=0.0, stat_parts=1))
+    bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, *x_binding), (3, y.name, 0), (4, prm, 0)]
+    if residual is not None:
+        bindings.append((7, residual.name, 0))
+    grid, tg = ctx.crew_grid()
+    ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}")
+
+
+def _gqa(ctx: _Ctx, op: Op) -> None:
+    proj, kc, vc, cos, sin, qn, kn = op.inputs
+    out = op.outputs[0]
+    a = op.attrs
+    d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
+    segs = {name: (off, n) for name, off, n in a["segments"]}
+    ctx_max = ctx.shape(kc)[0]
+    chunk = 64
+    macros = dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1")
+    src = kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_decode.metal")
+    kd, km = ctx.kernel("gqa", src, "gqa_decode", macros), ctx.kernel("gqa", src, "gqa_merge", macros)
+    rep = heads // kv
+    n_chunks_max, rows_max = -(-ctx_max // chunk), rep * ctx.t
+    po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
+    part_o, part_md = ctx.scratch("gqa.part_o", po), ctx.scratch("gqa.part_md", pm)
+    prm = ctx.params("gqa", kernels.gqa_params(
+        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=ctx.n_sg, q_off=segs["q"][0],
+        gate_off=segs["gate"][0] if "gate" in segs else 0, k_off=segs["k"][0], v_off=segs["v"][0], in_stride=ctx.shape(proj)[1],
+        out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]), scaling=float(a["scaling"]), has_gate=bool(a.get("gate")),
+        n_chunks_max=n_chunks_max, rows_max=rows_max))
+    st = ctx.program.step_state
+    grid, tg = ctx.crew_grid()
+    ctx.add(kd, [(0, proj.name, 0), (1, kc.name, 0), (2, vc.name, 0), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
+                 (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, part_o, 0), (8, part_md, 0), (9, prm, 0), (10, st, 0)],
+            grid, tg, op.kind)
+    ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, proj.name, 0), (3, out.name, 0), (4, prm, 0), (5, st, 0)],
+            (ctx.t * heads, 1, 1), (32, 1, 1), "gqa_merge")
+
+
+def _gdn(ctx: _Ctx, op: Op) -> None:
+    a = op.attrs
+    n_proj = len(a["proj_segments"]) and (1 + max(idx for idx, _, _ in a["proj_segments"].values()))
+    projs = op.inputs[:n_proj]
+    cs, rs, conv_w, a_log, dt_bias, norm_w = op.inputs[n_proj:]
+    out = op.outputs[0]
+    hv, hk, dk, dv, cw = a["v_heads"], a["k_heads"], a["dk"], a["dv"], a["conv_width"]
+    ps = a["proj_segments"]                                           # local -> (value index, column offset, columns)
+    kd = hk * dk
+    ab_separate = ps["in_proj_a"][0] != ps["in_proj_qkv"][0]
+    macros = kernels.gdn_macros(dk, dv, conv_width=cw, t=ctx.t)
+    src = kernels.gdn_source()
+    kmix, knorm = ctx.kernel("gdn", src, "gdn_mixer", macros), ctx.kernel("gdn", src, "gdn_norm", macros)
+    o_part = ctx.scratch("gdn.o_part", kernels.gdn_workspace(ctx.t, hv, dv))
+    main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
+    prm = ctx.params("gdn", kernels.gdn_params(
+        hv=hv, hk=hk, t_active=ctx.t, q_off=ps["in_proj_qkv"][1], k_off=ps["in_proj_qkv"][1] + kd, v_off=ps["in_proj_qkv"][1] + 2 * kd,
+        z_off=ps["in_proj_z"][1], a_off=ps["in_proj_a"][1], b_off=ps["in_proj_b"][1], in_stride=ctx.shape(main)[1],
+        ab_stride=ctx.shape(abv)[1], ab_separate=ab_separate, out_stride=hv * dv, n_sg=ctx.n_sg, key_dim=kd, eps=float(a["eps"])))
+    grid, tg = ctx.crew_grid()
+    ctx.add(kmix, [(0, main.name, 0), (1, abv.name, 0), (2, cs.name, 0), (3, rs.name, 0), (4, *ctx.windows[conv_w.name]),
+                   (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, o_part, 0), (9, prm, 0)], grid, tg, op.kind)
+    ctx.add(knorm, [(0, o_part, 0), (1, main.name, 0), (2, *ctx.windows[norm_w.name]), (3, out.name, 0), (4, prm, 0)],
+            (ctx.t * hv, 1, 1), (32, 1, 1), "gdn_norm")
+
+
+def _argmax(ctx: _Ctx, op: Op) -> None:
+    logits, = op.inputs
+    token = op.outputs[0]
+    vocab = ctx.shape(logits)[1]
+    src = kernels.argmax_source()
+    kp, kf = ctx.kernel("argmax", src, "argmax_partial", {}), ctx.kernel("argmax", src, "argmax_final", {})
+    pv, pi = ctx.scratch("argmax.val", ctx.t * ctx.n_sg * 4), ctx.scratch("argmax.idx", ctx.t * ctx.n_sg * 4)
+    prm = ctx.params("argmax", kernels.argmax_params(vocab, ctx.t, ctx.n_sg))
+    grid, tg = ctx.crew_grid()
+    ctx.add(kp, [(0, logits.name, 0), (1, pv, 0), (2, pi, 0), (3, prm, 0)], grid, tg, op.kind)
+    ctx.add(kf, [(0, pv, 0), (1, pi, 0), (2, token.name, 0), (3, prm, 0)], (ctx.t, 1, 1), (32, 1, 1), "argmax_final")
+
+
+HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "gemv": _gemv, "lm_head": _gemv, "gqa_decode": _gqa,
+            "gdn_mixer": _gdn, "argmax": _argmax}
+
+
+def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: int, eos: int = -1, ring_capacity: int = 4096,
+                    layout: Optional[StepStateLayout] = None, tg: int = 384) -> Program:
+    """Lower ``model``, check coverage on ``profile`` and emit the step program for a static ``T = t``."""
+    layout = layout or StepStateLayout()
+    if t < 1 or t > layout.t_max:
+        raise ValueError(f"compile_program: T = {t} must be within 1..t_max = {layout.t_max}")
+    g = Graph("step")
+    token = model.lower(g)
+    g.check()
+    check_coverage(g, profile)
+    program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
+    ctx = _Ctx(program, pack, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg)
+    _pack_windows(ctx, pack.dir / pack.manifest["pack"])
+    for v in g.values.values():
+        if v.is_state:
+            program.buffers[v.name] = BufferSpec(_value_bytes(v, t), None, "state")
+        elif not v.is_source:
+            program.buffers[v.name] = BufferSpec(max(_value_bytes(v, t), 16), None, "arena")
+        elif v.is_weight or v.is_const:
+            if v.name not in ctx.windows:
+                raise KeyError(f"compile_program: the pack has no entry for {v.name!r}")
+    program.buffers[program.step_state] = BufferSpec(layout.size, layout.pack({"t_this_step": t}), "step_state")
+    program.buffers[program.ring] = BufferSpec(ring_capacity * 8, None, "ring")
+    for op in g.ops:
+        HANDLERS[op.kind](ctx, op)
+    adv = ctx.kernel("advance", kernels.advance_source(layout.to_msl()), "advance", {})
+    prm = ctx.params("advance", kernels.advance_params(t, ring_capacity, eos))
+    ctx.add(adv, [(0, token.name, 0), (1, program.step_state, 0), (2, program.ring, 0), (3, prm, 0)], (1, 1, 1), (32, 1, 1), "advance")
+    return program

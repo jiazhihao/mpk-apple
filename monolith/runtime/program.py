@@ -24,6 +24,8 @@ class BufferSpec:
     nbytes: int
     init: Optional[bytes] = None         # initial contents (zeros if None)
     role: str = "arena"                  # "weights" | "state" | "arena" | "step_state" | "ring" | "params"
+    file: Optional[str] = None           # weights: a page-aligned window of this file, mapped without a copy
+    file_offset: int = 0
 
 
 @dataclass
@@ -51,7 +53,8 @@ class Program:
         d = {"version": 1, "step_state": self.step_state, "ring": self.ring, "ring_capacity": self.ring_capacity,
              "layout": {"t_max": self.layout.t_max, "gamma_max": self.layout.gamma_max},
              "kernels": {k: {"function": v.function, "macros": v.macros, "source": v.source} for k, v in self.kernels.items()},
-             "buffers": {k: {"nbytes": v.nbytes, "role": v.role, "init_hex": v.init.hex() if v.init is not None else None} for k, v in self.buffers.items()},
+             "buffers": {k: {"nbytes": v.nbytes, "role": v.role, "init_hex": v.init.hex() if v.init is not None else None,
+                             "file": v.file, "file_offset": v.file_offset} for k, v in self.buffers.items()},
              "ops": [{"kernel": o.kernel, "bindings": o.bindings, "grid": o.grid, "threadgroup": o.threadgroup,
                       "barrier_after": o.barrier_after, "threadgroup_memory": o.threadgroup_memory, "name": o.name} for o in self.ops]}
         return json.dumps(d, indent=1)
@@ -63,7 +66,8 @@ class Program:
             raise ValueError("unsupported program version")
         return cls(
             kernels={k: KernelSpec(v["source"], v["function"], dict(v.get("macros", {}))) for k, v in d["kernels"].items()},
-            buffers={k: BufferSpec(v["nbytes"], bytes.fromhex(v["init_hex"]) if v.get("init_hex") else None, v.get("role", "arena")) for k, v in d["buffers"].items()},
+            buffers={k: BufferSpec(v["nbytes"], bytes.fromhex(v["init_hex"]) if v.get("init_hex") else None, v.get("role", "arena"),
+                                   v.get("file"), int(v.get("file_offset", 0))) for k, v in d["buffers"].items()},
             ops=[OpSpec(o["kernel"], [tuple(b) for b in o["bindings"]], tuple(o["grid"]), tuple(o["threadgroup"]), o.get("barrier_after", True),
                         [tuple(t) for t in o.get("threadgroup_memory", [])], o.get("name", "")) for o in d["ops"]],
             step_state=d["step_state"], ring=d["ring"], ring_capacity=d["ring_capacity"],

@@ -190,6 +190,7 @@ Runner::Runner(const Device& d, const Icb& icb, const std::vector<Dispatch>& ops
   impl->icb = icb.impl; impl->ops = ops;
   for (auto* r : resources) impl->resources.push_back(r->impl->buf);
   impl->state = step_state.impl->buf; impl->done_off = done_offset; impl->head_off = ring_head_offset; impl->tail_off = ring_tail_offset;
+  impl->tail = *(volatile uint32_t*)((char*)impl->state.contents + impl->tail_off);   // resume where a previous runner over the same StepState/ring stopped
   impl->ring = ring.impl->buf; impl->cap = ring_capacity;
   if (ring.nbytes() < (size_t)ring_capacity * 8) throw std::runtime_error("ring buffer needs 8 bytes per slot (token + sequence)");
 }
@@ -220,6 +221,7 @@ static void drain_ring(RunnerImpl& r) {
 }
 
 RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode) {
+  impl->tail = *(volatile uint32_t*)((char*)impl->state.contents + impl->tail_off);   // the ring tail lives in StepState: resume (or restart after a reset) from it
   RunnerImpl& r = *impl;
   RunnerStats st;
   if (steps_per_cb == 0 || in_flight == 0) throw std::runtime_error("steps_per_cb and in_flight must be >= 1");
