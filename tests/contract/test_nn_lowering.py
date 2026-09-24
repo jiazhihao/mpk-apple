@@ -258,3 +258,26 @@ def test_dynamic_t_program(tmp_path):
     assert prog.layout.offset("prefill_left") == 152 and prog.buffers["logits"].nbytes == prog.layout.t_max * 50 * 2
     static = compile_program(m, PackFile(tmp_path / "pack"), prof, t=1)
     assert not any(k.macros.get("STEP_STATE") == "1" for key, k in static.kernels.items() if key.startswith("gemv_T"))
+
+
+def test_stochastic_sampler_lowers_and_compiles(tmp_path):
+    from monolith.compiler import compile_program
+    from monolith.core.profile import Profile
+    from monolith.nn import StochasticSampler
+
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    m.sampler = StochasticSampler(temperature=0.8, top_k=40, top_p=0.95, seed=7, prefix="sampler.")
+    g = Graph("step")
+    tok = m.lower(g)
+    op = tok.producer
+    assert op.kind == "sample" and op.attrs["top_k"] == 40 and op.attrs["seed"] == 7
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
+    prog = compile_program(m, PackFile(tmp_path / "pack"), prof, t=1)
+    names = [o.name for o in prog.ops]
+    assert names[-5:] == ["sample", "sample_select", "sample_gumbel", "argmax_final", "advance"]
+    assert all(any(b[0] == 15 for b in o.bindings) for o in prog.ops if o.name.startswith("sample") or o.name == "argmax_final")
+    assert prog.buffers[next(b for b in prog.buffers if ".sample.hist." in b)].nbytes == 65536 * 4
+    with pytest.raises(ValueError):
+        StochasticSampler(temperature=0.0)

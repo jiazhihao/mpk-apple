@@ -11,8 +11,8 @@ from .lm_head import LMHead
 from .mlp import GatedMLP
 from .module import LowerContext, Model, Module, StateEntry, StateSpec, WeightSpec
 from .norm import NormInput, RMSNorm
-from .sampler import GreedySampler
+from .sampler import GreedySampler, StochasticSampler
 
 __all__ = ["GQAAttention", "DecoderLayer", "Embedding", "GatedDeltaNet", "Linear", "Part", "Projection", "SlabGroup",
            "LMHead", "GatedMLP", "LowerContext", "Model", "Module", "StateEntry", "StateSpec", "WeightSpec",
-           "NormInput", "RMSNorm", "GreedySampler"]
+           "NormInput", "RMSNorm", "GreedySampler", "StochasticSampler"]

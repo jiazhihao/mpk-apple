@@ -22,6 +22,7 @@ from .core.profile import Profile
 from .core.step_state import StepStateLayout
 from .models import resolve_model
 from .nn.module import Model
+from .nn.sampler import GreedySampler, StochasticSampler
 from .packs.packer import PackFile
 
 
@@ -43,7 +44,8 @@ class Session:
     """A model + pack on a device: compiles a program per static T on demand and keeps the device buffers."""
 
     def __init__(self, model: Model, pack_dir: str, profile: Optional[Profile] = None, *, layout: Optional[StepStateLayout] = None,
-                 eos: int = -1, ring_capacity: int = 4096) -> None:
+                 eos: int = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
+                 min_p: float = 0.0, seed: int = 0) -> None:
         from .bench import profile_for_device
         from .runtime import _native as nt
 
@@ -55,6 +57,9 @@ class Session:
             raise RuntimeError(f"no profile for {info.name} ({info.gpu_cores} cores, Apple{info.apple_family}); add one under profiles/")
         self.layout = layout or StepStateLayout()
         self.eos, self.ring_capacity = eos, ring_capacity
+        self.seed = seed
+        # temperature 0 = greedy (the argmax path); otherwise the Gumbel-max sampler with the thresholds
+        model.sampler = GreedySampler(prefix="sampler.") if temperature <= 0 else StochasticSampler(temperature, top_k, top_p, min_p, seed, prefix="sampler.")
         self.engines: Dict[int, Any] = {}
         self.buffers: Optional[Dict[str, Any]] = None
 
@@ -94,7 +99,8 @@ class Session:
         for k, chunk in enumerate(chunks):
             # the host writes each chunk's tokens and length; the advance emits only after the last chunk
             state = self.layout.unpack(st.read(0, self.layout.size))
-            state.update(t_this_step=len(chunk), pending_tokens=chunk, prefill_left=len(chunks) - 1 - k)
+            state.update(t_this_step=len(chunk), pending_tokens=chunk, prefill_left=len(chunks) - 1 - k,
+                         rng_lo=self.seed & 0xFFFFFFFF, rng_hi=(self.seed >> 32) & 0xFFFFFFFF)
             st.write(self.layout.pack(state), 0)
             r1 = pre.run(1, steps_per_cb=1, in_flight=1)
             prefill_ms += r1.gpu_ms
@@ -113,7 +119,7 @@ class Session:
         return eng.read(name)
 
 
-def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos: Optional[int] = None) -> Session:
+def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos: Optional[int] = None, **sampling: Any) -> Session:
     with open(Path(model_dir) / "config.json") as f:
         arch = json.load(f)["architectures"][0]
     cls = resolve_model(arch)
@@ -123,7 +129,7 @@ def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos:
     if eos is None:
         e = getattr(model.config, "eos_token_id", None)
         eos = e[0] if isinstance(e, list) and e else (e if isinstance(e, int) else -1)
-    return Session(model, pack_dir, eos=eos)
+    return Session(model, pack_dir, eos=eos, **sampling)
 
 
 def main(argv=None) -> int:
@@ -134,13 +140,19 @@ def main(argv=None) -> int:
     ap.add_argument("-n", "--max-new-tokens", type=int, default=48)
     ap.add_argument("--max-context", type=int, default=4096)
     ap.add_argument("--no-eos", action="store_true", help="ignore the model's EOS (fixed-length generation)")
+    ap.add_argument("--temperature", type=float, default=0.0, help="0 = greedy; otherwise Gumbel-max sampling on the GPU")
+    ap.add_argument("--top-k", type=int, default=0)
+    ap.add_argument("--top-p", type=float, default=0.0)
+    ap.add_argument("--min-p", type=float, default=0.0)
+    ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
 
     tok = Tokenizer.from_file(str(Path(a.model) / "tokenizer.json"))
     ids = tok.encode(a.prompt, add_special_tokens=False).ids
     t0 = time.time()
-    sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1 if a.no_eos else None)
+    sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1 if a.no_eos else None,
+                        temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed)
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0
     print(tok.decode(gen.tokens))
