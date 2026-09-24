@@ -29,7 +29,7 @@ class DSparkConfig:
     confidence_head_with_markov: bool = True
     target_hidden_size: Optional[int] = None
     rope_type: str = "default"
-    architecture: str = "Qwen3DSparkModel"
+    architecture: str = ""                  # informational: the checkpoint's architectures[0]
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -47,7 +47,7 @@ class DSparkConfig:
             markov_rank=int(get("markov_rank", 0) or 0), markov_head_type=str(get("markov_head_type", "vanilla")),
             enable_confidence_head=bool(get("enable_confidence_head", False)), confidence_head_with_markov=bool(get("confidence_head_with_markov", False)),
             target_hidden_size=d.get("target_hidden_size"), rope_type=str(rope.get("rope_type", "default")),
-            architecture=(d.get("architectures") or ["Qwen3DSparkModel"])[0],
+            architecture=(d.get("architectures") or [""])[0],
         )
         if cfg.markov_head_type not in ("vanilla",):
             raise ValueError(f"unsupported markov_head_type {cfg.markov_head_type!r} (vanilla only)")
