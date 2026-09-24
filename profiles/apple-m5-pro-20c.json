@@ -256,6 +256,7 @@
     "32": 1.78
    }
   },
-  "note": "normalized values the compiler reads (Profile.from_dict); cost_T = pass cost relative to a T = 1 pass, from p13 (shader ALUs, best geometry) and p14 (accelerator path, TM = 8 / 32)"
+  "note": "normalized values the compiler reads (Profile.from_dict); cost_T = pass cost relative to a T = 1 pass, from p13 (shader ALUs, best geometry) and p14 (accelerator path, TM = 8 / 32)",
+  "cost_T_note": "shader-FMA kernels (p13); a SIMD-group-matrix verify kernel is expected to bring T=2-4 to ~1.05-1.15 (MLX qmm_t reaches 85-91 % of nominal at T=2-4 on this chip) - re-measure when it exists"
  }
 }

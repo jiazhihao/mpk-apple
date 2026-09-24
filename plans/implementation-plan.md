@@ -107,9 +107,20 @@ either way. So the geometry claim is settled at "no worse" and M1's real problem
 * Baselines on identical shapes: MLX `quantized_matmul` (nvfp4 and affine-4; `qmv_fast`), llama.cpp `mul_mv`.
 
 Exit gate: NVFP4 T = 1 ≥ **1.10×** MLX's kernel throughput on the same machine (M3 Pro, and the M5 Pro where MLX's
-dense 4-bit `qmv` is reported at 266 GB/s), NVFP4 ≥ 80 % of nominal on the M5 Pro (**met on gate/up and lm_head,
-74 % on down as of 2026-09-24**), FP8 shapes ≥ **100 GB/s** on the M3 Pro (231–291 GB/s on the M5 Pro); outputs
-within 2 ULP (BF16) of the oracle (**met**). *If missed:* keep the engine plan — fusion, GPU autonomy and
+dense 4-bit `qmv` is reported at 266 GB/s), NVFP4 ≥ 80 % of nominal on the M5 Pro, FP8 shapes ≥ **100 GB/s** on the
+M3 Pro; outputs within 2 ULP (BF16) of the oracle.
+
+**Go/no-go #1, read on the M5 Pro 2026-09-24** (`docs/research/gemv-kernel-study.md` §3c, issues #9–#12):
+FP8 231–291 GB/s (75–95 %) — met. NVFP4 T = 1 with the integer-table decode: 231–274 GB/s (75–89 %) — the 80 %
+line is met on 5 of 7 shapes. **Against MLX's own NVFP4 `qmv` (262–286 GB/s, 85–93 %) we are at 0.85–0.96×, not
+1.10×: the geometry claim does not hold on this chip; a 4-bit GEMV is a solved problem at ~92 % and the remaining
+plain-decode lever is fusion + GPU autonomy, as the design's §2 ledger already sized.** Decision: proceed as the gate's
+"if missed" clause says — keep the engine plan, drop the bandwidth claim, keep our kernel (it is within 10 % and
+carries the fusions/row scales the program needs) and revisit the last 10 % in M5. A second finding changes M6/M9:
+**T = 2–4 needs a SIMD-group-matrix kernel** — MLX's `qmm_t` path stays at 85–91 % at T = 2–4 where our shader-FMA
+kernels fall to 45–51 % (FP8) and 33–51 % (NVFP4); with such a kernel a T = 4 verify pass should cost ~1.1× a T = 1
+pass instead of the ×1.8–2.7 the profile's `cost_T` table records today. That kernel is the first item of M9's
+accelerator work and gates M6's verify-length rule (issue #51 grows to "T ≥ 2", not "T ≥ 5"). *If missed:* keep the engine plan — fusion, GPU autonomy and
 speculation stand on their own — drop the bandwidth claim from the design and adopt MLX's GEMV structure.
 
 ### M2 — Runtime core and weight packer · 3 ew · parallel with M1
