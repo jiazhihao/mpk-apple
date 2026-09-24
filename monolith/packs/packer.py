@@ -48,14 +48,29 @@ class SlabRequest:
     row_perm: Optional[np.ndarray] = None        # applied to the stacked rows, perm[new] = old
 
 
+AUX_TRANSFORMS = (None, "f32", "bf16_f32", "one_plus", "neg_exp")
+
+
 @dataclass
 class AuxRequest:
-    """A small tensor stored raw. ``transform``: None (bytes as stored), ``"f32"`` (convert to float32),
-    ``"one_plus"`` (``1 + w`` as float32)."""
+    """A small tensor stored raw. ``transform``: None (bytes as stored), ``"f32"`` (widen exactly), ``"bf16_f32"``
+    (the BF16-valued parameter a BF16 reference model holds, widened), ``"one_plus"`` (``1 + w`` as float32),
+    ``"neg_exp"`` (``−exp(w)`` as float32). ``perm`` (``perm[new] = old``) reorders the leading axis afterwards."""
 
     name: str
     source: str                                  # full checkpoint key
     transform: Optional[str] = None
+    perm: Optional[np.ndarray] = None
+
+
+@dataclass
+class TableRequest:
+    """A computed constant (RoPE tables …) stored raw: ``array`` with the safetensors dtype name it is stored as
+    (``"F32"``, ``"BF16"`` — a BF16 table is passed as its uint16 bit pattern)."""
+
+    name: str
+    array: np.ndarray
+    dtype: str = "F32"
 
 
 class Packer:
@@ -151,12 +166,32 @@ class Packer:
             dtype = "F32"
         elif req.transform == "one_plus":
             out, dtype = transforms.one_plus(arr, dtype_in=info.dtype), "F32"
+        elif req.transform == "bf16_f32":
+            out, dtype = transforms.bf16_round_f32(arr, dtype_in=info.dtype), "F32"
+        elif req.transform == "neg_exp":
+            out, dtype = transforms.neg_exp(arr, dtype_in=info.dtype), "F32"
         else:
-            raise ValueError(f"aux {req.name}: unknown transform {req.transform!r}")
+            raise ValueError(f"aux {req.name}: unknown transform {req.transform!r} (one of {AUX_TRANSFORMS})")
+        if req.perm is not None:
+            perm = np.asarray(req.perm)
+            if sorted(perm.tolist()) != list(range(out.shape[0])):
+                raise ValueError(f"aux {req.name}: perm is not a permutation of the leading axis ({out.shape[0]})")
+            out = np.ascontiguousarray(out[perm])
         self._align()
         off = self._write(out.astype(out.dtype).tobytes())
         entry = {"name": req.name, "source": req.source, "offset": off, "nbytes": out.nbytes, "dtype": dtype,
                  "shape": [int(x) for x in out.shape], "transform": req.transform}
+        self._aux.append(entry)
+        return entry
+
+    def add_table(self, req: TableRequest) -> Dict[str, Any]:
+        if req.dtype not in _NP_OF:
+            raise ValueError(f"table {req.name}: unsupported dtype {req.dtype!r}")
+        out = np.ascontiguousarray(np.asarray(req.array).astype(_NP_OF[req.dtype], copy=False))
+        self._align()
+        off = self._write(out.tobytes())
+        entry = {"name": req.name, "source": None, "offset": off, "nbytes": out.nbytes, "dtype": req.dtype,
+                 "shape": [int(x) for x in out.shape], "transform": "table"}
         self._aux.append(entry)
         return entry
 
