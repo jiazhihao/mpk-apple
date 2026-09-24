@@ -274,6 +274,13 @@ geometry; keep it per chip only where the A/B shows a gain (expected ~2–4 % on
 Exit gate: the plain-decode success metric. *If 1.10× is missed but parity holds:* proceed to M6 — speculation does
 not depend on it — and record why.
 
+
+*Status (2026-09-24, #33).* Per-op GPU timestamps exist: `Queue.profile` (one compute encoder per dispatch with
+timestamp counter samples at the stage boundaries — the granularity Apple GPUs support — correlated to CPU time),
+`Engine.profile`, `monolith.trace` (the per-kind budget table with GB/s for the ops that stream a slab, and a
+Chrome-trace file for Perfetto — no viewer of our own). The 0.8B's decode step budget is in decode-kernels.md §3:
+6.81 ms of op minima against a 4.90 ms streamed-bytes bound; the GEMVs at 78 % of nominal, the lm_head at 97 %,
+the mixers 0.74 ms, the norm dispatches 0.2 ms — the targets of #34.
 ### M6 — DSpark speculative decoding · 4 ew
 
 Design §5.8. Everything on the GPU; the host only drains tokens.

@@ -97,3 +97,30 @@ The 0.8B's 16/16 layers: 20 µs at T = 1, 44 µs at T = 4 (slice 8, 2 per block)
 (192 blocks for 240 SIMD-groups) [M]. (3) T = 4 costs ~2.2× T = 1 and T = 8 ~4×: the state is read and written
 once per pass of 4 tokens and the per-token chain (2·DV `simd_sum`s per slice) is serial, so verification pays
 roughly per token here — the profile's `cost_T` for the GDN layers should be re-measured with this kernel (#33/#34).
+
+## 3. The 0.8B decode step on the M5 Pro — the per-token budget (#33)
+
+`python -m monolith.trace --model ~/models/Qwen3.5-0.8B --pack <pack>` (per-dispatch GPU timestamps: one encoder
+per op with counter samples at the stage boundaries, so the numbers carry encoder gaps the ICB replay does not
+have; min of 5 profiled steps; the ICB replay of the same program runs at 6.84 ms per token) [M]:
+
+| op kind | n | ms (min) | share | GB streamed | GB/s |
+|---|---|---|---|---|---|
+| gemv | 96 | 4.150 | 60.9 % | 0.995 | 240 |
+| lm_head | 1 | 1.699 | 24.9 % | 0.509 | 299 |
+| gdn_mixer | 18 | 0.451 | 6.6 % | – | – |
+| norm_apply | 49 | 0.208 | 3.0 % | – | – |
+| gqa_decode | 6 | 0.172 | 2.5 % | – | – |
+| gdn_norm | 18 | 0.078 | 1.1 % | – | – |
+| gqa_merge | 6 | 0.038 | 0.6 % | – | – |
+| argmax + final, embed, advance, rmsnorm_stat | 5 | 0.015 | 0.2 % | – | – |
+| **total** | 199 | **6.810** | | 1.504 | bound at 307 GB/s: **4.90 ms** |
+
+What it says: (1) the `lm_head` (a 0.5 GB BF16 slab, a third of the model) already streams at 97 % of nominal;
+(2) the 96 layer GEMVs stream at 240 GB/s = 78 % — the small-K (1024) shapes pay per-row overhead (4 words per lane
+per row); per-shape geometry (RG, one block per SIMD-group, threadgroups per core) is the first autotune target
+(#34); (3) the mixers cost 0.74 ms: the GDN mixer is latency-bound at 16 heads (64 blocks for 240 SIMD-groups,
+25 µs per layer), attention 29 µs per layer; (4) the 49 `norm_apply` dispatches cost 4.2 µs each — dispatch
+overhead, not work — so fusing the scaling into the small BF16 GEMVs may win here where it lost on the ALU-bound
+NVFP4 shapes: another per-op autotune decision. `mlx-lm` decodes the same model at 6.2 ms per token; parity needs
+~0.65 ms of the 1.9 ms between the sum of op minima and the streamed-bytes bound.

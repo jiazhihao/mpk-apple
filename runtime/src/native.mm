@@ -66,7 +66,9 @@ NB_MODULE(_native, m) {
 
   nb::class_<Queue>(m, "Queue")
       .def(nb::init<const Device&>(), nb::arg("device"))
-      .def("run", &Queue::run, nb::arg("dispatches"), nb::arg("concurrent") = false);
+      .def("run", &Queue::run, nb::arg("dispatches"), nb::arg("concurrent") = false)
+      .def("profile", &Queue::profile, nb::arg("dispatches"))
+      .def("supports_profiling", &Queue::supports_profiling);
 
   nb::class_<Icb>(m, "Icb")
       .def(nb::init<const Device&, const std::vector<Dispatch>&>(), nb::arg("device"), nb::arg("ops"), nb::keep_alive<1, 3>())

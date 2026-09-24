@@ -37,6 +37,7 @@ class OpSpec:
     barrier_after: bool = True           # false only for sibling ops the compiler proved independent (§5.12)
     threadgroup_memory: List[Tuple[int, int]] = field(default_factory=list)
     name: str = ""
+    meta: Dict[str, object] = field(default_factory=dict)   # informational: op kind, bytes streamed, layer … (JSON)
 
 
 @dataclass
@@ -56,7 +57,7 @@ class Program:
              "buffers": {k: {"nbytes": v.nbytes, "role": v.role, "init_hex": v.init.hex() if v.init is not None else None,
                              "file": v.file, "file_offset": v.file_offset} for k, v in self.buffers.items()},
              "ops": [{"kernel": o.kernel, "bindings": o.bindings, "grid": o.grid, "threadgroup": o.threadgroup,
-                      "barrier_after": o.barrier_after, "threadgroup_memory": o.threadgroup_memory, "name": o.name} for o in self.ops]}
+                      "barrier_after": o.barrier_after, "threadgroup_memory": o.threadgroup_memory, "name": o.name, "meta": o.meta} for o in self.ops]}
         return json.dumps(d, indent=1)
 
     @classmethod
@@ -69,7 +70,7 @@ class Program:
             buffers={k: BufferSpec(v["nbytes"], bytes.fromhex(v["init_hex"]) if v.get("init_hex") else None, v.get("role", "arena"),
                                    v.get("file"), int(v.get("file_offset", 0))) for k, v in d["buffers"].items()},
             ops=[OpSpec(o["kernel"], [tuple(b) for b in o["bindings"]], tuple(o["grid"]), tuple(o["threadgroup"]), o.get("barrier_after", True),
-                        [tuple(t) for t in o.get("threadgroup_memory", [])], o.get("name", "")) for o in d["ops"]],
+                        [tuple(t) for t in o.get("threadgroup_memory", [])], o.get("name", ""), dict(o.get("meta", {}))) for o in d["ops"]],
             step_state=d["step_state"], ring=d["ring"], ring_capacity=d["ring_capacity"],
             layout=StepStateLayout(d["layout"]["t_max"], d["layout"]["gamma_max"]))
 

@@ -87,6 +87,11 @@ class Queue {
   // one command buffer holding `dispatches` in order (serial encoder, or concurrent with explicit barriers),
   // committed and waited for; returns GPU time from the command buffer timestamps
   RunResult run(const std::vector<Dispatch>& dispatches, bool concurrent);
+  // per-dispatch GPU time: one compute encoder per dispatch with timestamp counter samples at its start and end
+  // (MTLCounterSamplingPointAtStageBoundary, the granularity Apple GPUs support); returns (start_ms, end_ms) per
+  // dispatch relative to the first start. The encoder boundaries add ~µs gaps that do not exist in the ICB replay.
+  std::vector<std::pair<double, double>> profile(const std::vector<Dispatch>& dispatches);
+  bool supports_profiling() const;
   std::shared_ptr<QueueImpl> impl;
 };
 
