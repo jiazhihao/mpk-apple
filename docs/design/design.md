@@ -13,8 +13,8 @@ on it. Companion documents: [implementation plan](../../plans/implementation-pla
 
 First target: [`nvidia/Qwen3.8-27B-NVFP4`](https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4), batch-1 decode latency,
 M3/M4/M5 families, macOS 26+ (Metal 4). The engine is model-agnostic; Qwen3.8 is its first client. On the 24 GB
-machines that cannot host it, the same architecture package runs the official `Qwen/Qwen3.5-9B` and `-4B` quantized
-to NVFP4 by the packer (the NVIDIA byte layout, weight-only) — the plan's §0.1 target table.
+machines that cannot host it, the same architecture package runs `AxionML/Qwen3.5-9B-NVFP4` (9.4 GB) and a second
+package runs `AxionML/Gemma-4-12B-NVFP4` (11.7 GB) — the plan's §0.1 target table.
 
 Evidence tags: **[M]** measured by us on an M3 Pro and an M5 Pro ([probes](../research/apple-gpu-probes.md)); **[S]** Apple
 spec/documentation; **[R]** third-party report; **[H]** hypothesis the plan must test.

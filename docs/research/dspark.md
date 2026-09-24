@@ -51,7 +51,7 @@ backend for Apple silicon (`dflash generate mlx --draft … --draft-bits 4 --blo
 | `Dogacel/Qwen3-8B-DSpark` | Qwen3-8B | as DeepSpec's `dspark_qwen3_8b` config | — | (check) | model 2 in plan M8 |
 | `satgeze/Qwen3.5-0.8B-DSpark` | Qwen3.5-0.8B (self-distilled) | 5 draft layers, block 7, Markov rank 256, confidence head; 0.7 B params | safetensors + GGUF | Apache-2.0 | the **24 GB development drafter** (plan §0.1): the target is too fast for speculation to pay (reported 0.43–0.55× under llama.cpp on an M3 Max, 11–15 % acceptance), so it is a plumbing and correctness vehicle, not a speedup claim |
 | `satgeze/Qwen3.6-27B-DSpark`, `pablohassan/Qwen3.6-27B-DSpark-FR`, `fal/Qwen3.6-35B-A3B-Magic-Prompt-FP8-DSpark` | Qwen3.6-27B / 35B-A3B | (check `config.json`) | — | (check) | candidates if the M3 Pro target moves to Qwen3.6; not fetched |
-| — | Qwen3.5-9B / 4B (the 24 GB targets) | no public DSpark drafter found (2026-09-24) | — | — | a training job on a GPU box (DeepSpec toolkit, on-policy against our NVFP4 pack) if a 24 GB speculative number is wanted |
+| — | `AxionML/Qwen3.5-9B-NVFP4`, `AxionML/Gemma-4-12B-NVFP4` (the 24 GB targets) | no public DSpark drafter found (2026-09-24) | — | — | a training job on a GPU box (DeepSpec toolkit, on-policy against the NVFP4 target) if a 24 GB speculative number is wanted |
 | `deepseek-ai/DeepSeek-V4-{Flash,Pro}-DSpark` | DeepSeek-V4 | 3 MoE layers, block 5, greedy draft sampling | — | MIT | too large for any Mac we have; the reference ecosystem |
 
 Also relevant: `z-lab/Qwen3.8-27B-DFlash2` (DFlash 2, no Markov/confidence heads; MLX backend) as a fallback drafter

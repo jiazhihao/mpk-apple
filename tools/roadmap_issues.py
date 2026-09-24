@@ -88,11 +88,12 @@ T("M0", "M0: exact NVFP4/FP8 → BF16 dequantizer and HF goldens", ["area:infra"
   ["Goldens checked in (or stored with a manifest) for the small model; a reproducible script for the 27B"],
   [f"{DESIGN} §5.9", f"{PLAN} M0"]),
 T("M0", "M0: the 24 GB target — Qwen3.5-9B/4B quantized to NVFP4 by the packer, goldens, mlx-lm/llama.cpp baselines on the M5 Pro", ["area:models", "area:perf", "hardware:m5-pro"],
-  "The 24 GB M5 Pro cannot host the 27B and no official NVFP4 Qwen3.5 checkpoint of a fitting size exists (plan §0.1: NVIDIA publishes NVFP4 only for the 122B/397B MoEs; Qwen publishes FP8/GPTQ only from 27B up; the 9B is 19.3 GB in BF16). The official `Qwen/Qwen3.5-9B` and `Qwen/Qwen3.5-4B` quantized to NVFP4 by our own packer are the machine's first-class targets; community re-quantizations are not used.",
-  ["Fetch `Qwen/Qwen3.5-9B` and `Qwen/Qwen3.5-4B` (Apache-2.0); quantize with `pack_weights --quantize nvfp4` (the M2 packer item) and record the pack sizes",
-   "HF goldens for both with the HF model on the dequantized weights (`tools/goldens/hf_golden.py`): 48 greedy tokens, per-layer hidden states; store with a manifest (too large to check in)",
-   "Baselines on the M5 Pro: `mlx-lm` (BF16 for the 4B, 4-bit affine for both) and `llama.cpp` (Q4_K_M): tok/s, effective GB/s, host CPU; the table goes into the plan next to the 27B rows"],
-  ["Packs, goldens and the baseline table exist on the M5 Pro; the numbers the 24 GB rows of the M4/M5 gates are measured against"],
+  "The 24 GB M5 Pro cannot host the 27B. Its first-class targets (plan §0.1, decision 2026-09-24) are two ModelOpt NVFP4 checkpoints that fit: `AxionML/Qwen3.5-9B-NVFP4` (9.36 GB, the 27B's architecture package: 32 layers, hidden 4096; NVFP4 group-16 on every linear except lm_head/conv1d/vision/MTP) and `AxionML/Gemma-4-12B-NVFP4` (11.7 GB, `Gemma4UnifiedForConditionalGeneration`: 36 sliding + 12 full attention layers, NVFP4 MLP, BF16 attention). Official BF16 Qwen3.5 checkpoints reach NVFP4 through our packer (#67) as the fallback route. (Title kept for issue continuity.)",
+  ["Fetch both checkpoints (Apache-2.0); verify their ModelOpt layouts tensor by tensor against the `nvfp4` plugin (codes, E4M3 block-16 scales, `weight_scale_2`, the excluded modules that stay BF16); record the tensor inventory and per-class formats in `docs/research/`",
+   "HF goldens for both with the HF model on the dequantized weights (`tools/goldens/hf_golden.py`; transformers 5.17 has both architectures): 48 greedy tokens, per-layer hidden states; store with a manifest (too large to check in)",
+   "Baselines on the M5 Pro: `mlx-lm` (its NVFP4 / affine 4-bit modes) and `llama.cpp` (Q4_K_M of the base models) on both: tok/s, effective GB/s, host CPU; the table goes into the plan next to the 27B rows",
+   "The packer route for official checkpoints (`Qwen/Qwen3.5-9B`/`-4B` → NVFP4, #67) as the controlled A/B of quantization recipes"],
+  ["Both checkpoints on disk with verified layouts, goldens and the baseline table; the numbers the 24 GB rows of the M4/M5 gates are measured against"],
   [f"{PLAN} §0.1, M0", f"{DESIGN} §5.9"]),
 T("M0", "M0: on-screen frame-pacing check → the default max_cb_ms", ["area:probes", "area:runtime"],
   "Other GPU clients wait for a whole command buffer in the worst case on the M3 Pro and in the usual case on the M5 Pro (hardware report §3, H5). The host pump's `max_cb_ms` default must come from a compositor measurement, before M2 builds the pump.",
@@ -273,9 +274,10 @@ T("M4", "M4: end-to-end gates — small-model golden in CI, 27B reduced-layer an
   ["All four recorded in the plan with numbers"],
   [f"{PLAN} M4 exit"]),
 T("M4", "M4: end-to-end gates on the 24 GB target — Qwen3.5-9B-NVFP4 greedy equals the reference; tok/s ≥ mlx-lm on the M5 Pro", ["area:models", "gate", "hardware:m5-pro"],
-  "The 24 GB rows of M4's exit (plan §0.1): the NVFP4 decode path at a real size (32 layers, hidden 4096, ~6.5 GB per token) on the machine most of the work happens on.",
-  ["(b′) the packer-quantized 9B: `--num-layers-override` hidden-state gates against its goldens, then full greedy equal to the HF reference on the dequantized weights except at exact logit ties",
-   "(c′) decode tok/s ≥ the `mlx-lm` baseline on the 9B on the M5 Pro; host < 5 %; the 4B as a second data point (BF16 vs NVFP4 vs FP8 A/B)"],
+  "The 24 GB rows of M4's exit (plan §0.1) on `AxionML/Qwen3.5-9B-NVFP4`: the NVFP4 decode path at a real size (32 layers, hidden 4096, ~6.5 GB per token; every projection NVFP4, lm_head BF16) on the machine most of the work happens on, with zero engine edits (the 27B's package).",
+  ["(b′) `--num-layers-override` hidden-state gates against its goldens, then full greedy equal to the HF reference on the dequantized weights except at exact logit ties",
+   "(c′) decode tok/s ≥ the `mlx-lm` baseline on the same checkpoint on the M5 Pro; (d′) host < 5 %, zero per-token synchronization",
+   "Chunked prefill for prompts longer than `t_max` (the goldens' prompts) is part of this gate"],
   ["Both rows recorded in the plan with numbers next to the 27B rows"],
   [f"{PLAN} §0.1, M4 exit"]),
 T("M4", "M4: CI extension test — model PRs touch only models/, tests/, docs/", ["area:infra"],
@@ -371,6 +373,13 @@ T("M8", "M8: model 2 — Qwen3-8B with its DSpark drafter, zero engine edits", [
    "Record time-to-port for the porting guide"],
   ["Greedy tokens equal to the HF golden; speculative decode token-identical; the extension test passes with no exceptions"],
   [f"{PLAN} M8", f"{DESIGN} §5.11, §5.14"]),
+T("M8", "M8: model 3 — Gemma 4 12B NVFP4 (AxionML) on the 24 GB machine: sliding-window attention, GeLU-tanh MLP, sandwich norms, per-layer embeddings", ["area:models", "area:kernels", "hardware:m5-pro"],
+  "The second architecture on the 24 GB target (plan §0.1): `AxionML/Gemma-4-12B-NVFP4` (11.7 GB; `Gemma4UnifiedForConditionalGeneration`, 48 layers = 36 sliding-window (1024) + 12 full attention, hidden 3840, intermediate 15360, 16/8 heads, D 256, GeLU-tanh MLP, sandwich norms with per-layer residual scaling, per-layer input embeddings, two RoPE bases, final logit softcap 30, tied vocab 262144; NVFP4 MLP, BF16 attention). It exercises the new-op path: every new piece is its own op/kernel PR with an oracle test, then the model package lands touching only `models/`, `tests/`, `docs/`.",
+  ["Ops: sliding-window `gqa_decode` variant (window, its own RoPE base and scaling), GeLU-tanh `gate|up` epilogue on `gemv_T`, post-attention/post-MLP norms with residual scaling (the norm after the projection, before the add), per-layer embedding lookup fused into the layer input, final softcap (argmax-invariant: greedy skips it, sampling applies it)",
+   "`models/gemma4/{config,model,weights}.py` (the text path of the unified model; audio/vision ignored), goldens from transformers 5.17 on the dequantized weights; MPK's `models/gemma4/modeling.py` as the structural reference (provenance + NOTICE)",
+   "Gates on the M5 Pro: greedy equal to the golden; tok/s vs `mlx-lm` on the same checkpoint; record time-to-port for the porting guide"],
+  ["Greedy tokens equal to the golden on the M5 Pro; the extension test passes for the model package PR; numbers in the plan"],
+  [f"{PLAN} §0.1, M8", f"{DESIGN} §5.11, §5.14"]),
 T("M8", "M8: model 3 — a Qwen3.5-MoE-class model (router + expert GEMV via GPU-resident ids)", ["area:models", "area:kernels"],
   "Exercises the new-op path and data-dependent indexing inside a static program: routing as a REDUCE+SERIAL pair writing expert ids, expert GEMVs as MAP ops indexing the expert slab through those ids — no re-encode, no CPU. The survey shows today's engines reach only 36–55 % of the bound here.",
   ["New ops land as separate `ops/` + `kernels/` PRs with oracle tests; the model package after",
@@ -421,8 +430,8 @@ def master_body(numbers):
         "**Monolith** (working codename) is a megakernel-style LLM inference engine for Apple silicon (M3 / M4 / M5, macOS 26+): the whole",
         "generation loop compiled into one GPU-resident static program of fused whole-GPU dispatches, replayed from an indirect command buffer with",
         "no CPU work on the critical path. First target: `nvidia/Qwen3.8-27B-NVFP4`, batch-1 decode latency, with **DSpark** speculative decoding.",
-        "The 24 GB M5 Pro cannot host the 27B; its first-class target (2026-09-24, plan §0.1) is the official `Qwen/Qwen3.5-9B` (and 4B) quantized to",
-        "NVFP4 by our own packer — no official NVFP4 Qwen3.5 checkpoint of a fitting size exists, and community re-quantizations are not used.",
+        "The 24 GB M5 Pro cannot host the 27B; its first-class targets (2026-09-24, plan §0.1) are `AxionML/Qwen3.5-9B-NVFP4` (the same package, 9.4 GB)",
+        "and `AxionML/Gemma-4-12B-NVFP4` (a second architecture, 11.7 GB); official BF16 checkpoints reach NVFP4 through our packer.",
         "The engine is model-agnostic by construction and this repository is standalone (code from MPK and other projects is copied in with",
         "its license headers, never depended on).",
         "",
@@ -498,7 +507,7 @@ def token_from_env_or_gh():
     except Exception:
         return None
 
-def create(dry):
+def create(dry, sync_bodies=False):
     tok = token_from_env_or_gh()
     if not tok and not dry:
         raise SystemExit("No GITHUB_TOKEN / GH_TOKEN in the environment and no logged-in `gh`; see the docstring.")
@@ -527,7 +536,12 @@ def create(dry):
     numbers = {}
     for t in TASKS:
         if t["title"] in issues:
-            numbers[t["title"]] = issues[t["title"]]; print(f"exists #{issues[t['title']]} {t['title']}"); continue
+            numbers[t["title"]] = issues[t["title"]]
+            if sync_bodies:
+                gh.call("PATCH", f"/repos/{REPO}/issues/{issues[t['title']]}", {"body": body_for(t, master)}); print(f"synced #{issues[t['title']]} {t['title']}"); time.sleep(1)
+            else:
+                print(f"exists #{issues[t['title']]} {t['title']}")
+            continue
         payload = {"title": t["title"], "body": body_for(t, master), "labels": t["labels"]}
         if mnum.get(t["milestone"]): payload["milestone"] = mnum[t["milestone"]]
         r = gh.call("POST", f"/repos/{REPO}/issues", payload)
@@ -549,7 +563,8 @@ def preview(path):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--preview", action="store_true"); ap.add_argument("--create", action="store_true"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--sync-bodies", action="store_true", help="with --create: also rewrite the bodies of existing task issues from this file")
     a = ap.parse_args()
     if a.preview: preview(os.path.join(os.path.dirname(__file__), "..", "plans", "roadmap-issues.md"))
-    if a.create: create(a.dry_run)
+    if a.create: create(a.dry_run, a.sync_bodies)
     if not (a.preview or a.create): ap.print_help()

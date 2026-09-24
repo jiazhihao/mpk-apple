@@ -8,9 +8,9 @@ placeholder; do not use the MPK or Mirage names for this engine.
 An LLM inference engine for Apple silicon (M3 / M4 / M5, macOS 26+, Metal 4). First target:
 `nvidia/Qwen3.8-27B-NVFP4` (Qwen3.5-hybrid: 48 Gated-DeltaNet + 16 full-attention layers; NVFP4 MLP + `lm_head`, FP8
 attention/GDN projections; ~17.6 GB of weights read per decoded token) with a public DSpark drafter for speculative
-decoding (`docs/research/dspark.md`). The 24 GB M5 Pro cannot host the 27B, so its first-class target is the official
-`Qwen/Qwen3.5-9B` (and 4B) quantized to NVFP4 by our own packer (plan §0.1: no official NVFP4 Qwen3.5 checkpoint of a
-fitting size exists, and community re-quantizations are not used). **v1 is judged on batch-1 decode
+decoding (`docs/research/dspark.md`). The 24 GB M5 Pro cannot host the 27B, so its first-class targets are
+`AxionML/Qwen3.5-9B-NVFP4` (the same package, 9.4 GB) and `AxionML/Gemma-4-12B-NVFP4` (a second architecture,
+11.7 GB) — ModelOpt NVFP4 checkpoints that fit (plan §0.1); official BF16 checkpoints reach NVFP4 through our packer. **v1 is judged on batch-1 decode
 latency only** — prefill/TTFT, multi-request serving and energy are explicit non-goals for v1. The engine must stay
 general: new models, quantization formats and ops come in through plugins, not engine edits. Stack: C++/Objective-C++
 runtime, Python front-end and compiler, generated MSL kernels.
@@ -90,8 +90,9 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 0. **Keep building** — the roadmap issues in order: the compiler passes that remove the standalone norm dispatches
    and place barriers (#29), chunked prefill and the CLI (#30), the end-to-end gates on the 27B (#31, M3 Pro), the
-   extension test (#32), then M5 (#33–#36). On this machine: the 24 GB target — pack-time NVFP4 quantization of the
-   official Qwen3.5-9B/4B, their goldens and mlx-lm/llama.cpp baselines (plan §0.1, M0/M2 items). Fetch the
+   extension test (#32), then M5 (#33–#36). On this machine: the 24 GB targets — fetch and verify `AxionML/Qwen3.5-9B-NVFP4`
+   and `AxionML/Gemma-4-12B-NVFP4`, their goldens and mlx-lm/llama.cpp baselines (#66), the 9B's end-to-end gates
+   (#68), then Gemma 4 as M8's model 3. Fetch the
    Apache-2.0 DSpark drafters and run the llama.cpp `draft-dspark` baseline on the M3 Pro (plan M0).
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
