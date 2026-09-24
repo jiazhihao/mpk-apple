@@ -201,6 +201,18 @@ a|b, continuation. Cost on the M5 Pro for the 27B's 16/48 heads: 26 µs per laye
 244 GB/s — the floor, ~1.2 ms per token over 48 layers), ~2.2× at T = 4. **Every op kind the model
 lowers to now has a kernel**; the coverage guard passes on both families.
 
+*Status (2026-09-24, compiler v0 and the first end-to-end decode, #29 / #31 (a) / #25).* `monolith.compiler.compile_program`
+turns the lowered graph into a runtime `Program`: one buffer per value, a barrier after every op, the norm as
+`rmsnorm_stat` → `norm_apply` → plain GEMV, kernels specialized to a static `T`, the pack mapped from the file in
+page-aligned windows, the `advance` op closing the step (ring, pending token, position, EOS). `monolith.generate`
+runs a prefill program (T = P ≤ 8) and a decode program (T = 1) over shared buffers, replayed from one encode.
+**Exit (a) holds on the GPU** for the 0.8B (`tests/models/qwen3_5/test_gpu_golden.py`): the 48 greedy tokens equal
+the HF golden from the ring, every layer's prefill residual stream is at cos ≥ 0.9999 of the oracle (the composite
+bars of #25 on the real weights), host busy 0.1 %. Decode: 7.0 ms per token (143 tok/s) on the M5 Pro for the
+1.4 GB BF16 model against `mlx-lm` 0.31.3's 161 tok/s — 0.88× before any fusion pass, with ~250 dispatches per
+token of which 96 are the standalone norm statistic/scaling (M5's work: `STAT_OUT` hoisting, the sibling overlap,
+and MLX parity). Not yet: chunked prefill (prompts > `t_max`), dynamic T, the 27B on the M3 Pro.
+
 ### M4 — Compiler and end-to-end decode · 4 ew
 
 * IR (typed graph, symbolic `T`/context, op metadata: reads/writes, block domain, class, cost).

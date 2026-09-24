@@ -176,3 +176,13 @@ def gdn_params(*, hv: int, hk: int, t_active: int, q_off: int, k_off: int, v_off
     """The ``GdnParams`` record (buffer 9)."""
     return struct.pack("<IIIIIIIIIIIIIIIIffff", hv, hk, t_active, q_off, k_off, v_off, z_off, a_off, b_off, in_stride, ab_stride,
                        1 if ab_separate else 0, out_stride, n_sg, key_dim, 0, eps, 0.0, 0.0, 0.0)
+
+
+# ---- the step's advance --------------------------------------------------------------------------------------------
+
+def advance_source(step_state_msl: str) -> str:
+    return PRELUDE + step_state_msl + "\n" + template("advance.metal")
+
+
+def advance_params(t_active: int, ring_cap: int, eos: int) -> bytes:
+    return struct.pack("<IIiI", t_active, ring_cap, eos, 0)

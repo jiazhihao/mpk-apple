@@ -19,6 +19,9 @@
 //
 // Macros: D (head dim, multiple of 32), CH (keys per chunk), RBMAX (query rows per pass; rows beyond re-stream the
 // chunk). Params carry the projection's column offsets (q | gate | k | v), the strides, position and T.
+#ifndef STEP_STATE
+#define STEP_STATE 0                 // 1: position and T come from the bound StepState (the step program); 0: from params
+#endif
 #ifndef CH
 #define CH 64u
 #endif
@@ -66,13 +69,21 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
                        device const ushort* cos_t [[buffer(3)]], device const ushort* sin_t [[buffer(4)]],
                        device const float* q_norm [[buffer(5)]], device const float* k_norm [[buffer(6)]],
                        device float* part_o [[buffer(7)]], device float* part_md [[buffer(8)]], constant GqaParams& p [[buffer(9)]],
+#if STEP_STATE
+                       device const StepState* st [[buffer(10)]],
+#endif
                        uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
   const uint rep = p.heads / p.kv_heads;
-  const uint T = p.t_active;
+#if STEP_STATE
+  if (st->done) return;
+  const uint T = st->t_this_step, position = st->position;
+#else
+  const uint T = p.t_active, position = p.position;
+#endif
   const uint rows = rep * T;
   const uint n_rg = (rows + RBMAX - 1u) / RBMAX;
-  const uint ctx = p.position + T;
+  const uint ctx = position + T;
   const uint n_chunks = (ctx + CH - 1u) / CH;
   const uint n_blocks = p.kv_heads * n_chunks * n_rg;          // block = (kv head, chunk, row group)
   for (uint b = sg; b < n_blocks; b += p.n_sg) {
@@ -86,7 +97,7 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
       if (r < nr) {
         const uint row = r0 + r, t = row / rep, h = j * rep + (row % rep);
         load_dl(qkvg + t * p.in_stride + p.q_off + h * D + lane * DL, q[r]);
-        norm_rope(q[r], q_norm, cos_t + (p.position + t) * D, sin_t + (p.position + t) * D, p.eps, lane);
+        norm_rope(q[r], q_norm, cos_t + (position + t) * D, sin_t + (position + t) * D, p.eps, lane);
       } else {
         for (uint e = 0; e < DL; e++) q[r][e] = 0.0f;
       }
@@ -101,10 +112,10 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
         const uint key = k0 + g * 32u + kk;
         if (key >= k1) break;
         float kf[DL];
-        if (key < p.position) {
+        if (key < position) {
           load_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, kf);
         } else {
-          const uint tk = key - p.position;
+          const uint tk = key - position;
           load_dl(qkvg + tk * p.in_stride + p.k_off + j * D + lane * DL, kf);
           norm_rope(kf, k_norm, cos_t + key * D, sin_t + key * D, p.eps, lane);
           if (rg == 0) {                                   // append k (normed, RoPE'd) and v to the caches once
@@ -118,7 +129,7 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
             float dot = 0.0f;
             for (uint e = 0; e < DL; e++) dot = fma(q[r][e], kf[e], dot);
             dot = simd_sum(dot);
-            const float sc = (key > p.position + t) ? -INFINITY : round_bf16(round_bf16(dot) * p.scaling);
+            const float sc = (key > position + t) ? -INFINITY : round_bf16(round_bf16(dot) * p.scaling);
             if (lane == kk) s_keep[g][r] = sc;
             m_c[r] = max(m_c[r], sc);
           }
@@ -133,8 +144,8 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
         const uint key = k0 + g * 32u + kk;
         if (key >= k1) break;
         float vf[DL];
-        if (key < p.position) load_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, vf);
-        else load_dl(qkvg + (key - p.position) * p.in_stride + p.v_off + j * D + lane * DL, vf);
+        if (key < position) load_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, vf);
+        else load_dl(qkvg + (key - position) * p.in_stride + p.v_off + j * D + lane * DL, vf);
         for (uint r = 0; r < RBMAX; r++) {
           if (r < nr) {
             const float sc = simd_shuffle(s_keep[g][r], ushort(kk));
@@ -158,13 +169,22 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
 
 kernel void gqa_merge(device const float* part_o [[buffer(0)]], device const float* part_md [[buffer(1)]], device const ushort* qkvg [[buffer(2)]],
                       device ushort* out [[buffer(3)]], constant GqaParams& p [[buffer(4)]],
+#if STEP_STATE
+                      device const StepState* st [[buffer(5)]],
+#endif
                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
   const uint t = sg / p.heads, h = sg % p.heads;
-  if (t >= p.t_active) return;
+#if STEP_STATE
+  if (st->done) return;
+  const uint T = st->t_this_step, position = st->position;
+#else
+  const uint T = p.t_active, position = p.position;
+#endif
+  if (t >= T) return;
   const uint rep = p.heads / p.kv_heads;
   const uint j = h / rep, row = t * rep + (h % rep);
-  const uint n_chunks = (p.position + p.t_active + CH - 1u) / CH;
+  const uint n_chunks = (position + T + CH - 1u) / CH;
   float m_g = -INFINITY;
   for (uint c = 0; c < n_chunks; c++) m_g = max(m_g, part_md[((j * p.n_chunks_max + c) * p.rows_max + row) * 2u]);
   float d_g = 0.0f, o[DL];

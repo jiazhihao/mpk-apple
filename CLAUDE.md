@@ -16,8 +16,9 @@ runtime, Python front-end and compiler, generated MSL kernels.
 Status (2026-09-24): design, plan, surveys and hardware characterization (M3 Pro and M5 Pro) exist, and the engine
 is being built as stacked PRs (roadmap issue #1): skeleton + registries, format plugins, `pack_weights`, the GEMV
 harness and M1 study, runtime core v1 (ICB + host pump + token ring + StepState), and the layer library with the
-first model package (`monolith/models/qwen3_5`, oracle-verified against the HF golden of the 0.8B). Next: the M3
-kernels and the compiler passes. Speculative decoding targets a **DSpark** drafter, not the checkpoint's MTP head.
+first model package (`monolith/models/qwen3_5`), the M3 kernels, and compiler v0: the 0.8B decodes end to end on the
+GPU from one replayed encode and reproduces its HF golden (`python -m monolith.generate`). Next: the fusion passes
+and MLX parity (M5), dynamic T and DSpark (M6). Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order
 
@@ -85,9 +86,10 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order (plan §6 PRs 1–5 are in): the M3 kernels (#19–#25) against the
-   layer oracles in `monolith/nn/`, then the compiler passes, CLI and end-to-end gates (#29–#32). Fetch the
-   Apache-2.0 DSpark drafters and run the llama.cpp `draft-dspark` baseline on the M3 Pro (plan M0).
+0. **Keep building** — the roadmap issues in order: the compiler passes that remove the standalone norm dispatches
+   and place barriers (#29), chunked prefill and the CLI (#30), the end-to-end gates on the 27B (#31, M3 Pro), the
+   extension test (#32), then M5 (#33–#36). Fetch the Apache-2.0 DSpark drafters and run the llama.cpp
+   `draft-dspark` baseline on the M3 Pro (plan M0).
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
    H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).

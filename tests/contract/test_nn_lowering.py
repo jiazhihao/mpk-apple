@@ -20,9 +20,9 @@ from monolith.packs import PackFile, interleave_chunks, rope_head_perm
 CFG = {
     "architectures": ["Qwen3_5ForConditionalGeneration"],
     "text_config": {
-        "hidden_size": 64, "intermediate_size": 96, "num_hidden_layers": 2, "num_attention_heads": 2,
-        "num_key_value_heads": 1, "head_dim": 32, "layer_types": ["linear_attention", "full_attention"],
-        "linear_num_key_heads": 2, "linear_num_value_heads": 4, "linear_key_head_dim": 16, "linear_value_head_dim": 16,
+        "hidden_size": 256, "intermediate_size": 256, "num_hidden_layers": 2, "num_attention_heads": 8,
+        "num_key_value_heads": 2, "head_dim": 32, "layer_types": ["linear_attention", "full_attention"],
+        "linear_num_key_heads": 2, "linear_num_value_heads": 4, "linear_key_head_dim": 32, "linear_value_head_dim": 64,
         "linear_conv_kernel_dim": 4, "rms_norm_eps": 1e-6, "vocab_size": 50, "max_position_embeddings": 1024,
         "attn_output_gate": True, "tie_word_embeddings": True, "hidden_act": "silu",
         "rope_parameters": {"rope_type": "default", "rope_theta": 10000.0, "partial_rotary_factor": 0.25},
@@ -48,11 +48,11 @@ def _checkpoint(tmp_path):
         f"{P}layers.0.linear_attn.in_proj_qkv.weight": w(conv_dim, h), f"{P}layers.0.linear_attn.in_proj_z.weight": w(vd, h),
         f"{P}layers.0.linear_attn.in_proj_a.weight": w(4, h), f"{P}layers.0.linear_attn.in_proj_b.weight": w(4, h),
         f"{P}layers.0.linear_attn.out_proj.weight": w(h, vd), f"{P}layers.0.linear_attn.conv1d.weight": w(conv_dim, 1, 4),
-        f"{P}layers.0.linear_attn.dt_bias": w(4), f"{P}layers.0.linear_attn.A_log": w(4), f"{P}layers.0.linear_attn.norm.weight": w(16),
+        f"{P}layers.0.linear_attn.dt_bias": w(4), f"{P}layers.0.linear_attn.A_log": w(4), f"{P}layers.0.linear_attn.norm.weight": w(64),
         f"{P}layers.0.mlp.gate_proj.weight": w(inter, h), f"{P}layers.0.mlp.up_proj.weight": w(inter, h), f"{P}layers.0.mlp.down_proj.weight": w(h, inter),
         f"{P}layers.1.input_layernorm.weight": w(h), f"{P}layers.1.post_attention_layernorm.weight": w(h),
-        f"{P}layers.1.self_attn.q_proj.weight": w(2 * 2 * d, h), f"{P}layers.1.self_attn.k_proj.weight": w(d, h),
-        f"{P}layers.1.self_attn.v_proj.weight": w(d, h), f"{P}layers.1.self_attn.o_proj.weight": w(h, 2 * d),
+        f"{P}layers.1.self_attn.q_proj.weight": w(8 * 2 * d, h), f"{P}layers.1.self_attn.k_proj.weight": w(2 * d, h),
+        f"{P}layers.1.self_attn.v_proj.weight": w(2 * d, h), f"{P}layers.1.self_attn.o_proj.weight": w(h, 8 * d),
         f"{P}layers.1.self_attn.q_norm.weight": w(d), f"{P}layers.1.self_attn.k_norm.weight": w(d),
         f"{P}layers.1.mlp.gate_proj.weight": w(inter, h), f"{P}layers.1.mlp.up_proj.weight": w(inter, h), f"{P}layers.1.mlp.down_proj.weight": w(h, inter),
         "model.visual.patch_embed.proj.weight": w(8, 8), "mtp.fc.weight": w(8, 8),
@@ -77,7 +77,7 @@ def test_registry_and_weight_map(tmp_path):
     assert m.lm_head.tied is m.embed_tokens and m.lm_head.weight_map() == {}
     assert [e.name for e in m.state_spec().entries] == ["layers.0.linear_attn.conv_state", "layers.0.linear_attn.rec_state",
                                                         "layers.1.self_attn.k_cache", "layers.1.self_attn.v_cache"]
-    assert m.state_spec().entries[1].shape == (4, 16, 16) and m.state_spec().entries[2].shape == (16, 1, 32)
+    assert m.state_spec().entries[1].shape == (4, 32, 64) and m.state_spec().entries[2].shape == (16, 2, 32)
 
 
 def test_lowering_stage_count(tmp_path):
@@ -124,19 +124,20 @@ def test_pack_from_model_tree(tmp_path):
     d, rot = 32, 8
     hp = rope_head_perm(d, rot)
     q_proj, k_proj, v_proj = held[L1 + "self_attn.q_proj.weight"], held[L1 + "self_attn.k_proj.weight"], held[L1 + "self_attn.v_proj.weight"]
-    q = np.concatenate([q_proj[h * 2 * d: h * 2 * d + d][hp] for h in range(2)])
-    gate = np.concatenate([q_proj[h * 2 * d + d: (h + 1) * 2 * d] for h in range(2)])
-    exp = np.concatenate([q, gate, k_proj[hp], v_proj])
+    q = np.concatenate([q_proj[h * 2 * d: h * 2 * d + d][hp] for h in range(8)])
+    gate = np.concatenate([q_proj[h * 2 * d + d: (h + 1) * 2 * d] for h in range(8)])
+    k = np.concatenate([k_proj[j * d: (j + 1) * d][hp] for j in range(2)])
+    exp = np.concatenate([q, gate, k, v_proj])
     assert np.array_equal(pf.dequantize_slab("layers.1.self_attn.qkv.q_proj+k_proj+v_proj"), exp)
     # gate/up chunk interleave (8 = pack rows / 2)
-    gu = np.concatenate([held[L1 + "mlp.gate_proj.weight"], held[L1 + "mlp.up_proj.weight"]])[interleave_chunks(96, 96, 8)]
+    gu = np.concatenate([held[L1 + "mlp.gate_proj.weight"], held[L1 + "mlp.up_proj.weight"]])[interleave_chunks(256, 256, 8)]
     assert np.array_equal(pf.dequantize_slab("layers.1.mlp.gate_up.gate_proj+up_proj"), gu)
     # aux transforms: (1 + w) norms, permuted per-head norms, -exp(A_log) from the BF16-valued parameter, tables
     assert np.array_equal(pf.aux_array("layers.0.input_norm.weight"), (1 + held[L0 + "input_layernorm.weight"]).astype(np.float32))
     assert np.array_equal(pf.aux_array("layers.1.self_attn.q_norm"), (1 + held[L1 + "self_attn.q_norm.weight"])[hp].astype(np.float32))
     assert np.array_equal(pf.aux_array("layers.0.linear_attn.a_log"), (-np.exp(held[L0 + "linear_attn.A_log"])).astype(np.float32))
     assert np.array_equal(pf.aux_array("layers.0.linear_attn.norm_w"), held[L0 + "linear_attn.norm.weight"].astype(np.float32))
-    assert pf.aux_array("layers.0.linear_attn.conv_w").shape == (2 * 32 + 64, 1, 4)
+    assert pf.aux_array("layers.0.linear_attn.conv_w").shape == (2 * 64 + 256, 1, 4)
     cos = pf.aux_array("rope_cos")
     assert cos.shape == (16, 32) and cos.dtype == np.uint16
     cosf = bf16_to_f32(cos)
@@ -153,8 +154,8 @@ def test_mixed_format_parts_split_into_slabs(tmp_path):
     groups = lin.slab_groups()
     assert [g.name.split(".")[-1] for g in groups] == ["in_proj_qkv+in_proj_z", "in_proj_a+in_proj_b"]
     g = Graph("mixed")
-    proj = lin.lower(g, g.input("x", (1, 64), m.embed_tokens.weight_map()["weight"] and __import__("monolith.core", fromlist=["DType"]).DType.BF16))
-    assert len(proj.values) == 2 and proj.segments["in_proj_a"] == (1, 0, 4) and proj.segments["in_proj_z"] == (0, 2 * 32 + 64, 64)
+    proj = lin.lower(g, g.input("x", (1, 256), __import__("monolith.core", fromlist=["DType"]).DType.BF16))
+    assert len(proj.values) == 2 and proj.segments["in_proj_a"] == (1, 0, 4) and proj.segments["in_proj_z"] == (0, 2 * 64 + 256, 256)
     m.blocks[1].mixer.qkv.set_format("v_proj", "nvfp4")
     with pytest.raises(ValueError):
         m.blocks[1].mixer.qkv.slab_groups()                   # a row permutation cannot span formats
@@ -181,3 +182,33 @@ def test_coverage_of_the_lowered_model(tmp_path):
             check_coverage(g, Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}}))
     finally:
         OPS.unregister("test_unbound")
+
+
+def test_compile_program_from_the_pack(tmp_path):
+    """compile_program on the synthetic model: every op meets a kernel, buffers are planned, the program round-trips
+    through JSON (no GPU: the program is data)."""
+    from monolith.compiler import compile_program
+    from monolith.core.profile import Profile
+    from monolith.runtime.program import Program
+
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
+    prog = compile_program(m, PackFile(tmp_path / "pack"), prof, t=3, eos=7)
+    kinds = [o.name.split(":")[0] for o in prog.ops]
+    # per layer: 2 × (rmsnorm_stat, norm_apply) + 4 gemv + mixer (2 dispatches); embed; final stat + norm_apply + lm_head; argmax (2); advance
+    assert kinds.count("embed") == 1 and kinds.count("advance") == 1 and kinds.count("argmax") == 1 and kinds.count("argmax_final") == 1
+    assert kinds.count("gdn_mixer") == 1 and kinds.count("gdn_norm") == 1 and kinds.count("gqa_decode") == 1 and kinds.count("gqa_merge") == 1
+    assert kinds.count("rmsnorm_stat") == 5 and kinds.count("norm_apply") == 5 and kinds.count("gemv") == 8 and kinds.count("lm_head") == 1
+    assert all(o.barrier_after for o in prog.ops)
+    roles = {}
+    for b in prog.buffers.values():
+        roles[b.role] = roles.get(b.role, 0) + 1
+    assert roles["weights"] == 1 and roles["state"] == 4 and roles["step_state"] == 1 and roles["ring"] == 1
+    assert prog.buffers["pack.0"].file.endswith("weights.pack") and prog.buffers["layers.1.self_attn.k_cache"].nbytes == 16 * 2 * 32 * 2
+    assert prog.layout.unpack(prog.buffers["step_state"].init)["t_this_step"] == 3
+    again = Program.from_json(prog.to_json())
+    assert [o.bindings for o in again.ops] == [o.bindings for o in prog.ops] and again.buffers["pack.0"].file_offset == 0
+    with pytest.raises(ValueError):
+        compile_program(m, PackFile(tmp_path / "pack"), prof, t=9)
