@@ -1,0 +1,166 @@
+"""The compiler's IR: a typed tensor graph whose ops carry a block domain, an op class and a cost.
+
+An ``Op`` is one *fused op* of the step program — it becomes one Metal dispatch with the crew geometry (design
+§5.1–5.2). Its ``domain`` says how many blocks the op is partitioned into (one SIMD-group runs several blocks under
+static slices), its ``klass`` says whether blocks write disjoint outputs (``MAP``), emit partials combined by a
+follow-up (``REDUCE``), or run on one SIMD-group (``SERIAL``). Dependencies are edges through ``Value``s; the
+barrier-placement pass turns every producer→consumer edge between ops into an ICB barrier only where blocks of the
+consumer read outputs of *other* blocks of the producer.
+
+The IR knows nothing about Metal, kernels or models: ops are named by ``kind`` and bound to kernels through the op
+registry (``monolith.ops``) per chip profile — the coverage guard (``monolith.compiler.coverage``) fails a build for an
+op without a binding.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+
+from .dtypes import DType
+from .shapes import Dim, Shape, Sym
+
+
+class OpClass(Enum):
+    MAP = "MAP"          # disjoint outputs per block
+    REDUCE = "REDUCE"    # per-block partials, combined in block order by a follow-up dispatch (deterministic)
+    SERIAL = "SERIAL"    # one SIMD-group: sampling finalize, accept scan, verify-length select, state advance
+
+
+@dataclass(frozen=True)
+class BlockDomain:
+    """How an op is cut into blocks: ``n_blocks`` blocks of kind ``kind`` (``rows``, ``heads``, ``span``, …)."""
+
+    kind: str
+    n_blocks: Dim
+
+    def __post_init__(self) -> None:
+        if isinstance(self.n_blocks, int) and self.n_blocks <= 0:
+            raise ValueError(f"BlockDomain({self.kind}): n_blocks must be positive, got {self.n_blocks}")
+
+
+@dataclass(eq=False)
+class Value:
+    """A tensor in the graph. Weights carry a storage ``format`` (a format-plugin name) instead of a float dtype."""
+
+    name: str
+    shape: Shape
+    dtype: DType
+    format: Optional[str] = None
+    producer: Optional["Op"] = None
+    consumers: List["Op"] = field(default_factory=list)
+    is_input: bool = False
+    is_weight: bool = False
+
+    @property
+    def rank(self) -> int:
+        return len(self.shape)
+
+    def __repr__(self) -> str:
+        fmt = f", format={self.format}" if self.format else ""
+        return f"Value({self.name}: {list(self.shape)} {self.dtype}{fmt})"
+
+
+@dataclass(eq=False)
+class Op:
+    """One fused op = one dispatch of the step program."""
+
+    kind: str
+    inputs: List[Value]
+    outputs: List[Value]
+    domain: BlockDomain
+    klass: OpClass
+    attrs: Dict[str, Any] = field(default_factory=dict)
+    id: int = -1
+
+    def __repr__(self) -> str:
+        return f"Op#{self.id}({self.kind}, {self.klass.value}, {self.domain.kind}×{self.domain.n_blocks})"
+
+
+class Graph:
+    """Ops in program order plus the values that connect them."""
+
+    def __init__(self, name: str = "step") -> None:
+        self.name = name
+        self.ops: List[Op] = []
+        self.values: Dict[str, Value] = {}
+        self.symbols: Set[Sym] = set()
+
+    # ---- values -------------------------------------------------------------------------------------------
+    def value(self, name: str, shape: Sequence[Dim], dtype: DType, *, format: Optional[str] = None) -> Value:
+        if name in self.values:
+            raise ValueError(f"graph {self.name}: value name {name!r} is already taken")
+        v = Value(name, tuple(shape), dtype, format)
+        self.values[name] = v
+        self.symbols.update(d for d in v.shape if isinstance(d, Sym))
+        return v
+
+    def input(self, name: str, shape: Sequence[Dim], dtype: DType) -> Value:
+        v = self.value(name, shape, dtype)
+        v.is_input = True
+        return v
+
+    def weight(self, name: str, shape: Sequence[int], format: str) -> Value:
+        """A packed weight slab: ``format`` names the format plugin that decodes it; the dtype is the storage byte."""
+        v = self.value(name, shape, DType.U8, format=format)
+        v.is_weight = True
+        return v
+
+    # ---- ops ----------------------------------------------------------------------------------------------
+    def op(
+        self,
+        kind: str,
+        inputs: Iterable[Value],
+        outputs: Iterable[Value],
+        *,
+        domain: BlockDomain,
+        klass: OpClass,
+        **attrs: Any,
+    ) -> Op:
+        ins, outs = list(inputs), list(outputs)
+        for v in ins:
+            if v.name not in self.values or self.values[v.name] is not v:
+                raise ValueError(f"graph {self.name}: input {v!r} does not belong to this graph")
+        for v in outs:
+            if v.name not in self.values or self.values[v.name] is not v:
+                raise ValueError(f"graph {self.name}: output {v!r} does not belong to this graph")
+            if v.producer is not None:
+                raise ValueError(f"graph {self.name}: {v!r} already has a producer {v.producer!r}")
+            if v.is_input or v.is_weight:
+                raise ValueError(f"graph {self.name}: {v!r} is an input/weight and cannot be produced by an op")
+        op = Op(kind, ins, outs, domain, klass, dict(attrs), id=len(self.ops))
+        for v in outs:
+            v.producer = op
+        for v in ins:
+            v.consumers.append(op)
+        self.ops.append(op)
+        return op
+
+    # ---- structure ----------------------------------------------------------------------------------------
+    def producers(self, op: Op) -> List[Op]:
+        """Ops this op depends on, in program order (deduplicated)."""
+        seen: Dict[int, Op] = {}
+        for v in op.inputs:
+            if v.producer is not None:
+                seen[v.producer.id] = v.producer
+        return [seen[k] for k in sorted(seen)]
+
+    def check(self) -> None:
+        """Every consumed value is an input, a weight or produced by an earlier op; every op has ≥ 1 output."""
+        for op in self.ops:
+            if not op.outputs:
+                raise ValueError(f"graph {self.name}: {op!r} has no outputs")
+            for v in op.inputs:
+                if v.is_input or v.is_weight:
+                    continue
+                if v.producer is None:
+                    raise ValueError(f"graph {self.name}: {op!r} reads {v!r}, which nothing produces")
+                if v.producer.id >= op.id:
+                    raise ValueError(f"graph {self.name}: {op!r} reads {v!r} before its producer {v.producer!r}")
+
+    def __len__(self) -> int:
+        return len(self.ops)
+
+    def __repr__(self) -> str:
+        return f"Graph({self.name}: {len(self.ops)} ops, {len(self.values)} values)"

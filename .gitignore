@@ -1,7 +1,11 @@
-probes/build/
-build/
-__pycache__/
-*.pyc
-.DS_Store
+*.egg-info/
 *.metallib
 *.pack
+*.pyc
+.DS_Store
+.pytest_cache/
+.venv/
+__pycache__/
+build/
+dist/
+probes/build/

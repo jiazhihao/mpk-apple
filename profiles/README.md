@@ -9,3 +9,12 @@ min-of-N.
 |---|---|---|
 | `apple-m3-pro-18c.json` | M3 Pro, 18-core GPU, 36 GB, macOS 26.6.2, on battery | `Apple-M3-Pro_18c_macOS26.6.2_20260919-223834.txt` |
 | `apple-m5-pro-20c.json` | M5 Pro, 20-core GPU, 24 GB, macOS 26.5.1, on AC | `Apple-M5-Pro_20c_macOS26.5.1_20260922-*.txt` (11 files: full suite, p12 ×3, p6/p6b ×3 repeats, p13, p14 ×2) |
+
+## The `engine` block
+
+Everything else in a profile is the measurement record; `engine` is the normalized part the compiler reads
+(`monolith.core.profile.Profile`): `family` (the kernel-binding key), `lane_order` of the weight pack
+(`contiguous` | `interleaved16`), `threadgroups_per_core`, `sibling_order` (`alu_first` | `bus_first` | `either`),
+`max_cb_ms`, and `cost_T` — per format, the cost of a T-token pass relative to T = 1, which the verify-length rule
+(design §5.8) optimizes against. Costs are exact at measured T and linear between them; the loader refuses to
+extrapolate.

@@ -1,0 +1,19 @@
+# Third-party provenance
+
+Monolith is a standalone codebase (design D15). Code copied or adapted from other projects keeps its original license
+header and carries a one-line provenance comment naming the source repository, path and commit. This file is the
+registry of every such file or fragment. Add an entry in the same change that copies the code.
+
+Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @ `<commit>` (`<license>`); what was taken.
+
+## MPK / mirage (lithos-ai/mirage, branch `low_latency`, Apache-2.0)
+
+- `monolith/registry.py` — adapted from `python/mirage/mpk/models/_registry.py` @ 5beaed8 (Apache-2.0): the
+  duplicate-refusing decorator registry pattern (`register_model`), generalized to every registry kind.
+- `monolith/nn/module.py` — adapted from `python/mirage/mpk/layers_v2/_base.py` @ 5beaed8 (Apache-2.0): the
+  three-method module contract (oracle / lower / weights) and the streaming `load_weights` routing idea; the
+  compile/grid methods, which are CUDA-specific, were not taken.
+
+## Original
+
+- `probes/` — original to this repository.
