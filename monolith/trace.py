@@ -90,6 +90,7 @@ def main(argv=None) -> int:
     ap.add_argument("--steps", type=int, default=5)
     ap.add_argument("--max-context", type=int, default=4096)
     ap.add_argument("--trace", type=Path)
+    ap.add_argument("--no-autotune", action="store_true")
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
 
@@ -97,7 +98,7 @@ def main(argv=None) -> int:
 
     tok = Tokenizer.from_file(str(Path(a.model) / "tokenizer.json"))
     ids = tok.encode(a.prompt, add_special_tokens=False).ids
-    sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1)
+    sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1, autotune=not a.no_autotune)
     sess.generate(ids, 4)                                  # prefill + a few decode steps so the states are real
     dec = sess.engine(1)
     runs = dec.profile(a.steps)

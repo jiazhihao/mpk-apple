@@ -158,3 +158,24 @@ def test_dynamic_t_with_fusions(dev):
     assert check_against_oracle(y[:2], ref[:2]).ok()
     assert np.all(y[2:] == 0) and np.all(so[2:] == 0)                    # untouched beyond t_active
     assert np.allclose(so[:2].sum(-1), (ref[:2].astype(np.float64) ** 2).sum(-1), rtol=1e-5)
+
+
+def test_autotuner_picks_and_caches(dev, tmp_path):
+    """The autotuner times the GEMV and GDN variants of a shape, returns a valid choice (never slower than the
+    default by more than the noise margin) and round-trips its cache."""
+    from monolith.compiler.autotune import Autotuner, Choice
+    from monolith.formats import FORMATS, PackLayout
+
+    cache = tmp_path / "autotune.json"
+    tuner = Autotuner(dev, dev.info().gpu_cores, str(cache), reps=2, warmup_ms=5.0)
+    rng = np.random.default_rng(1)
+    _, info, _ = pack_spec(random_spec("bf16", 512, K, rng), PackLayout(rows=16))
+    c = tuner.tune_gemv(info, 1, "residual", False)
+    assert isinstance(c, Choice) and c.ms > 0 and c.ms <= c.default_ms * 1.001 and c.grid_mode in ("crew", "crew2", "block")
+    cn = tuner.tune_gemv(info, 1, None, True)
+    assert cn.ms > 0 and isinstance(cn.fuse_norm, bool)
+    g = tuner.tune_gdn(4, 4, 128, 128, 4, 1)
+    assert g.ms > 0 and g.macros["SL"] in ("4u", "8u", "16u")
+    tuner.save("test-chip")
+    again = Autotuner(dev, dev.info().gpu_cores, str(cache))
+    assert again.tune_gemv(info, 1, "residual", False).macros == c.macros and len(again.choices) == 3

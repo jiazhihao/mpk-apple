@@ -281,6 +281,16 @@ timestamp counter samples at the stage boundaries — the granularity Apple GPUs
 Chrome-trace file for Perfetto — no viewer of our own). The 0.8B's decode step budget is in decode-kernels.md §3:
 6.81 ms of op minima against a 4.90 ms streamed-bytes bound; the GEMVs at 78 % of nominal, the lm_head at 97 %,
 the mixers 0.74 ms, the norm dispatches 0.2 ms — the targets of #34.
+
+*Status (2026-09-24, #34 part 1: per-op autotune).* `compiler/autotune.py` times, per distinct GEMV shape of a
+program, RG ∈ {2, 4, 8} × geometry ∈ {crew, 2 threadgroups per core, one block per SIMD-group} and, for a norm-fed
+GEMV, fused scaling vs `norm_apply`; per GDN configuration, the state-slice geometry — with synthetic data of the
+same shape, min-of-N after a warm-up, a 3 % noise margin before leaving the default — and caches the choices next
+to the pack (`autotune.<chip>.json`); the emitter compiles with them. On the 0.8B (M5 Pro, 18 s to tune 14 shapes):
+one block per SIMD-group with RG 4–8 for the small-K GEMVs (−15…−35 % each), the fused norm for the T = 1 norm-fed
+GEMVs (where it lost on the ALU-bound NVFP4 shapes, it wins on these small BF16 ones), SL 4 / SPB 4 for the 16-head
+GDN (−14 %); the `lm_head` keeps its default. **Decode: 6.45 vs 6.91 ms per token (−6.6 %)**, golden tokens unchanged
+— 0.96× `mlx-lm`'s 6.2 ms. Remaining in #34: attention v2 (long context), per-op math modes, barrier minimization.
 ### M6 — DSpark speculative decoding · 4 ew
 
 Design §5.8. Everything on the GPU; the host only drains tokens.
