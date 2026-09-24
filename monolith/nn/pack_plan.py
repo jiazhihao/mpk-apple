@@ -104,20 +104,21 @@ def dequantized_tensors(model: Module, ckpt: SafetensorsDir) -> Iterator[Tuple[s
     would produce it (quantized groups through their format plugin)."""
     groups, dtypes = checkpoint_groups(ckpt)
     shapes = {n: tuple(ckpt.info(n).shape) for n in ckpt.names()}
-    for hf_name, (mod, local, spec) in model.full_weight_map().items():
+    for key, (mod, local, spec) in model.full_weight_map().items():
+        hf_name = spec.hf_name                     # the map's key may carry a '#<module>' suffix when a tensor is claimed twice
         g = groups.get(hf_name[: -len(".weight")]) if hf_name.endswith(".weight") else None
         if g is not None and g.format not in ("bf16", "f32", ""):
             tensors = {"weight": ckpt.get(g.weight), **{side: ckpt.get(full) for side, full in g.sides.items()}}
             shape = logical_shape(g, shapes)
             fmt = FORMATS.get(g.format)
-            yield hf_name, np.asarray(fmt.dequantize(fmt.unpack(tensors, shape=(int(shape[0]), int(shape[1])))), dtype=np.float32), g.format
+            yield key, np.asarray(fmt.dequantize(fmt.unpack(tensors, shape=(int(shape[0]), int(shape[1])))), dtype=np.float32), g.format
             continue
         info = ckpt.info(hf_name)
         arr = ckpt.get(hf_name)
         if info.dtype == "BF16":
-            yield hf_name, bf16_to_f32(arr), "bf16"
+            yield key, bf16_to_f32(arr), "bf16"
         elif info.dtype in ("F32", "F16"):
-            yield hf_name, np.asarray(arr, dtype=np.float32), "f32"
+            yield key, np.asarray(arr, dtype=np.float32), "f32"
         else:
             raise ValueError(f"{hf_name}: cannot load dtype {info.dtype} for the oracle")
 

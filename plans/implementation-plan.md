@@ -293,6 +293,13 @@ GDN (−14 %); the `lm_head` keeps its default. **Decode: 6.45 vs 6.91 ms per to
 — 0.96× `mlx-lm`'s 6.2 ms. Remaining in #34: attention v2 (long context), per-op math modes, barrier minimization.
 ### M6 — DSpark speculative decoding · 4 ew
 
+*Model 2 numbers (2026-09-24).* `nvidia/Qwen3-8B-NVFP4` decodes at 26.7 ms per token (37 tok/s; 6.3 GiB streamed
+per token, 242 GB/s) on the M5 Pro before any 8B-specific tuning; `mlx-lm` 0.31.3 with the same dequantized weights
+re-quantized to its NVFP4 mode (4.3 GB: it quantizes the embedding and lm_head too) decodes at 63 tok/s. The 2 GB
+difference is the BF16 `lm_head` + `embed_tokens` NVIDIA's checkpoint keeps (1.25 GB read per token for the
+lm_head alone, ~5 ms): the comparison at equal weights needs either NVIDIA's mixed checkpoint in MLX or our packer
+quantizing the lm_head — the 27B target's lm_head is NVFP4 in its checkpoint, so its comparison is direct.
+
 Design §5.8. Everything on the GPU; the host only drains tokens.
 
 * `spec/dspark/`: the drafter as a `Drafter` module — 5 attention layers on the shared `GQAAttention`/`GatedMLP`
@@ -317,6 +324,21 @@ Exit gate: the speculative-decode success metric (≥ 1.5× our plain decode and
 token-identical). *If acceptance is the problem* (drafter trained against a different target quantization): retrain
 on-policy with the NeMo AutoModel / SpecForge / DeepSpec recipes on a GPU box — a dependency, not engine work.
 
+
+*Status (2026-09-24, #4 + #37).* The three Apache-2.0 drafters are on disk with their configs and tensor
+inventories verified (dspark.md §2): `Dogacel/Qwen3-8B-DSpark` (model 2's; 5 layers, taps [1, 9, 17, 25, 33],
+Markov rank 256, confidence head, block 7 — the checkpoint omits `block_size`; no lm_head: the target's is used),
+`DimInfer/Qwen3.8-27B-Dspark-v1` (taps [1, 16, 31, 46, 61], block 15 at training, 3.7 GB) and
+`gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4` (taps [4, 16, 28, 40, 52], MLP/o_proj NVFP4, **YaRN RoPE** — not
+supported by the layer library yet). `monolith/spec/dspark/` is the drafter as a `Drafter` module: config from
+either config layout, the tree from library modules plus `DraftAttention` (keys = the injected-context KV cache ∪
+the new context features' k/v ∪ the block, queries = the block, no mask), the feature projection, the vanilla
+Markov head, the confidence head, a loader that routes k/v to both claimants. Its torch oracle matches DeepSpec's
+reference on the real 8B drafter: features cos 0.999996, block hidden 0.99994, Markov bias exact, confidences
+within 2·10⁻³, the seven greedy drafts identical, context keys 0.99999 (`tests/spec/`). The IR lowering of the
+round comes with the kernels (#24) and the wiring (#38); of the drafter ops only `draft_attn`, `verify_select` and
+`accept_scan` need new kernels — the feature projection, the Markov bias and the confidence dot products are the
+existing GEMV, embed and norm kernels.
 ### M7 — In-kernel runtime re-evaluation and intra-op stealing · 1.5 ew · time-boxed, off the critical path
 
 On the M3 Pro a dispatch boundary (1.8 µs) beats every in-kernel barrier we built (2.6–5.4 µs), and on the M5 Pro

@@ -4,6 +4,6 @@ decode op kinds the layer library lowers to (``embed``, ``rmsnorm_stat``, ``gemv
 ``gdn_mixer``, ``argmax``); kernels bind to them per profile as they land (plan M3)."""
 
 from .registry import OPS, CostModel, KernelBinding, OpDef, register_op
-from . import attention, embed, gdn, gemv, norm, sample  # noqa: F401  (registration)
+from . import attention, draft, embed, gdn, gemv, norm, sample  # noqa: F401  (registration)
 
 __all__ = ["OPS", "CostModel", "KernelBinding", "OpDef", "register_op"]

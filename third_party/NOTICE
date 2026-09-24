@@ -37,3 +37,11 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
 ## Original
 
 - `probes/` — original to this repository.
+
+## DeepSpec (deepseek-ai/DeepSpec, MIT)
+
+- `monolith/spec/dspark/model.py`, `tests/spec/test_dspark_oracle.py` — the DSpark drafter's semantics (feature
+  projection, KV injection, bidirectional block attention, the vanilla Markov head, the confidence head, the
+  confident-prefix rule) follow `deepspec/modeling/dspark/qwen3/modeling.py`, `deepspec/modeling/dspark/markov_head.py`
+  and `deepspec/eval/dspark/draft_ops.py` (MIT); written against them, no code copied; the oracle test imports the
+  reference implementation from a local checkout to compare against.
