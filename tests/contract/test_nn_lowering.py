@@ -195,7 +195,7 @@ def test_compile_program_from_the_pack(tmp_path):
     m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
     pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
     prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
-    prog = compile_program(m, PackFile(tmp_path / "pack"), prof, t=3, eos=7)
+    prog = compile_program(m, PackFile(tmp_path / "pack"), prof, t=3, eos=7, passes=())     # the bare emitter; passes have their own test
     kinds = [o.name.split(":")[0] for o in prog.ops]
     # per layer: 2 × (rmsnorm_stat, norm_apply) + 4 gemv + mixer (2 dispatches); embed; final stat + norm_apply + lm_head; argmax (2); advance
     assert kinds.count("embed") == 1 and kinds.count("advance") == 1 and kinds.count("argmax") == 1 and kinds.count("argmax_final") == 1
