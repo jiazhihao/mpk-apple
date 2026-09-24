@@ -11,20 +11,24 @@ and the streaming ``load_weights`` routing (longest matching module prefix); the
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from ..core.dtypes import DType
 from ..core.ir import Graph, Value
+from ..core.shapes import Dim, T
 
 
 @dataclass(frozen=True)
 class WeightSpec:
     """One checkpoint tensor a module consumes.
 
-    ``hf_name`` is the full checkpoint key; ``format`` the storage-format plugin (``bf16``, ``fp8_e4m3``, ``nvfp4``,
-    ``int8``); ``transform`` an optional named load-time transform (row-stacking, head permutation, ``1+w`` …)
-    applied by the packer; ``slab`` the pack slab this tensor is placed in (defaults to the module prefix).
+    ``hf_name`` is the full checkpoint key (the base ``…weight`` key of a quantized group); ``format`` the
+    storage-format plugin of a slab tensor (``bf16``, ``fp8_e4m3``, ``nvfp4``, ``int8``) or the stored dtype of an
+    aux tensor (``f32``, ``bf16``); ``slab`` the pack slab a matrix is row-stacked into. ``aux`` tensors (norm
+    weights, conv taps, small per-head parameters) are stored raw after the elementwise ``transform`` (``f32``,
+    ``bf16_f32``, ``one_plus``, ``neg_exp``; see ``packs.transforms``) and the optional index ``perm``
+    (``perm[new] = old``, e.g. the head-dim permutation a per-head norm weight must follow).
     """
 
     hf_name: str
@@ -32,6 +36,8 @@ class WeightSpec:
     format: str
     transform: Optional[str] = None
     slab: Optional[str] = None
+    aux: bool = False
+    perm: Optional[Any] = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,16 @@ class StateSpec:
     entries: Tuple[StateEntry, ...] = ()
 
 
+@dataclass
+class LowerContext:
+    """What a layer's ``lower`` needs besides its inputs: the graph's state values (by :class:`StateEntry` name)
+    and the model-wide constants (RoPE tables …). ``t`` is the per-step token symbol."""
+
+    states: Dict[str, Value] = field(default_factory=dict)
+    consts: Dict[str, Value] = field(default_factory=dict)
+    t: Dim = T
+
+
 class Module:
     """Base of every layer, model and drafter.
 
@@ -64,6 +80,7 @@ class Module:
     def __init__(self, *, prefix: str = "") -> None:
         self.prefix = prefix
         self._params: Dict[str, Any] = {}
+        self._formats: Dict[str, str] = {}
 
     # ---- the contract ----------------------------------------------------------------------------------------
     def forward(self, *xs: Any) -> Any:
@@ -105,6 +122,33 @@ class Module:
                     raise ValueError(f"{spec.hf_name!r} is claimed by two modules")
                 out[spec.hf_name] = (mod, local, spec)
         return out
+
+    # ---- IR helpers -------------------------------------------------------------------------------------------
+    def weight_value(self, g: Graph, name: str, shape: Sequence[int], fmt: str) -> Value:
+        """The graph value of a packed slab, created on first use and shared afterwards (tied weights)."""
+        v = g.values.get(name)
+        if v is None:
+            return g.weight(name, shape, fmt)
+        if not v.is_weight or tuple(v.shape) != tuple(shape) or v.format != fmt:
+            raise ValueError(f"{type(self).__name__}: slab {name!r} already exists in the graph with another shape/format")
+        return v
+
+    def const_value(self, g: Graph, name: str, shape: Sequence[Dim], dtype: DType) -> Value:
+        v = g.values.get(name)
+        if v is None:
+            return g.const(name, shape, dtype)
+        if not v.is_const:
+            raise ValueError(f"{type(self).__name__}: {name!r} is not a constant of the graph")
+        return v
+
+    # ---- storage formats ------------------------------------------------------------------------------------
+    def set_format(self, local: str, fmt: str) -> None:
+        """Bind the storage format of one of this module's weights (``weights.bind_formats`` reads it off the
+        checkpoint; the default is what the module's ``weight_map`` declares)."""
+        self._formats[local] = fmt
+
+    def format_of(self, local: str, default: str = "bf16") -> str:
+        return self._formats.get(local, default)
 
     # ---- weights --------------------------------------------------------------------------------------------
     def param(self, local: str) -> Any:
@@ -160,3 +204,43 @@ class Model(Module):
     def feature_taps(self) -> List[int]:
         """Layers whose residual stream a drafter may read (empty if the model exposes none)."""
         return []
+
+    def tables(self) -> Dict[str, Tuple[str, Any]]:
+        """Computed constants the pack stores raw: ``{name: (safetensors dtype, numpy array)}`` (RoPE tables …)."""
+        return {}
+
+    @classmethod
+    def from_checkpoint(cls, path: str, **options: Any) -> "Model":
+        """Build the module tree from a checkpoint directory's ``config.json`` (and bind the storage formats found
+        in its safetensors); ``options`` are model-package knobs such as ``max_context``."""
+        raise NotImplementedError
+
+    def init_state(self, *, device: Any = None) -> Dict[str, Any]:
+        """Zeroed torch buffers for every :class:`StateEntry` (one checkpoint slot each; the oracle path)."""
+        import torch
+
+        out: Dict[str, Any] = {}
+        for e in self.state_spec().entries:
+            shape = tuple(int(d) for d in e.shape)
+            out[e.name] = torch.zeros(shape, dtype=_TORCH_DTYPE[e.dtype], device=device)
+        return out
+
+
+_TORCH_DTYPE: Dict[DType, Any] = {}
+
+
+def _torch_dtypes() -> None:
+    import torch
+
+    _TORCH_DTYPE.update({DType.BF16: torch.bfloat16, DType.F16: torch.float16, DType.F32: torch.float32,
+                         DType.I32: torch.int32, DType.U32: torch.int32, DType.I64: torch.int64,
+                         DType.U8: torch.uint8, DType.BOOL: torch.bool})
+
+
+class _LazyDtypes(dict):
+    def __missing__(self, key):
+        _torch_dtypes()
+        return dict.__getitem__(self, key)
+
+
+_TORCH_DTYPE = _LazyDtypes()

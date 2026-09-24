@@ -16,6 +16,23 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
 
 - `monolith/packs/transforms.py` — `rope_head_perm` adapted from `python/mirage/mpk/models/qwen38/modeling.py` @ 5beaed8
   (Apache-2.0): the head-dim permutation that implements partial RoPE as a load-time row permutation.
+- `monolith/nn/rope.py` — `rope_tables_permuted` adapted from `python/mirage/mpk/models/qwen38/modeling.py`
+  `build_rope_tables` @ 5beaed8 (Apache-2.0): the cos/sin tables in the permuted head layout.
+- `monolith/models/qwen3_5/config.py` — adapted from `python/mirage/mpk/models/qwen38/configuration.py` @ 5beaed8
+  (Apache-2.0): the field-for-field text-config mirror.
+- `monolith/models/qwen3_5/model.py`, `monolith/models/qwen3_5/weights.py` — adapted from
+  `python/mirage/mpk/models/qwen38/modeling.py` @ 5beaed8 (Apache-2.0): the layer structure, the stacked projection
+  layouts (`[q | gate | k | v]`, `[qkv | z | a | b]`) and the checkpoint key routing; tensor parallelism dropped.
+- `tools/goldens/hf_golden.py` — adapted from `tests/runtime_python/models/qwen38/hf_golden.py` @ 5beaed8
+  (Apache-2.0): the golden recipe (BF16, eager attention, hidden states + greedy tokens), extended with
+  teacher-forced top-k logits and a torch-free output format.
+
+## transformers (huggingface/transformers 5.17, Apache-2.0)
+
+- `monolith/nn/oracle.py`, `monolith/nn/attention.py`, `monolith/nn/gdn.py` — the layer oracles reproduce the
+  semantics and rounding order of `src/transformers/models/qwen3_5/modeling_qwen3_5.py` (`Qwen3_5RMSNorm`,
+  `Qwen3_5RMSNormGated`, `torch_recurrent_gated_delta_rule`, `Qwen3_5GatedDeltaNet`, `Qwen3_5Attention`,
+  `apply_rotary_pos_emb`); written against that file, no code copied verbatim.
 
 ## Original
 
