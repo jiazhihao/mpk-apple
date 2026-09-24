@@ -20,3 +20,13 @@ Recorded as it happens, with the time and the files touched, so the porting guid
 * **Tests:** a torch-free contract test on a synthetic checkpoint (weight map, lowering, coverage, pack round-trip)
   and the GPU golden test (greedy tokens and every layer's prefill residual stream read from the program's buffers).
 * Total: about an hour from the first line to the running model, most of it waiting for downloads and the CPU golden.
+
+## Drafter 1: `Dogacel/Qwen3-8B-DSpark` as `spec/dspark/` — 2026-09-24
+
+* The `Drafter` contract's module (config, tree, weight map, oracle) from the library: `Embedding`, `Linear`,
+  `RMSNorm(one_plus=False)`, `DecoderLayer`, `GatedMLP`, plus one spec-local module, `DraftAttention` (three key
+  sources, no mask) — ~250 lines. The k/v projections are claimed twice (block and context), which needed a loader
+  that routes a tensor to every claimant and a `dequantized_tensors` fix to look tensors up by checkpoint name.
+* Reference: DeepSpec's `Qwen3DSparkModel` loaded by direct construction (its `from_pretrained` re-serializes the
+  config and drops the DSpark fields; TorchSpec's checkpoint omits `block_size`). ~1.5 hours including reading the
+  reference.

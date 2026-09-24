@@ -1,0 +1,271 @@
+"""The DSpark drafter as a :class:`Drafter` module (design §5.8, §5.14), built from the layer library plus the three
+pieces only a DSpark drafter has: the feature projection, the block attention over the injected context, and the
+Markov + confidence heads. Semantics follow DeepSpec's ``modeling/dspark/qwen3/modeling.py`` and
+``eval/dspark/draft_ops.py`` (MIT; ``third_party/NOTICE``):
+
+* **Context features**: the target's residual streams after the tapped layers, concatenated ``[n, taps · H_t]``,
+  → ``fc`` → standard RMSNorm ``hidden_norm`` → ``[n, H]``. The drafter's per-layer KV caches hold the k/v of these
+  features for every committed position (KV injection); each round appends the ``n_new`` positions the last verify
+  committed.
+* **Draft block**: the embeddings of ``[anchor, mask × (γ − 1)]`` at positions ``start … start + γ − 1`` go through
+  the draft layers; every layer's attention has keys = the context cache (positions < start) ∪ the new context
+  positions ∪ the block itself, with **no mask** (bidirectional inside the block), q/k RMSNorm and full RoPE as the
+  target's; the block's own k/v are not kept.
+* **Heads**: base logits = the target's ``lm_head`` over the normed block hidden; the vanilla Markov head adds
+  ``W₂ · W₁[prev_k]`` (``prev_0`` = the anchor, ``prev_{k+1}`` = the sampled draft) before the argmax; the confidence
+  head is ``σ(w · [h_k ; W₁[prev_k]] + b)``. The reference verifies the confident prefix (confidence ≥ threshold);
+  ``lower_select`` can use the profile's cost table instead (design §5.8).
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
+
+from ...core.dtypes import DType
+from ...core.ir import BlockDomain, Graph, OpClass, Value
+from ...core.profile import Profile
+from ...nn import DecoderLayer, Embedding, GatedMLP, Linear, LMHead, LowerContext, Module, Part, RMSNorm, StateEntry
+from ...nn.rope import rope_tables_permuted
+from ...packs.transforms import rope_head_perm
+from ..drafter import DraftBlock, DraftContext, Drafter
+from ..registry import register_drafter
+from .config import DSparkConfig
+
+
+class DraftAttention(Module):
+    """The drafter's attention: the target's GQA attention (standard q/k norm, full RoPE, no gate) whose keys come
+    from three sources — its own context KV cache, the ``n_new`` context features and the block — and whose
+    queries are the block, unmasked."""
+
+    def __init__(self, cfg: DSparkConfig, *, hf_prefix: str, prefix: str, max_context: int) -> None:
+        super().__init__(prefix=prefix)
+        self.cfg, self.hf_prefix, self.max_context = cfg, hf_prefix, max_context
+        h, d, heads, kv = cfg.hidden_size, cfg.head_dim, cfg.num_attention_heads, cfg.num_key_value_heads
+        self.heads, self.kv_heads, self.head_dim = heads, kv, d
+        self.qkv = Linear(h, [Part("q_proj", f"{hf_prefix}q_proj.weight", heads * d), Part("k_proj", f"{hf_prefix}k_proj.weight", kv * d),
+                              Part("v_proj", f"{hf_prefix}v_proj.weight", kv * d)], prefix=f"{prefix}qkv.")
+        self.kv_ctx = Linear(h, [Part("k_proj", f"{hf_prefix}k_proj.weight", kv * d), Part("v_proj", f"{hf_prefix}v_proj.weight", kv * d)],
+                             prefix=f"{prefix}kv_ctx.")                   # the same k/v matrices applied to the context features
+        self.o_proj = Linear(heads * d, [Part("o_proj", f"{hf_prefix}o_proj.weight", h)], prefix=f"{prefix}o_proj.", epilogue="residual")
+
+    def weight_map(self):
+        from ...nn.module import WeightSpec
+
+        d = self.head_dim
+        return {"q_norm": WeightSpec(f"{self.hf_prefix}q_norm.weight", (d,), "f32", transform="bf16_f32", aux=True, perm=rope_head_perm(d, d)),
+                "k_norm": WeightSpec(f"{self.hf_prefix}k_norm.weight", (d,), "f32", transform="bf16_f32", aux=True, perm=rope_head_perm(d, d))}
+
+    def full_weight_map(self):
+        # k_proj / v_proj are claimed by both stacked projections (the same checkpoint tensors); the second slab
+        # streams them again for the context features — Module.full_weight_map refuses duplicate claims, so the
+        # drafter lists kv_ctx's parts under distinct keys and the loader routes the tensor to both
+        out = {}
+        for name, mod in self.named_modules():
+            for local, spec in mod.weight_map().items():
+                key = spec.hf_name if spec.hf_name not in out else f"{spec.hf_name}#{name}"
+                out[key] = (mod, local, spec)
+        return out
+
+    def state_entries(self, checkpoints: int = 1) -> List[StateEntry]:
+        shape = (self.max_context, self.kv_heads, self.head_dim)
+        return [StateEntry(f"{self.prefix}k_ctx", shape, DType.BF16), StateEntry(f"{self.prefix}v_ctx", shape, DType.BF16)]
+
+    # ---- oracle -------------------------------------------------------------------------------------------------
+    def forward(self, x: Any, residual: Any, state: Dict[str, Any], pos: int, *, ctx_feats: Any, ctx_len: int) -> Any:
+        """``x`` [γ, H] = the normed block; ``ctx_feats`` [n_new, H] = the new context features (positions
+        ``ctx_len … ctx_len + n_new``); the block sits at positions ``pos … pos + γ`` with ``pos = ctx_len + n_new``.
+        Appends the context k/v to the caches (they now cover ``[0, pos)``) and returns the residual + attention."""
+        import torch
+
+        from ...nn import oracle
+
+        cfg, d, heads, kv = self.cfg, self.head_dim, self.heads, self.kv_heads
+        g = x.shape[0]
+        n_new = ctx_feats.shape[0]
+        proj = self.qkv.forward(x)
+        q = oracle.rms_norm(proj[:, : heads * d].reshape(g, heads, d), self.param("q_norm"), cfg.rms_norm_eps, one_plus=False)
+        k_blk = proj[:, heads * d: heads * d + kv * d].reshape(g, kv, d)
+        v_blk = proj[:, heads * d + kv * d:].reshape(g, kv, d)
+        kvp = self.kv_ctx.forward(ctx_feats)
+        k_new = kvp[:, : kv * d].reshape(n_new, kv, d)
+        v_new = kvp[:, kv * d:].reshape(n_new, kv, d)
+        k_all = oracle.rms_norm(torch.cat([k_new, k_blk]), self.param("k_norm"), cfg.rms_norm_eps, one_plus=False)
+        positions = torch.arange(ctx_len, ctx_len + n_new + g)
+        cos, sin = oracle.rope_tables(cfg.rope_theta, d, positions)
+        cos, sin = cos.to(x.dtype), sin.to(x.dtype)
+        k_all = oracle.apply_partial_rope(k_all, cos, sin)
+        q = oracle.apply_partial_rope(q, cos[n_new:], sin[n_new:])
+        kc, vc = state[f"{self.prefix}k_ctx"], state[f"{self.prefix}v_ctx"]
+        kc[ctx_len: ctx_len + n_new] = k_all[:n_new]
+        vc[ctx_len: ctx_len + n_new] = v_new
+        keys = torch.cat([kc[: ctx_len + n_new], k_all[n_new:]]).to(torch.float32)         # context, then the block
+        vals = torch.cat([vc[: ctx_len + n_new], v_blk]).to(torch.float32)
+        rep = heads // kv
+        ks = keys.repeat_interleave(rep, dim=1)
+        vs = vals.repeat_interleave(rep, dim=1)
+        scores = torch.einsum("ghd,nhd->hgn", q.to(torch.float32), ks).to(x.dtype) * (d ** -0.5)   # no mask: bidirectional
+        p = torch.softmax(scores.to(torch.float32), dim=-1).to(x.dtype)
+        o = torch.einsum("hgn,nhd->ghd", p.to(torch.float32), vs).to(x.dtype).reshape(g, heads * d)
+        return self.o_proj.forward(o, residual)
+
+    # ---- IR -----------------------------------------------------------------------------------------------------
+    def lower(self, g: Graph, h: Value, norm, ctx: LowerContext, *, feats: Optional[Value] = None) -> Value:
+        proj = self.qkv.lower(g, h, norm=norm).value
+        kvp = self.kv_ctx.lower(g, ctx.consts["draft_ctx_feats"] if feats is None else feats).value
+        kc, vc = ctx.states[f"{self.prefix}k_ctx"], ctx.states[f"{self.prefix}v_ctx"]
+        cos, sin = ctx.consts["draft_rope_cos"], ctx.consts["draft_rope_sin"]
+        qn = self.const_value(g, f"{self.prefix}q_norm", (self.head_dim,), DType.F32)
+        kn = self.const_value(g, f"{self.prefix}k_norm", (self.head_dim,), DType.F32)
+        o = g.value(f"{self.prefix}attn", (h.shape[0], self.heads * self.head_dim), DType.BF16)
+        g.op("draft_attn", [proj, kvp, kc, vc, cos, sin, qn, kn], [o], domain=BlockDomain("heads", self.heads), klass=OpClass.MAP,
+             updates=[kc.name, vc.name], heads=self.heads, kv_heads=self.kv_heads, head_dim=self.head_dim, eps=self.cfg.rms_norm_eps,
+             scaling=self.head_dim ** -0.5, gamma=self.cfg.block_size)
+        return self.o_proj.lower(g, o, residual=h, name=f"{self.prefix}h").value
+
+
+@register_drafter("dspark")
+class DSparkDrafter(Drafter):
+    """``lm_head`` is the target's (the checkpoint carries none); ``embed_tokens`` is the drafter's own frozen copy."""
+
+    def __init__(self, cfg: DSparkConfig, *, target_lm_head: LMHead, max_context: int = 4096, pack_rows: int = 16) -> None:
+        super().__init__(prefix="draft.")
+        self.cfg, self.gamma, self.max_context = cfg, cfg.block_size, max_context
+        h, eps = cfg.hidden_size, cfg.rms_norm_eps
+        self.embed_tokens = Embedding(cfg.vocab_size, h, "embed_tokens.weight", prefix="draft.embed_tokens.")
+        self.fc = Linear(cfg.n_taps * cfg.target_hidden, [Part("fc", "fc.weight", h)], prefix="draft.fc.")
+        self.hidden_norm = RMSNorm(h, eps, "hidden_norm.weight", prefix="draft.hidden_norm.", one_plus=False)
+        self.blocks: List[DecoderLayer] = []
+        for i in range(cfg.num_hidden_layers):
+            lp, hp = f"draft.layers.{i}.", f"layers.{i}."
+            attn = DraftAttention(cfg, hf_prefix=f"{hp}self_attn.", prefix=f"{lp}self_attn.", max_context=max_context)
+            self.blocks.append(DecoderLayer(i, RMSNorm(h, eps, f"{hp}input_layernorm.weight", prefix=f"{lp}input_norm.", one_plus=False), attn,
+                                            RMSNorm(h, eps, f"{hp}post_attention_layernorm.weight", prefix=f"{lp}post_norm.", one_plus=False),
+                                            GatedMLP(h, cfg.intermediate_size, hf_prefix=f"{hp}mlp.", prefix=f"{lp}mlp.", chunk=pack_rows // 2), prefix=lp))
+        self.norm = RMSNorm(h, eps, "norm.weight", prefix="draft.norm.", one_plus=False)
+        self._lm_head = target_lm_head
+        self.markov_w1 = Embedding(cfg.vocab_size, cfg.markov_rank, "markov_head.markov_w1.weight", prefix="draft.markov_w1.")
+        self.markov_w2 = Linear(cfg.markov_rank, [Part("w2", "markov_head.markov_w2.weight", cfg.vocab_size)], prefix="draft.markov_w2.")
+
+    def weight_map(self):
+        from ...nn.module import WeightSpec
+
+        cfg = self.cfg
+        if not cfg.enable_confidence_head:
+            return {}
+        n_in = cfg.hidden_size + (cfg.markov_rank if cfg.confidence_head_with_markov else 0)
+        return {"conf_w": WeightSpec("confidence_head.proj.weight", (1, n_in), "f32", transform="f32", aux=True),
+                "conf_b": WeightSpec("confidence_head.proj.bias", (1,), "f32", transform="f32", aux=True)}
+
+    def full_weight_map(self):
+        out = {}
+        for name, mod in self.named_modules():
+            for local, spec in mod.weight_map().items():
+                key = spec.hf_name if spec.hf_name not in out else f"{spec.hf_name}#{name}"
+                out[key] = (mod, local, spec)
+        return out
+
+    def load_weights(self, weights, *, strict: bool = True):
+        """Route each checkpoint tensor to every module that claims it (k/v projections are claimed twice)."""
+        table: Dict[str, list] = {}
+        for key, hit in self.full_weight_map().items():
+            table.setdefault(key.split("#")[0], []).append(hit)
+        consumed = set()
+        for name, tensor in weights:
+            hits = table.get(name)
+            if hits is None:
+                if strict:
+                    raise KeyError(f"DSparkDrafter.load_weights: unexpected checkpoint key {name!r}")
+                continue
+            for mod, local, _ in hits:
+                mod.set_param(local, tensor)
+            consumed.add(name)
+        missing = sorted(set(table) - consumed)
+        if missing:
+            raise ValueError(f"DSparkDrafter.load_weights: weights never loaded: {missing[:8]}")
+        self.process_weights()
+        return consumed
+
+    def state_entries(self) -> List[StateEntry]:
+        out: List[StateEntry] = []
+        for blk in self.blocks:
+            out += blk.mixer.state_entries()
+        return out
+
+    def tables(self) -> Dict[str, Tuple[str, Any]]:
+        from ...formats.fp import f32_to_bf16
+
+        d = self.cfg.head_dim
+        cos, sin = rope_tables_permuted(self.cfg.rope_theta, d, d, self.max_context)
+        return {"draft_rope_cos": ("BF16", f32_to_bf16(cos)), "draft_rope_sin": ("BF16", f32_to_bf16(sin))}
+
+    # ---- oracle -------------------------------------------------------------------------------------------------
+    def project_features(self, taps: Any) -> Any:
+        """``taps`` [n, taps · H_t] (the tapped residual streams, concatenated in tap order) → context features [n, H]."""
+        return self.hidden_norm.forward(self.fc.forward(taps))
+
+    def draft_block(self, anchor: int, ctx_feats: Any, state: Dict[str, Any], ctx_len: int) -> Any:
+        """One draft pass: returns the normed block hidden ``[γ, H]``; the context caches grow by ``ctx_feats``."""
+        import torch
+
+        ids = torch.full((self.gamma,), self.cfg.mask_token_id, dtype=torch.int64)
+        ids[0] = anchor
+        h = self.embed_tokens.forward(ids)
+        pos = ctx_len + ctx_feats.shape[0]
+        for blk in self.blocks:
+            x = blk.input_norm.forward(h)
+            h = blk.mixer.forward(x, h, state, pos, ctx_feats=ctx_feats, ctx_len=ctx_len)
+            h = blk.mlp.forward(blk.post_norm.forward(h), h)
+        return self.norm.forward(h)
+
+    def markov_bias(self, prev: int) -> Any:
+        """``W₂ · W₁[prev]`` in BF16 like the reference (an embedding row through a BF16 linear)."""
+        import torch
+
+        w1 = self.markov_w1.param("weight")[prev]
+        return (w1.to(torch.float32) @ self.markov_w2.param("w2").to(torch.float32).t()).to(w1.dtype)
+
+    def draft_tokens(self, block_hidden: Any, anchor: int) -> Tuple[List[int], Any]:
+        """Greedy: the Markov chain over the block's base logits; returns the γ drafts and the corrected logits."""
+        import torch
+
+        base = self._lm_head.forward(block_hidden)                    # [γ, V] BF16
+        prev, out, corrected = anchor, [], []
+        for k in range(self.gamma):
+            lg = base[k] + self.markov_bias(prev)
+            corrected.append(lg)
+            prev = int(torch.argmax(lg.to(torch.float32)))
+            out.append(prev)
+        return out, torch.stack(corrected)
+
+    def confidences(self, block_hidden: Any, prev_tokens: Sequence[int]) -> Any:
+        """``σ(w · [h_k ; W₁[prev_k]] + b)`` per block position (FP32 logits like the reference's ``.float()``)."""
+        import torch
+
+        if not self.cfg.enable_confidence_head:
+            return None
+        feats = block_hidden
+        if self.cfg.confidence_head_with_markov:
+            emb = self.markov_w1.param("weight")[torch.tensor(list(prev_tokens))].to(block_hidden.dtype)
+            feats = torch.cat([block_hidden, emb], dim=-1)
+        w, b = self.param("conf_w").to(block_hidden.dtype), self.param("conf_b").to(block_hidden.dtype)
+        logits = (feats.to(torch.float32) @ w.to(torch.float32).t()).to(block_hidden.dtype) + b   # BF16 linear, then float
+        return torch.sigmoid(logits.to(torch.float32).squeeze(-1))
+
+    @staticmethod
+    def confident_prefix(conf: Any, threshold: float, gamma: int) -> int:
+        if threshold <= 0.0:
+            return gamma
+        below = (conf < threshold).nonzero()
+        return gamma if below.numel() == 0 else int(below[0])
+
+    # ---- the Drafter contract (IR) ----------------------------------------------------------------------------
+    def lower_draft(self, g: Graph, ctx: DraftContext, anchor: Value) -> DraftBlock:
+        raise NotImplementedError("lowering the DSpark round lands with the drafter kernels (#24) and the wiring (#38)")
+
+    def lower_select(self, g: Graph, block: DraftBlock, profile: Profile) -> Value:
+        raise NotImplementedError("lowering the DSpark round lands with the drafter kernels (#24) and the wiring (#38)")
+
+    def lower_context_update(self, g: Graph, taps: List[Value], accepted: Value) -> None:
+        raise NotImplementedError("lowering the DSpark round lands with the drafter kernels (#24) and the wiring (#38)")
