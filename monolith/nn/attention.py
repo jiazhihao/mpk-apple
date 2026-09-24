@@ -23,12 +23,16 @@ from .module import LowerContext, Module, StateEntry, WeightSpec
 
 class GQAAttention(Module):
     def __init__(self, hidden: int, heads: int, kv_heads: int, head_dim: int, rotary_dim: int, rope_theta: float,
-                 eps: float, *, hf_prefix: str, prefix: str = "", max_context: int, gate: bool = True) -> None:
+                 eps: float, *, hf_prefix: str, prefix: str = "", max_context: int, gate: bool = True,
+                 norm_one_plus: bool = True) -> None:
+        """``gate``: the ``[q | gate]`` projection and the ``σ(gate)`` output gate (the Qwen3.5 hybrid); ``norm_one_plus``:
+        the per-head q/k RMSNorm scales by ``1 + w`` (Gemma-style) or by ``w`` (the standard RMSNorm of Qwen3)."""
         super().__init__(prefix=prefix)
         if heads % kv_heads:
             raise ValueError("GQAAttention: heads must be a multiple of kv_heads")
         self.hidden, self.heads, self.kv_heads, self.head_dim = hidden, heads, kv_heads, head_dim
         self.rotary_dim, self.rope_theta, self.eps, self.gate = rotary_dim, rope_theta, eps, gate
+        self.norm_one_plus = norm_one_plus
         self.max_context = max_context
         self.hf_prefix = hf_prefix
         hd, kd = heads * head_dim, kv_heads * head_dim
@@ -67,8 +71,9 @@ class GQAAttention(Module):
 
     def weight_map(self) -> Dict[str, WeightSpec]:
         perm = rope_head_perm(self.head_dim, self.rotary_dim)
-        return {"q_norm": WeightSpec(f"{self.hf_prefix}q_norm.weight", (self.head_dim,), "f32", transform="one_plus", aux=True, perm=perm),
-                "k_norm": WeightSpec(f"{self.hf_prefix}k_norm.weight", (self.head_dim,), "f32", transform="one_plus", aux=True, perm=perm)}
+        tf = "one_plus" if self.norm_one_plus else "bf16_f32"          # the kernel multiplies by the stored scale as is
+        return {"q_norm": WeightSpec(f"{self.hf_prefix}q_norm.weight", (self.head_dim,), "f32", transform=tf, aux=True, perm=perm),
+                "k_norm": WeightSpec(f"{self.hf_prefix}k_norm.weight", (self.head_dim,), "f32", transform=tf, aux=True, perm=perm)}
 
     def state_entries(self, checkpoints: int = 1) -> List[StateEntry]:
         shape = (self.max_context, self.kv_heads, self.head_dim)
@@ -95,8 +100,8 @@ class GQAAttention(Module):
             q, gate = proj[:, :q_rows].reshape(t, self.heads, d), None
         k = proj[:, q_rows: q_rows + kd].reshape(t, self.kv_heads, d)
         v = proj[:, q_rows + kd:].reshape(t, self.kv_heads, d)
-        q = oracle.rms_norm(q, self.param("q_norm"), self.eps)
-        k = oracle.rms_norm(k, self.param("k_norm"), self.eps)
+        q = oracle.rms_norm(q, self.param("q_norm"), self.eps, one_plus=self.norm_one_plus)
+        k = oracle.rms_norm(k, self.param("k_norm"), self.eps, one_plus=self.norm_one_plus)
         cos, sin = oracle.rope_tables(self.rope_theta, self.rotary_dim, torch.arange(pos, pos + t))
         cos, sin = cos.to(proj.dtype), sin.to(proj.dtype)
         q = oracle.apply_partial_rope(q, cos, sin)
