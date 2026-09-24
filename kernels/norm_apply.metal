@@ -17,8 +17,9 @@ kernel void norm_apply(device const ushort* h [[buffer(0)]], device const float*
                        uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
   if (t >= p.t_active) return;
-  float ssq = 0.0f;
-  for (uint i = 0; i < p.stat_parts; i++) ssq += stat[t * p.stat_parts + i];
+  float ssq = 0.0f;                                        // the partials summed lane-parallel, then one simd_sum:
+  for (uint i = lane; i < p.stat_parts; i += 32u) ssq += stat[t * p.stat_parts + i];   // a serial loop costs a
+  ssq = simd_sum(ssq);                                     // load latency per partial (~2 µs for 64 partials)
   const float r = rsqrt(ssq / float(p.k) + p.eps);
   device const uint4* row = (device const uint4*)(h + (ulong)t * p.k);
   device uint4* out = (device uint4*)(x + (ulong)t * p.k);

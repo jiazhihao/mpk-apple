@@ -213,6 +213,13 @@ bars of #25 on the real weights), host busy 0.1 %. Decode: 7.0 ms per token (143
 token of which 96 are the standalone norm statistic/scaling (M5's work: `STAT_OUT` hoisting, the sibling overlap,
 and MLX parity). Not yet: chunked prefill (prompts > `t_max`), dynamic T, the 27B on the M3 Pro.
 
+*Status (2026-09-24, the first pass).* `compiler/passes/fuse_norm.py` hoists every norm statistic fed by a
+residual-epilogue GEMV into that GEMV's `STAT_OUT` partials (47 of the 0.8B's 49 statistic dispatches; the
+embedding-fed one keeps its dispatch): 199 instead of 247 dispatches per decode step, 6.97 vs 7.05 ms per token
+(−1.2 %, paired alternating runs, tokens unchanged). Measured on the way: the `STAT_OUT` epilogue itself costs
+0–1 µs per GEMV at the 0.8B's and the 27B's shapes, and a *serial* sum of the partials in the consumer costs a load
+latency per partial (~2 µs for 64) — now lane-parallel with one `simd_sum`.
+
 ### M4 — Compiler and end-to-end decode · 4 ew
 
 * IR (typed graph, symbolic `T`/context, op metadata: reads/writes, block domain, class, cost).

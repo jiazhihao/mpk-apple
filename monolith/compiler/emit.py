@@ -23,6 +23,7 @@ from ..nn.module import Model
 from ..packs.packer import PackFile
 from ..runtime.program import BufferSpec, KernelSpec, OpSpec, Program
 from .coverage import check_coverage
+from .passes import DEFAULT_PASSES
 
 WINDOW_BYTES = 2 << 30          # pack windows: ICB bind offsets are 32-bit (design §5.1)
 
@@ -37,6 +38,7 @@ class _Ctx:
     tg: int
     windows: Dict[str, Tuple[str, int]] = field(default_factory=dict)      # pack entry name -> (buffer, offset)
     row_scales: Dict[str, Tuple[str, int]] = field(default_factory=dict)
+    stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     counter: int = 0
 
     # ---- helpers -----------------------------------------------------------------------------------------------
@@ -114,6 +116,8 @@ def _embed(ctx: _Ctx, op: Op) -> None:
 def _rmsnorm_stat(ctx: _Ctx, op: Op) -> None:
     h, = op.inputs
     stat = op.outputs[0]
+    if op.attrs.get("hoisted"):
+        return                                        # the producer GEMV writes the partials (fuse_norm_stat)
     k = ctx.kernel("rmsnorm_stat", kernels.rmsnorm_stat_source(), "rmsnorm_stat", {})
     prm = ctx.params("stat", kernels.stat_params(ctx.shape(h)[1], ctx.t))
     ctx.add(k, [(0, h.name, 0), (1, stat.name, 0), (2, prm, 0)], (ctx.t, 1, 1), (32, 1, 1), op.kind)
@@ -123,7 +127,7 @@ def _norm_apply(ctx: _Ctx, h: Value, stat: Value, nw: Value, eps: float, out_nam
     k = ctx.kernel("norm_apply", kernels.norm_apply_source(), "norm_apply", {})
     kdim = ctx.shape(h)[1]
     xn = ctx.scratch(out_name, ctx.t * kdim * 2)
-    prm = ctx.params("norm_apply", kernels.norm_apply_params(kdim, ctx.t, 1, eps))
+    prm = ctx.params("norm_apply", kernels.norm_apply_params(kdim, ctx.t, ctx.stat_parts.get(stat.name, 1), eps))
     ctx.add(k, [(0, h.name, 0), (1, stat.name, 0), (2, *ctx.windows[nw.name]), (3, xn, 0), (4, prm, 0)], (ctx.t, 1, 1), (32, 1, 1), "norm_apply")
     return xn
 
@@ -143,12 +147,16 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
     x_binding = (x.name, 0)
     if stat is not None:
         x_binding = (_norm_apply(ctx, x, stat, nw, float(op.attrs.get("eps", 1e-6)), f"{y.name}.xn"), 0)
-    macros = kernels.gemv_macros(info, t=ctx.t, epilogue=op.attrs.get("epilogue"), out_bf16=True)
+    stat_out = op.attrs.get("stat_value")
+    macros = kernels.gemv_macros(info, t=ctx.t, epilogue=op.attrs.get("epilogue"), out_bf16=True, stat_out=stat_out is not None)
     k = ctx.kernel(f"gemv_T|{info.format}", kernels.gemv_source(info.format), "gemv_T", macros)
     prm = ctx.params("gemv", kernels.gemv_params(info.n, info.n_blocks, ctx.n_sg, ctx.t, eps=0.0, stat_parts=1))
     bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, *x_binding), (3, y.name, 0), (4, prm, 0)]
     if residual is not None:
         bindings.append((7, residual.name, 0))
+    if stat_out is not None:
+        bindings.append((8, stat_out, 0))
+        ctx.stat_parts[stat_out] = info.n_blocks
     grid, tg = ctx.crew_grid()
     ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}")
 
@@ -226,23 +234,30 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "gemv": _gemv, "lm_h
 
 
 def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: int, eos: int = -1, ring_capacity: int = 4096,
-                    layout: Optional[StepStateLayout] = None, tg: int = 384) -> Program:
-    """Lower ``model``, check coverage on ``profile`` and emit the step program for a static ``T = t``."""
+                    layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES) -> Program:
+    """Lower ``model``, run the ``passes``, check coverage on ``profile`` and emit the step program for a static
+    ``T = t``."""
     layout = layout or StepStateLayout()
     if t < 1 or t > layout.t_max:
         raise ValueError(f"compile_program: T = {t} must be within 1..t_max = {layout.t_max}")
     g = Graph("step")
     token = model.lower(g)
     g.check()
+    for p in passes:
+        p(g)
     check_coverage(g, profile)
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
     ctx = _Ctx(program, pack, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg)
     _pack_windows(ctx, pack.dir / pack.manifest["pack"])
+    hoisted = {op.attrs["stat_value"]: pack.slab_info(op.inputs[1].name).n_blocks for op in g.ops if op.kind == "gemv" and op.attrs.get("stat_value")}
     for v in g.values.values():
         if v.is_state:
             program.buffers[v.name] = BufferSpec(_value_bytes(v, t), None, "state")
         elif not v.is_source:
-            program.buffers[v.name] = BufferSpec(max(_value_bytes(v, t), 16), None, "arena")
+            nbytes = _value_bytes(v, t)
+            if v.name in hoisted:
+                nbytes = t * hoisted[v.name] * 4              # a hoisted statistic holds n_blocks partials per token
+            program.buffers[v.name] = BufferSpec(max(nbytes, 16), None, "arena")
         elif v.is_weight or v.is_const:
             if v.name not in ctx.windows:
                 raise KeyError(f"compile_program: the pack has no entry for {v.name!r}")
