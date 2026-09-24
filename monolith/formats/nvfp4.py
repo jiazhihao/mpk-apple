@@ -5,6 +5,11 @@ tensor scale ``weight_scale_2``. Dequantization: ``w = e2m1(code) · e4m3(block_
 
 Lane-row unit (K = 5120): 80 bytes of nibbles (5 words) + 10 scale bytes, padded to 96; ``SCALE_GROUP = 16``.
 
+Decode variants (``NVFP4_DECODE``): 0 = per-nibble float bit construction (the reference, ~14 ALU ops per weight),
+1 = nibble pairs to ``half2`` with packed 16-bit integer arithmetic, 2 = the eight magnitudes as small integers in one
+32-bit constant with an int→float conversion, the ×0.5 folded into the block scale (the default: 241–265 GB/s vs 168–184
+for V0 at the conventional geometry on the M5 Pro; docs/research/gemv-kernel-study.md).
+
 Convention checked on the real checkpoint (layer 0 ``down_proj``, 2026-09-24): the stored block-scale codes are all
 non-negative and top out at exactly 0x7E (448), i.e. ``weight_scale_2 = amax / (6 · 448)``; the dequantized matrix has
 RMS 0.011 and absmax 0.98, while reading the tensor scale as a divisor or dropping it gives 7.9e4 or 29.
@@ -33,6 +38,11 @@ class NVFP4(Format):
     msl_decode = """
 #define WEIGHTS_PER_WORD 32u
 #define SCALE_GROUP 16u
+#ifndef NVFP4_DECODE
+#define NVFP4_DECODE 2      // measured on the M5 Pro (tools/bench/results/*_nvfp4_decode.jsonl): V2 > V1 > V0
+#endif
+#if NVFP4_DECODE == 0
+// V0: per nibble, float bit construction (reference; ~14 ALU ops per weight)
 static inline float fp4_e2m1(uint q) {
   uint e = (q >> 1) & 3u, m = q & 1u;
   float v = (e == 0u) ? float(m) * 0.5f : as_type<float>(((e + 126u) << 23) | (m << 22));
@@ -42,6 +52,37 @@ static inline void decode_word(uint4 q, thread float* out) {
   uint w[4] = {q.x, q.y, q.z, q.w};
   for (uint e = 0; e < 32; e++) out[e] = fp4_e2m1((w[e >> 3] >> ((e & 7u) * 4u)) & 0xFu);
 }
+#elif NVFP4_DECODE == 1
+// V1: nibble PAIRS -> half2 bits with packed 16-bit integer arithmetic (both halves of one uint at once), then float2.
+//   magnitude code m3 -> half bits: 0 -> 0, 1 -> 0x3800 (0.5), m3 >= 2 -> 0x3C00 + (m3-2)*0x200  (= 1, 1.5, 2, 3, 4, 6)
+//   written branch-free as nz*0x3600 + m3*0x200 + ge2*0x200; sign bit 3 -> bit 15.
+static inline uint fp4pair_half2_bits(uint c) {           // c = byte: nibble a in bits 0-3, nibble b in bits 4-7
+  uint u = (c & 0xFu) | ((c & 0xF0u) << 12);              // a at [0,4), b at [16,20)
+  uint m3 = u & 0x00070007u;
+  uint nz = (m3 | (m3 >> 1) | (m3 >> 2)) & 0x00010001u;
+  uint ge2 = ((m3 >> 1) | (m3 >> 2)) & 0x00010001u;
+  return nz * 0x3600u + m3 * 0x200u + ge2 * 0x200u + ((u & 0x00080008u) << 12);
+}
+static inline void decode_word(uint4 q, thread float* out) {
+  uint w[4] = {q.x, q.y, q.z, q.w};
+  for (uint i = 0; i < 4; i++) for (uint b = 0; b < 4; b++) {
+    float2 f = float2(as_type<half2>(fp4pair_half2_bits((w[i] >> (b * 8u)) & 0xFFu)));
+    out[i * 8 + b * 2] = f.x; out[i * 8 + b * 2 + 1] = f.y;
+  }
+}
+#elif NVFP4_DECODE == 2
+// V2: the 8 magnitudes as small integers (value*2 = 0,1,2,3,4,6,8,12) packed in ONE 32-bit constant, 4 bits each;
+//   int -> float conversion, sign by select; the *0.5 folds into the block scale via decode_scale.
+#define NVFP4_LUT2 0xC8643210u
+static inline void decode_word(uint4 q, thread float* out) {
+  uint w[4] = {q.x, q.y, q.z, q.w};
+  for (uint e = 0; e < 32; e++) {
+    uint c = (w[e >> 3] >> ((e & 7u) * 4u)) & 0xFu;
+    int k = int((NVFP4_LUT2 >> ((c & 7u) << 2)) & 0xFu);
+    out[e] = float((c & 8u) ? -k : k);
+  }
+}
+#endif
 static inline float fp8_e4m3_scale(uint q) {
   uint e = (q >> 3) & 15u, m = q & 7u;
   float v = as_type<float>(((q & 0x7Fu) << 20) + (120u << 23));
@@ -49,7 +90,11 @@ static inline float fp8_e4m3_scale(uint q) {
   return (q & 0x80u) ? -v : v;
 }
 // scale of group g of this lane-row: byte g of the unit's scale region (held in registers as uints)
+#if NVFP4_DECODE == 2
+static inline float decode_scale(thread const uint* sw, uint g) { return 0.5f * fp8_e4m3_scale((sw[g >> 2] >> ((g & 3u) * 8u)) & 0xFFu); }
+#else
 static inline float decode_scale(thread const uint* sw, uint g) { return fp8_e4m3_scale((sw[g >> 2] >> ((g & 3u) * 8u)) & 0xFFu); }
+#endif
 """
 
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:

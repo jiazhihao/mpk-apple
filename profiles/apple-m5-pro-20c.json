@@ -61,7 +61,30 @@
    "8": 35
   },
   "tail_quantization_note": "static slices at 240 SIMD-groups: R=32 -> 544 blocks -> 76 % efficiency; R=16 -> 91 %; R=4 -> 95 %",
-  "probe": "p13"
+  "probe": "p13",
+  "harness_2026_09_24": {
+   "note": "tools/bench/results/apple-m5-pro-20c_{gemv_m1,nvfp4_decode}.jsonl; best geometry per shape at T=1",
+   "fp8_t1_gbps": {
+    "17408x5120": 260,
+    "5120x17408": 279,
+    "248320x5120": 291,
+    "crew_x1_17408x5120": 254
+   },
+   "nvfp4_v2_t1_gbps": {
+    "17408x5120": 252,
+    "5120x17408": 226,
+    "248320x5120": 273,
+    "crew_x1_17408x5120": 161,
+    "crew_x4_17408x5120": 211
+   },
+   "defaults": {
+    "nvfp4_decode": 2,
+    "rg": 2,
+    "nvfp4_rows": 4,
+    "fp8_rows": 8,
+    "geometry_t1": "one block per SIMD-group, 64-thread threadgroups"
+   }
+  }
  },
  "tensor_ops": {
   "available_from_clt": true,
