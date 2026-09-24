@@ -102,3 +102,27 @@ def test_ring_overflow_is_an_error_not_corruption():
     rep = eng.run(1000, steps_per_cb=25, in_flight=3)
     st = eng.state()
     assert st["error"] == 1 and st["done"] == 1 and rep.tokens == [7 * s for s in range(1, len(rep.tokens) + 1)]
+
+
+def test_profile_gives_per_op_gpu_times():
+    """Per-dispatch timestamps (one encoder per op, counter samples at stage boundaries): every op has a positive
+    duration, ops are ordered, and the trace file is valid Chrome-trace JSON."""
+    import json
+
+    from monolith.trace import format_budget, op_timings, write_chrome_trace
+
+    eng = Engine(_program(n_stop=50))
+    eng.run(5, steps_per_cb=5, in_flight=1)
+    runs = eng.profile(3)
+    assert len(runs) == 3 and all(len(r) == 2 for r in runs)
+    for run in runs:
+        (s0, e0), (s1, e1) = run
+        assert 0 <= s0 <= e0 <= s1 <= e1 and e1 - s0 < 5.0 and e0 > s0
+    t = op_timings(eng.program, runs)
+    assert [x.name for x in t] == ["map", "advance"] and all(x.ms_min > 0 for x in t)
+    assert "total" in format_budget(t, 300.0)
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".json") as f:
+        write_chrome_trace(f.name, eng.program, runs)
+        ev = json.load(open(f.name))["traceEvents"]
+        assert len(ev) == 6 and ev[0]["ph"] == "X" and ev[0]["name"] == "map"

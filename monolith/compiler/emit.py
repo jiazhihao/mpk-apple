@@ -69,10 +69,10 @@ class _Ctx:
     def crew_grid(self) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
         return (-(-(self.n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
 
-    def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str) -> None:
+    def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str, **meta: Any) -> None:
         if self.dynamic_t and name != "advance" and not any(b[0] == 15 for b in bindings):
             bindings = list(bindings) + [(15, self.program.step_state, 0)]
-        self.program.ops.append(OpSpec(kernel, bindings, tuple(grid), tuple(tg), True, [], name))
+        self.program.ops.append(OpSpec(kernel, bindings, tuple(grid), tuple(tg), True, [], name, dict(meta)))
 
     def shape(self, v: Value) -> Tuple[int, ...]:
         return bind(v.shape, {T: self.t})
@@ -166,7 +166,7 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
         bindings.append((8, stat_out, 0))
         ctx.stat_parts[stat_out] = info.n_blocks
     grid, tg = ctx.crew_grid()
-    ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}")
+    ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", kind=op.kind, bytes=int(info.nbytes), format=info.format, n=info.n, k=info.k)
 
 
 def _gqa(ctx: _Ctx, op: Op) -> None:

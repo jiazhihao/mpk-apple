@@ -78,6 +78,13 @@ class Engine:
             raise RuntimeError(st.error)
         return StepReport(st.steps_submitted, st.command_buffers, st.gpu_ms, st.wall_ms, st.host_busy_ms, st.done, self.runner.drain())
 
+    def profile(self, steps: int = 3) -> List[List[Tuple[float, float]]]:
+        """Per-dispatch GPU (start, end) ms for ``steps`` re-encoded steps (one encoder per op with timestamp counter
+        samples, so the numbers carry encoder-boundary gaps the ICB replay does not have — use them for the shares
+        and the per-op durations, not for the step total)."""
+        q = nt.Queue(self.dev)
+        return [q.profile(self.ops) for _ in range(steps)]
+
     def state(self) -> Dict[str, object]:
         buf = self.buffers[self.program.step_state]
         return self.program.layout.unpack(buf.read(0, self.program.layout.size))
