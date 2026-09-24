@@ -237,3 +237,24 @@ def test_fuse_norm_stat_pass(tmp_path):
     assert stat_buf.nbytes == 2 * 16 * 4                          # T × n_blocks(hidden 256 / R 16) partials
     plain = compile_program(m, PackFile(tmp_path / "pack"), prof, t=2, passes=())
     assert [o.name.split(":")[0] for o in plain.ops].count("rmsnorm_stat") == 5
+
+
+def test_dynamic_t_program(tmp_path):
+    """The prefill-chunk program: kernels compiled at t_max with STEP_STATE=1, StepState bound at slot 15 on every op
+    but the advance, and the layout's prefill counter present."""
+    from monolith.compiler import compile_program
+    from monolith.core.profile import Profile
+
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
+    prog = compile_program(m, PackFile(tmp_path / "pack"), prof, dynamic_t=True)
+    assert all(k.macros.get("STEP_STATE") == "1" for k in prog.kernels.values())
+    assert all(any(b[0] == 15 and b[1] == "step_state" for b in o.bindings) for o in prog.ops if o.name != "advance")
+    assert all("struct StepState" in k.source for k in prog.kernels.values())
+    gemv = next(k for key, k in prog.kernels.items() if key.startswith("gemv_T"))
+    assert gemv.macros["T"] == str(prog.layout.t_max)
+    assert prog.layout.offset("prefill_left") == 152 and prog.buffers["logits"].nbytes == prog.layout.t_max * 50 * 2
+    static = compile_program(m, PackFile(tmp_path / "pack"), prof, t=1)
+    assert not any(k.macros.get("STEP_STATE") == "1" for key, k in static.kernels.items() if key.startswith("gemv_T"))

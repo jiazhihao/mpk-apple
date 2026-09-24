@@ -8,6 +8,9 @@
 #ifndef EMBED_PACKED
 #define EMBED_PACKED 0
 #endif
+#ifndef STEP_STATE
+#define STEP_STATE 0
+#endif
 
 struct EmbedParams { uint k; uint t_active; uint vocab; uint pad; };
 
@@ -23,9 +26,16 @@ static inline uint unit_word(uint lane, uint r, uint j) {
 
 kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* table [[buffer(1)]], device uint4* h [[buffer(2)]],
                   constant EmbedParams& p [[buffer(3)]],
+#if STEP_STATE
+                  device const StepState* st [[buffer(15)]],
+#endif
                   uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
+#if STEP_STATE
+  if (st->done || t >= st->t_this_step) return;
+#else
   if (t >= p.t_active) return;
+#endif
   uint tok = uint(tokens[t]);
   if (tok >= p.vocab) tok = 0u;
   device uint4* out = h + (ulong)t * (p.k / 8u);

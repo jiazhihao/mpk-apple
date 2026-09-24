@@ -30,6 +30,9 @@
 #ifndef TP
 #define TP 4u
 #endif
+#ifndef STEP_STATE
+#define STEP_STATE 0
+#endif
 #define KR (DK / 32u)
 #define VR (DV / 32u)
 #define NSL (DV / SL)
@@ -89,10 +92,18 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
                       device const ushort* conv_w [[buffer(4)]], device const float* neg_exp_a_log [[buffer(5)]],
                       device const float* dt_bias [[buffer(6)]], device float* o_part [[buffer(7)]],
                       constant GdnParams& p [[buffer(9)]],
+#if STEP_STATE
+                      device const StepState* st [[buffer(15)]],
+#endif
                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
   const uint rep = p.hv / p.hk;
+#if STEP_STATE
+  if (st->done) return;
+  const uint T = st->t_this_step;
+#else
   const uint T = p.t_active;
+#endif
   const uint n_blocks = p.hv * NSG;
   for (uint b = sg; b < n_blocks; b += p.n_sg) {
     const uint h = b / NSG, grp = b % NSG;
@@ -183,10 +194,17 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
 
 kernel void gdn_norm(device const float* o_part [[buffer(0)]], device const ushort* proj [[buffer(1)]], device const float* norm_w [[buffer(2)]],
                      device ushort* out [[buffer(3)]], constant GdnParams& p [[buffer(4)]],
+#if STEP_STATE
+                     device const StepState* st [[buffer(15)]],
+#endif
                      uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
   const uint t = sg / p.hv, h = sg % p.hv;
+#if STEP_STATE
+  if (st->done || t >= st->t_this_step) return;
+#else
   if (t >= p.t_active) return;
+#endif
   float ob[VR], ss = 0.0f;
   for (uint i = 0; i < VR; i++) { ob[i] = round_bf16(o_part[t * p.out_stride + h * DV + lane + 32u * i]); ss = fma(ob[i], ob[i], ss); }
   ss = simd_sum(ss);

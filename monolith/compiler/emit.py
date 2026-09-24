@@ -39,13 +39,19 @@ class _Ctx:
     windows: Dict[str, Tuple[str, int]] = field(default_factory=dict)      # pack entry name -> (buffer, offset)
     row_scales: Dict[str, Tuple[str, int]] = field(default_factory=dict)
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
+    dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     counter: int = 0
 
     # ---- helpers -----------------------------------------------------------------------------------------------
     def kernel(self, key: str, source: str, function: str, macros: Dict[str, str]) -> str:
+        macros = dict(macros)
+        if self.dynamic_t:
+            macros["STEP_STATE"] = "1"
+        if "struct StepState" not in source:
+            source = source.replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1)
         k = f"{function}|{key}|{kernels.macro_key(macros)}"
         if k not in self.program.kernels:
-            self.program.kernels[k] = KernelSpec(source, function, dict(macros))
+            self.program.kernels[k] = KernelSpec(source, function, macros)
         return k
 
     def params(self, name: str, data: bytes) -> str:
@@ -64,6 +70,8 @@ class _Ctx:
         return (-(-(self.n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
 
     def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str) -> None:
+        if self.dynamic_t and name != "advance" and not any(b[0] == 15 for b in bindings):
+            bindings = list(bindings) + [(15, self.program.step_state, 0)]
         self.program.ops.append(OpSpec(kernel, bindings, tuple(grid), tuple(tg), True, [], name))
 
     def shape(self, v: Value) -> Tuple[int, ...]:
@@ -169,7 +177,7 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
     chunk = 64
-    macros = dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1")
+    macros = dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1")     # position always comes from StepState
     src = kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_decode.metal")
     kd, km = ctx.kernel("gqa", src, "gqa_decode", macros), ctx.kernel("gqa", src, "gqa_merge", macros)
     rep = heads // kv
@@ -184,9 +192,9 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     st = ctx.program.step_state
     grid, tg = ctx.crew_grid()
     ctx.add(kd, [(0, proj.name, 0), (1, kc.name, 0), (2, vc.name, 0), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
-                 (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, part_o, 0), (8, part_md, 0), (9, prm, 0), (10, st, 0)],
+                 (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, part_o, 0), (8, part_md, 0), (9, prm, 0), (15, st, 0)],
             grid, tg, op.kind)
-    ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, proj.name, 0), (3, out.name, 0), (4, prm, 0), (5, st, 0)],
+    ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, proj.name, 0), (3, out.name, 0), (4, prm, 0), (15, st, 0)],
             (ctx.t * heads, 1, 1), (32, 1, 1), "gqa_merge")
 
 
@@ -233,12 +241,15 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "gemv": _gemv, "lm_h
             "gdn_mixer": _gdn, "argmax": _argmax}
 
 
-def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: int, eos: int = -1, ring_capacity: int = 4096,
-                    layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES) -> Program:
-    """Lower ``model``, run the ``passes``, check coverage on ``profile`` and emit the step program for a static
-    ``T = t``."""
+def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: int = -1, ring_capacity: int = 4096,
+                    layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False) -> Program:
+    """Lower ``model``, run the ``passes``, check coverage on ``profile`` and emit the step program: for a static
+    ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t_max`` read from
+    ``StepState.t_this_step`` at run time (the prefill-chunk program; kernels compiled at ``t_max``)."""
     layout = layout or StepStateLayout()
-    if t < 1 or t > layout.t_max:
+    if dynamic_t:
+        t = layout.t_max
+    if t is None or t < 1 or t > layout.t_max:
         raise ValueError(f"compile_program: T = {t} must be within 1..t_max = {layout.t_max}")
     g = Graph("step")
     token = model.lower(g)
@@ -247,7 +258,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: int, e
         p(g)
     check_coverage(g, profile)
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
-    ctx = _Ctx(program, pack, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg)
+    ctx = _Ctx(program, pack, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, dynamic_t=dynamic_t)
     _pack_windows(ctx, pack.dir / pack.manifest["pack"])
     hoisted = {op.attrs["stat_value"]: pack.slab_info(op.inputs[1].name).n_blocks for op in g.ops if op.kind == "gemv" and op.attrs.get("stat_value")}
     for v in g.values.values():
