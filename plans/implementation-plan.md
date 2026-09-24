@@ -220,6 +220,14 @@ embedding-fed one keeps its dispatch): 199 instead of 247 dispatches per decode 
 0–1 µs per GEMV at the 0.8B's and the 27B's shapes, and a *serial* sum of the partials in the consumer costs a load
 latency per partial (~2 µs for 64) — now lane-parallel with one `simd_sum`.
 
+*Status (2026-09-24, chunked prefill and dynamic T, #30 partial).* Every kernel can read `T` from
+`StepState.t_this_step` (`STEP_STATE=1`, the StepState bound at slot 15, an early return after `done`); the
+compiler emits a **dynamic-T program** (kernels at `t_max`) for prefill, and `Session.generate` feeds a prompt of
+any length in chunks of `t_max` tokens, the host writing each chunk's tokens, length and the new `prefill_left`
+counter (the advance emits a token only after the last chunk), then replays the static T = 1 decode program. The
+same machinery is what the DSpark round needs (T = 1 + L per step, design §5.7). Verified against a second HF golden
+with a 19-token prompt (3 chunks of 8, 8 and 3 tokens).
+
 ### M4 — Compiler and end-to-end decode · 4 ew
 
 * IR (typed graph, symbolic `T`/context, op metadata: reads/writes, block domain, class, cost).

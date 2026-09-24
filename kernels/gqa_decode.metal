@@ -70,7 +70,7 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
                        device const float* q_norm [[buffer(5)]], device const float* k_norm [[buffer(6)]],
                        device float* part_o [[buffer(7)]], device float* part_md [[buffer(8)]], constant GqaParams& p [[buffer(9)]],
 #if STEP_STATE
-                       device const StepState* st [[buffer(10)]],
+                       device const StepState* st [[buffer(15)]],
 #endif
                        uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
@@ -170,7 +170,7 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
 kernel void gqa_merge(device const float* part_o [[buffer(0)]], device const float* part_md [[buffer(1)]], device const ushort* qkvg [[buffer(2)]],
                       device ushort* out [[buffer(3)]], constant GqaParams& p [[buffer(4)]],
 #if STEP_STATE
-                      device const StepState* st [[buffer(5)]],
+                      device const StepState* st [[buffer(15)]],
 #endif
                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;

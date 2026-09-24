@@ -1,15 +1,25 @@
 // rmsnorm_stat: stat[t] = Σ_k h[t][k]² over a BF16 row (one SIMD-group per token; K % 8 == 0). The consumer
 // (gemv_T with NORM=1, stat_parts = 1) turns it into r[t] = rsqrt(stat/K + eps). The standalone form of the
 // statistic; the fuse pass replaces it by the producing GEMV's STAT_OUT partials wherever it can (design §5.1).
+#ifndef STEP_STATE
+#define STEP_STATE 0
+#endif
 struct StatParams { uint k; uint t_active; uint pad0; uint pad1; };
 
 static inline float bf16lo(uint u) { return as_type<float>(u << 16); }
 static inline float bf16hi(uint u) { return as_type<float>(u & 0xFFFF0000u); }
 
 kernel void rmsnorm_stat(device const ushort* h [[buffer(0)]], device float* stat [[buffer(1)]], constant StatParams& p [[buffer(2)]],
+#if STEP_STATE
+                         device const StepState* st [[buffer(15)]],
+#endif
                          uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
+#if STEP_STATE
+  if (st->done || t >= st->t_this_step) return;
+#else
   if (t >= p.t_active) return;
+#endif
   device const uint4* row = (device const uint4*)(h + (ulong)t * p.k);
   float s = 0.0f;
   for (uint j = lane; j < p.k / 8u; j += 32u) {

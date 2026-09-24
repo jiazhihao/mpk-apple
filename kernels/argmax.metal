@@ -3,6 +3,9 @@
 //   argmax_partial: SIMD-group sg scans static slices of 256-logit spans (32 lanes × 8 contiguous logits = one
 //                   coalesced 512-byte read per span) for each token and writes its (max, index) partial;
 //   argmax_final:   one SIMD-group per token folds the n_sg partials in order and writes token[t].
+#ifndef STEP_STATE
+#define STEP_STATE 0
+#endif
 struct ArgmaxParams { uint vocab; uint t_active; uint n_sg; uint n_spans; };
 
 static inline float bf16f(ushort u) { return as_type<float>(uint(u) << 16); }
@@ -23,10 +26,19 @@ static inline void simd_argmax(thread float& best, thread uint& bi) {
 
 kernel void argmax_partial(device const ushort* logits [[buffer(0)]], device float* part_val [[buffer(1)]], device uint* part_idx [[buffer(2)]],
                            constant ArgmaxParams& p [[buffer(3)]],
+#if STEP_STATE
+                           device const StepState* st [[buffer(15)]],
+#endif
                            uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
   if (sg >= p.n_sg) return;
-  for (uint t = 0; t < p.t_active; t++) {
+#if STEP_STATE
+  if (st->done) return;
+  const uint T_act = st->t_this_step;
+#else
+  const uint T_act = p.t_active;
+#endif
+  for (uint t = 0; t < T_act; t++) {
     float best = -INFINITY;
     uint bi = 0xFFFFFFFFu;
     device const ushort* row = logits + (ulong)t * p.vocab;
@@ -50,9 +62,16 @@ kernel void argmax_partial(device const ushort* logits [[buffer(0)]], device flo
 
 kernel void argmax_final(device const float* part_val [[buffer(0)]], device const uint* part_idx [[buffer(1)]], device int* token [[buffer(2)]],
                          constant ArgmaxParams& p [[buffer(3)]],
+#if STEP_STATE
+                         device const StepState* st [[buffer(15)]],
+#endif
                          uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
+#if STEP_STATE
+  if (st->done || t >= st->t_this_step) return;
+#else
   if (t >= p.t_active) return;
+#endif
   float best = -INFINITY;
   uint bi = 0xFFFFFFFFu;
   for (uint i = lane; i < p.n_sg; i += 32u) better(best, bi, part_val[t * p.n_sg + i], part_idx[t * p.n_sg + i]);

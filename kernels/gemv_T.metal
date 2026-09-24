@@ -49,6 +49,9 @@
 #ifndef T_STATIC
 #define T_STATIC 0
 #endif
+#ifndef STEP_STATE
+#define STEP_STATE 0                 // 1: T comes from the bound StepState (buffer 15) and the kernel returns at once after `done`
+#endif
 #define KL (K / 32u)                                   // columns per lane
 #define WPW WEIGHTS_PER_WORD
 #define XW (WPW / 8u)                                  // uint4 words of bf16 activations per weight word
@@ -97,12 +100,18 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if STAT_OUT
                    device float* stat_out [[buffer(8)]],
 #endif
+#if STEP_STATE
+                   device const StepState* st [[buffer(15)]],
+#endif
                    uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
-#if T_STATIC
+#if STEP_STATE
+  if (st->done) return;
+  const uint T_act = st->t_this_step;          // dynamic T (≤ the compiled T), design §5.7
+#elif T_STATIC
   const uint T_act = T;                        // compile-time T (plain decode programs, benches)
 #else
-  const uint T_act = p.t_active;               // <= T; tokens beyond it are skipped (dynamic T reads StepState later)
+  const uint T_act = p.t_active;               // <= T; tokens beyond it are skipped
 #endif
 #if NORM
   float rn[T];                                 // the per-token RMSNorm scale, from the statistic's partial sums

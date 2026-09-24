@@ -17,7 +17,8 @@ Status (2026-09-24): design, plan, surveys and hardware characterization (M3 Pro
 is being built as stacked PRs (roadmap issue #1): skeleton + registries, format plugins, `pack_weights`, the GEMV
 harness and M1 study, runtime core v1 (ICB + host pump + token ring + StepState), and the layer library with the
 first model package (`monolith/models/qwen3_5`), the M3 kernels, and compiler v0: the 0.8B decodes end to end on the
-GPU from one replayed encode and reproduces its HF golden (`python -m monolith.generate`). Next: the fusion passes
+GPU from one replayed encode and reproduces its HF goldens, prompts of any length fed in chunks of `t_max`
+(`python -m monolith.generate`). Next: the fusion passes
 and MLX parity (M5), dynamic T and DSpark (M6). Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order

@@ -57,6 +57,7 @@ class StepStateLayout:
             Field("error", DType.U32, doc="non-zero: a serial op detected an inconsistency"),
             Field("ring_head", DType.U32, doc="token ring: next slot the GPU writes"),
             Field("ring_tail", DType.U32, doc="token ring: next slot the host reads (host-written)"),
+            Field("prefill_left", DType.U32, doc="prompt chunks still to feed after this step; the advance emits a token only at 0"),
         ]
         self.offsets: Dict[str, int] = {}
         off = 0

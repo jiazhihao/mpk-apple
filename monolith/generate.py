@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Generate with the step program on the GPU (plan M4, v0): a prefill program at ``T = P`` (one step) and a decode
-program at ``T = 1`` replayed from one encode, sharing weights, states and StepState; tokens come back through the
-ring. The prompt must fit one step (``P ≤ t_max``, 8 by default); chunked prefill comes with the dynamic-T work.
+"""Generate with the step program on the GPU (plan M4): the prompt is fed in chunks of ``t_max`` tokens through a
+dynamic-T prefill program (T read from StepState per step, the last chunk shorter), then a decode program at
+``T = 1`` is replayed from one encode; all programs share weights, states, StepState and the ring, and tokens come
+back through the ring.
 
     python -m monolith.generate --model ~/models/<ckpt> --pack <pack dir> --prompt "The capital of France is" -n 48
 """
@@ -58,10 +59,12 @@ class Session:
         self.buffers: Optional[Dict[str, Any]] = None
 
     def engine(self, t: int):
+        """The engine for a static ``T = t``; ``t = 0`` is the dynamic-T prefill program."""
         from .runtime import Engine
 
         if t not in self.engines:
-            prog = compile_program(self.model, self.pack, self.profile, t=t, eos=self.eos, ring_capacity=self.ring_capacity, layout=self.layout)
+            prog = compile_program(self.model, self.pack, self.profile, t=None if t == 0 else t, dynamic_t=(t == 0), eos=self.eos,
+                                   ring_capacity=self.ring_capacity, layout=self.layout)
             eng = Engine(prog, self.dev, buffers=self.buffers)
             if self.buffers is None:
                 self.buffers = dict(eng.buffers)
@@ -79,13 +82,23 @@ class Session:
 
     def generate(self, prompt_ids: List[int], max_new_tokens: int, *, steps_per_cb: int = 8, in_flight: int = 3) -> Generation:
         p = len(prompt_ids)
-        if not 1 <= p <= self.layout.t_max:
-            raise ValueError(f"the prompt must have 1..{self.layout.t_max} tokens in v0 (chunked prefill is not implemented), got {p}")
+        if p < 1:
+            raise ValueError("the prompt must have at least one token")
         self.reset()
-        pre = self.engine(p)
-        pre.buffers[pre.program.step_state].write(self.layout.pack({"t_this_step": p, "pending_tokens": list(prompt_ids)}), 0)
-        r1 = pre.run(1, steps_per_cb=1, in_flight=1)
-        tokens = list(r1.tokens)
+        t_max = self.layout.t_max
+        chunks = [list(prompt_ids[i: i + t_max]) for i in range(0, p, t_max)]
+        pre = self.engine(0)
+        st = pre.buffers[pre.program.step_state]
+        prefill_ms = 0.0
+        tokens: List[int] = []
+        for k, chunk in enumerate(chunks):
+            # the host writes each chunk's tokens and length; the advance emits only after the last chunk
+            state = self.layout.unpack(st.read(0, self.layout.size))
+            state.update(t_this_step=len(chunk), pending_tokens=chunk, prefill_left=len(chunks) - 1 - k)
+            st.write(self.layout.pack(state), 0)
+            r1 = pre.run(1, steps_per_cb=1, in_flight=1)
+            prefill_ms += r1.gpu_ms
+            tokens += r1.tokens
         dec_ms = dec_wall = host = 0.0
         steps = 0
         if max_new_tokens > 1 and not r1.done:
@@ -93,7 +106,7 @@ class Session:
             r2 = dec.run(max_new_tokens - 1, steps_per_cb=steps_per_cb, in_flight=in_flight)
             tokens += r2.tokens
             dec_ms, dec_wall, host, steps = r2.gpu_ms, r2.wall_ms, r2.host_busy_ms, r2.steps
-        return Generation(tokens, r1.gpu_ms, dec_ms, dec_wall, host, steps)
+        return Generation(tokens[:max_new_tokens], prefill_ms, dec_ms, dec_wall, host, steps)
 
     def read(self, name: str) -> bytes:
         eng = next(iter(self.engines.values()))
@@ -131,7 +144,7 @@ def main(argv=None) -> int:
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0
     print(tok.decode(gen.tokens))
-    print(f"\n# {len(gen.tokens)} tokens; prefill {gen.prefill_ms:.1f} ms (T={len(ids)}); decode {gen.ms_per_token:.2f} ms/token GPU "
+    print(f"\n# {len(gen.tokens)} tokens; prefill {gen.prefill_ms:.1f} ms ({len(ids)} prompt tokens); decode {gen.ms_per_token:.2f} ms/token GPU "
           f"({1000 / gen.ms_per_token:.1f} tok/s), wall {gen.decode_wall_ms / max(1, gen.steps):.2f} ms/token, host busy "
           f"{100 * gen.host_busy_ms / max(gen.decode_wall_ms, 1e-9):.1f} %; total wall {wall:.1f} s incl. compile", file=sys.stderr)
     return 0
