@@ -6,6 +6,9 @@
 python3.13 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev,oracle]"        # oracle = torch/safetensors/transformers, needed for goldens and kernel oracles
 pytest tests/contract                 # no GPU, runs on any machine
+cmake -S . -B build -G Ninja -DPython_EXECUTABLE=$(pwd)/.venv/bin/python && cmake --build build   # the Metal runtime module
+pytest tests/kernels                  # GPU kernel tests (skipped automatically when the module is not built)
+python tools/bench/gemv_bench.py --format fp8_e4m3 --shape 17408x5120     # a kernel bench (see tools/bench/README.md)
 ./probes/run_all.sh                   # hardware characterization (Apple GPU, ~5 min)
 ```
 
