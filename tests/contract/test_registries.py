@@ -52,6 +52,9 @@ def test_format_registry_instantiates_once():
         def pack(self, spec, layout):
             raise NotImplementedError
 
+        def unpack_pack(self, data, info):
+            raise NotImplementedError
+
     try:
         inst = FORMATS.get("test_fmt")
         assert isinstance(inst, F) and inst.name == "test_fmt"

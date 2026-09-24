@@ -45,11 +45,22 @@ class DequantSpec:
 
 
 class Format(ABC):
-    """A storage format plugin."""
+    """A storage format plugin.
+
+    The MSL side of the plugin is ``msl_decode``: a snippet the GEMV template pastes in, which must define
+
+    * ``constant uint WEIGHTS_PER_WORD`` — weights held by one 16-byte word of the lane-row unit;
+    * ``constant uint SCALE_GROUP`` — weights per block scale (0 = no block scales; the scale bytes follow the
+      payload inside the unit, one E4M3 byte per group for NVFP4, one ``half`` per group for INT8);
+    * ``static inline void decode_word(uint4 q, thread float* out)`` — the raw codes of one word as floats; block
+      and tensor scales are applied by the template, not here.
+    """
 
     name: str = ""
-    msl_decode: str = ""      # MSL snippet used by the gemv template: decodes one 16-byte word into weights
+    msl_decode: str = ""
     bytes_per_weight: float = 0.0
+    weights_per_word: int = 0
+    scale_group: int = 0
 
     @abstractmethod
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:
@@ -60,5 +71,13 @@ class Format(ABC):
         """Exact float32 ``[N, K]`` numpy array — the reference the numerics contract is defined against."""
 
     @abstractmethod
-    def pack(self, spec: DequantSpec, layout: PackLayout) -> bytes:
-        """The block-lane-major pack the kernels stream."""
+    def pack(self, spec: DequantSpec, layout: PackLayout) -> Tuple[bytes, Any]:
+        """``(bytes, PackInfo)``: the block-lane-major pack the kernels stream, and its geometry."""
+
+    @abstractmethod
+    def unpack_pack(self, data: bytes, info: Any) -> DequantSpec:
+        """Inverse of :meth:`pack` (round-trip tests; the re-encode fallback never needs it)."""
+
+    def quantize(self, w: Any) -> DequantSpec:
+        """Quantize a float32 ``[N, K]`` array into this format (load-time re-quantization, synthetic tests)."""
+        raise NotImplementedError(f"format {self.name!r} cannot quantize")
