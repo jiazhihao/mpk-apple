@@ -40,6 +40,7 @@ class _Ctx:
     row_scales: Dict[str, Tuple[str, int]] = field(default_factory=dict)
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
+    tuner: Any = None                                                     # compiler.autotune.Autotuner or None
     counter: int = 0
 
     # ---- helpers -----------------------------------------------------------------------------------------------
@@ -68,6 +69,13 @@ class _Ctx:
 
     def crew_grid(self) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
         return (-(-(self.n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
+
+    def geometry(self, mode: str, n_blocks: int) -> Tuple[int, Tuple[int, int, int], Tuple[int, int, int]]:
+        """(n_sg, grid, threadgroup) for an autotuned geometry mode."""
+        if mode == "block":
+            return n_blocks, (-(-(n_blocks * 32) // 64), 1, 1), (64, 1, 1)
+        n_sg = self.n_sg * (2 if mode == "crew2" else 1)
+        return n_sg, (-(-(n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
 
     def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str, **meta: Any) -> None:
         if self.dynamic_t and name != "advance" and not any(b[0] == 15 for b in bindings):
@@ -152,21 +160,29 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
         residual = rest[0]
     y = op.outputs[0]
     info = ctx.pack.slab_info(w.name)
+    choice = ctx.tuner.tune_gemv(info, ctx.t, op.attrs.get("epilogue"), stat is not None) if ctx.tuner is not None else None
+    fuse_norm = bool(choice and choice.fuse_norm)
+    rg = int(choice.macros["RG"]) if choice else None
     x_binding = (x.name, 0)
-    if stat is not None:
+    if stat is not None and not fuse_norm:
         x_binding = (_norm_apply(ctx, x, stat, nw, float(op.attrs.get("eps", 1e-6)), f"{y.name}.xn"), 0)
     stat_out = op.attrs.get("stat_value")
-    macros = kernels.gemv_macros(info, t=ctx.t, epilogue=op.attrs.get("epilogue"), out_bf16=True, stat_out=stat_out is not None)
+    macros = kernels.gemv_macros(info, t=ctx.t, rg=rg, epilogue=op.attrs.get("epilogue"), out_bf16=True, stat_out=stat_out is not None,
+                                 norm=fuse_norm)
     k = ctx.kernel(f"gemv_T|{info.format}", kernels.gemv_source(info.format), "gemv_T", macros)
-    prm = ctx.params("gemv", kernels.gemv_params(info.n, info.n_blocks, ctx.n_sg, ctx.t, eps=0.0, stat_parts=1))
+    n_sg, grid, tg = ctx.geometry(choice.grid_mode if choice else "crew", info.n_blocks)
+    prm = ctx.params("gemv", kernels.gemv_params(info.n, info.n_blocks, n_sg, ctx.t, eps=float(op.attrs.get("eps", 1e-6)),
+                                                 stat_parts=ctx.stat_parts.get(stat.name, 1) if stat is not None else 1))
     bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, *x_binding), (3, y.name, 0), (4, prm, 0)]
+    if fuse_norm:
+        bindings += [(5, stat.name, 0), (6, *ctx.windows[nw.name])]
     if residual is not None:
         bindings.append((7, residual.name, 0))
     if stat_out is not None:
         bindings.append((8, stat_out, 0))
         ctx.stat_parts[stat_out] = info.n_blocks
-    grid, tg = ctx.crew_grid()
-    ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", kind=op.kind, bytes=int(info.nbytes), format=info.format, n=info.n, k=info.k)
+    ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", kind=op.kind, bytes=int(info.nbytes), format=info.format, n=info.n, k=info.k,
+            rg=int(macros["RG"]), geometry=choice.grid_mode if choice else "crew", fused_norm=fuse_norm)
 
 
 def _gqa(ctx: _Ctx, op: Op) -> None:
@@ -208,7 +224,9 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     ps = a["proj_segments"]                                           # local -> (value index, column offset, columns)
     kd = hk * dk
     ab_separate = ps["in_proj_a"][0] != ps["in_proj_qkv"][0]
-    macros = kernels.gdn_macros(dk, dv, conv_width=cw, t=ctx.t)
+    gch = ctx.tuner.tune_gdn(hv, hk, dk, dv, cw, ctx.t) if ctx.tuner is not None else None
+    macros = kernels.gdn_macros(dk, dv, conv_width=cw, t=ctx.t, slice_cols=int(str(gch.macros["SL"]).rstrip("u")) if gch else 8,
+                                slices_per_block=int(str(gch.macros["SPB"]).rstrip("u")) if gch else 4)
     src = kernels.gdn_source()
     kmix, knorm = ctx.kernel("gdn", src, "gdn_mixer", macros), ctx.kernel("gdn", src, "gdn_norm", macros)
     o_part = ctx.scratch("gdn.o_part", kernels.gdn_workspace(ctx.t, hv, dv))
@@ -264,7 +282,8 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "gemv": _gemv, "lm_h
 
 
 def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: int = -1, ring_capacity: int = 4096,
-                    layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False) -> Program:
+                    layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
+                    tuner: Any = None) -> Program:
     """Lower ``model``, run the ``passes``, check coverage on ``profile`` and emit the step program: for a static
     ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t_max`` read from
     ``StepState.t_this_step`` at run time (the prefill-chunk program; kernels compiled at ``t_max``)."""
@@ -280,7 +299,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
         p(g)
     check_coverage(g, profile)
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
-    ctx = _Ctx(program, pack, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, dynamic_t=dynamic_t)
+    ctx = _Ctx(program, pack, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, dynamic_t=dynamic_t, tuner=tuner)
     _pack_windows(ctx, pack.dir / pack.manifest["pack"])
     hoisted = {op.attrs["stat_value"]: pack.slab_info(op.inputs[1].name).n_blocks for op in g.ops if op.kind == "gemv" and op.attrs.get("stat_value")}
     for v in g.values.values():

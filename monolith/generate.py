@@ -45,7 +45,7 @@ class Session:
 
     def __init__(self, model: Model, pack_dir: str, profile: Optional[Profile] = None, *, layout: Optional[StepStateLayout] = None,
                  eos: int = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
-                 min_p: float = 0.0, seed: int = 0) -> None:
+                 min_p: float = 0.0, seed: int = 0, autotune: bool = True) -> None:
         from .bench import profile_for_device
         from .runtime import _native as nt
 
@@ -62,6 +62,12 @@ class Session:
         model.sampler = GreedySampler(prefix="sampler.") if temperature <= 0 else StochasticSampler(temperature, top_k, top_p, min_p, seed, prefix="sampler.")
         self.engines: Dict[int, Any] = {}
         self.buffers: Optional[Dict[str, Any]] = None
+        self.tuner = None
+        if autotune:
+            from .compiler.autotune import Autotuner
+
+            chip = info.name.replace(" ", "-").lower()
+            self.tuner = Autotuner(self.dev, info.gpu_cores, str(Path(pack_dir) / f"autotune.{chip}.json"))
 
     def engine(self, t: int):
         """The engine for a static ``T = t``; ``t = 0`` is the dynamic-T prefill program."""
@@ -69,7 +75,9 @@ class Session:
 
         if t not in self.engines:
             prog = compile_program(self.model, self.pack, self.profile, t=None if t == 0 else t, dynamic_t=(t == 0), eos=self.eos,
-                                   ring_capacity=self.ring_capacity, layout=self.layout)
+                                   ring_capacity=self.ring_capacity, layout=self.layout, tuner=self.tuner)
+            if self.tuner is not None:
+                self.tuner.save(self.dev.info().name)
             eng = Engine(prog, self.dev, buffers=self.buffers)
             if self.buffers is None:
                 self.buffers = dict(eng.buffers)
@@ -145,6 +153,7 @@ def main(argv=None) -> int:
     ap.add_argument("--top-p", type=float, default=0.0)
     ap.add_argument("--min-p", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--no-autotune", action="store_true", help="compile with the default kernel geometry (no per-op tuning cache)")
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
 
@@ -152,7 +161,7 @@ def main(argv=None) -> int:
     ids = tok.encode(a.prompt, add_special_tokens=False).ids
     t0 = time.time()
     sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1 if a.no_eos else None,
-                        temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed)
+                        temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed, autotune=not a.no_autotune)
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0
     print(tok.decode(gen.tokens))

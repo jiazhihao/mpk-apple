@@ -124,3 +124,10 @@ per row); per-shape geometry (RG, one block per SIMD-group, threadgroups per cor
 overhead, not work — so fusing the scaling into the small BF16 GEMVs may win here where it lost on the ALU-bound
 NVFP4 shapes: another per-op autotune decision. `mlx-lm` decodes the same model at 6.2 ms per token; parity needs
 ~0.65 ms of the 1.9 ms between the sum of op minima and the streamed-bytes bound.
+
+**Autotuned (#34 part 1) [M].** Per shape, the autotuner's winners on the M5 Pro: the small-K layer GEMVs move to one
+block per SIMD-group with RG 4–8 (8224×1024: 65.6 → 58.9 µs with the norm fused; 5120×1024: 40.7 → 37.6 µs fused;
+1024×3584 residual: 34.6 → 28.6 µs; 1024×2048 residual: 20.9 → 17.6 µs), the `gate|up` 7168×1024 keeps the crew at
+RG 4 with the norm fused (53.8 → 51.9 µs), the `lm_head` keeps its default (1.70 ms), the 16-head GDN mixer takes
+SL 4 / SPB 4 (24.1 → 20.7 µs). The decode step: **6.45 ms per token vs 6.91 default** (three paired runs each), the
+golden unchanged; `mlx-lm` 0.31.3: 6.2 ms.

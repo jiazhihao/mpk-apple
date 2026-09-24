@@ -281,3 +281,40 @@ def test_stochastic_sampler_lowers_and_compiles(tmp_path):
     assert prog.buffers[next(b for b in prog.buffers if ".sample.hist." in b)].nbytes == 65536 * 4
     with pytest.raises(ValueError):
         StochasticSampler(temperature=0.0)
+
+
+def test_emitter_honors_the_tuner(tmp_path):
+    """A tuner's choices change the GEMV macros, geometry and the norm path (fused → no norm_apply dispatch, the
+    statistic and weight bound on the GEMV) and the GDN slice geometry; the program stays otherwise identical."""
+    from monolith.compiler import compile_program
+    from monolith.compiler.autotune import Choice
+    from monolith.core.profile import Profile
+
+    class Stub:
+        def __init__(self):
+            self.calls = []
+
+        def tune_gemv(self, info, t, epilogue, norm_fed):
+            self.calls.append(("gemv", info.n, info.k, epilogue, norm_fed))
+            return Choice({"RG": "8"}, "block", fuse_norm=norm_fed)
+
+        def tune_gdn(self, hv, hk, dk, dv, cw, t):
+            self.calls.append(("gdn", hv, hk))
+            return Choice({"SL": "4u", "SPB": "2u"}, "crew")
+
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
+    stub = Stub()
+    prog = compile_program(m, PackFile(tmp_path / "pack"), prof, t=1, tuner=stub)
+    plain = compile_program(m, PackFile(tmp_path / "pack"), prof, t=1)
+    names = [o.name.split(":")[0] for o in prog.ops]
+    assert names.count("norm_apply") == 0 and [o.name.split(":")[0] for o in plain.ops].count("norm_apply") == 5
+    gemvs = [o for o in prog.ops if o.name.startswith("gemv:") or o.name.startswith("lm_head:")]
+    assert all(prog.kernels[o.kernel].macros["RG"] == "8" and o.threadgroup == (64, 1, 1) for o in gemvs)
+    normed = [o for o in gemvs if o.meta["fused_norm"]]
+    assert len(normed) == 5 and all(any(b[0] == 5 for b in o.bindings) and any(b[0] == 6 for b in o.bindings) for o in normed)
+    gdn = next(o for o in prog.ops if o.name == "gdn_mixer")
+    assert prog.kernels[gdn.kernel].macros["SL"] == "4u" and prog.kernels[gdn.kernel].macros["SPB"] == "2u"
+    assert any(c[0] == "gdn" for c in stub.calls) and sum(c[0] == "gemv" for c in stub.calls) == len(gemvs)
