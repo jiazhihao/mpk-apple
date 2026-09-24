@@ -90,4 +90,51 @@ class Queue {
   std::shared_ptr<QueueImpl> impl;
 };
 
+// ---------------------------------------------------------------------------------------------------------------
+// The step program (design §5.1, §5.4): the ops of one step encoded ONCE into an indirect command buffer and
+// replayed by the host pump, which keeps a few bounded command buffers in flight, drains the token ring and stops
+// when StepState.done is set. Pipelines used in an ICB must be created with support_icb = true; ICBs cannot carry
+// setBytes, so every op reads its parameters from buffers.
+struct IcbImpl;
+struct RunnerImpl;
+
+class Icb {
+ public:
+  // `ops` in program order; a barrier after an op orders everything after it behind it (ICB commands are concurrent
+  // otherwise). Buffer offsets must fit 32 bits (Metal's ICB limit) — slabs are mapped so that they do.
+  Icb(const Device& d, const std::vector<Dispatch>& ops);
+  ~Icb();
+  size_t count() const;
+  std::shared_ptr<IcbImpl> impl;
+};
+
+struct RunnerStats {
+  uint64_t steps_submitted = 0;
+  uint64_t command_buffers = 0;
+  double gpu_ms = 0;          // sum of the command buffers' GPU times
+  double wall_ms = 0;         // wall time of run()
+  double host_busy_ms = 0;    // CPU time spent by the pump thread (encode + drain), from getrusage
+  bool done = false;          // StepState.done was observed
+  std::string error;
+};
+
+class Runner {
+ public:
+  // `resources`: every buffer the program touches (ICB execution needs them made resident explicitly).
+  // `step_state` holds the StepState struct; `done_offset` / `ring_head_offset` / `ring_tail_offset` are its field
+  // offsets. `ring` is the token ring: `ring_capacity` 8-byte slots, each `(sequence << 32) | token` written by the
+  // GPU as one aligned store; the host drains by sequence and publishes `ring_tail` for the GPU's overflow check.
+  Runner(const Device& d, const Icb& icb, const std::vector<Dispatch>& ops, std::vector<const Buffer*> resources,
+         const Buffer& step_state, uint32_t done_offset, uint32_t ring_head_offset, uint32_t ring_tail_offset,
+         const Buffer& ring, uint32_t ring_capacity);
+  ~Runner();
+  // Replays the step program up to `max_steps` times: `steps_per_cb` steps per command buffer (the max_cb_ms
+  // control), `in_flight` command buffers queued ahead. `reencode` = the fallback path (fresh encoder per step,
+  // same ops) instead of ICB replay. Blocks until done / max_steps; tokens are collected as buffers complete.
+  RunnerStats run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode);
+  // Tokens drained so far (in ring order); cleared by the call.
+  std::vector<int32_t> drain();
+  std::shared_ptr<RunnerImpl> impl;
+};
+
 }  // namespace monolith

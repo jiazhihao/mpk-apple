@@ -125,6 +125,14 @@ speculation stand on their own — drop the bandwidth claim from the design and 
 
 ### M2 — Runtime core and weight packer · 3 ew · parallel with M1
 
+* [x] Runtime core v1 (#16, #17, #18; 2026-09-24): device (IORegistry core count, GPU family), shared and
+  `newBufferWithBytesNoCopy` buffers, runtime-compiled libraries, pipelines, timed dispatches; the ICB builder (all
+  parameters in buffers, 32-bit offsets checked), the re-encode fallback, the host pump (bounded command buffers,
+  `in_flight` ahead, drains the ring after every completion, stops on `StepState.done`), the token ring and the
+  `Program` schema (`program.json` v1) with `Engine`. The two-op toy program replays 1,000 self-advancing steps from
+  one encode (40 command buffers, every token in order, ICB ≡ re-encode bit-for-bit, early exit after `done`; the pump
+  thread busy 7 % of wall at 13 µs steps). Still to come here: the pack loader that binds `manifest.json` slabs,
+  `MTLBinaryArchive` caching, the C API.
 * C++/ObjC++ runtime: device + residency set; mmap'ed pack loader (`newBufferWithBytesNoCopy`, buffers split under
   `maxBufferLength`); pipeline cache (function constants, `MTLBinaryArchive`); `program.json` loader; **ICB builder**
   (per-op parameter records in a buffer — ICBs have no `setBytes` and 32-bit bind offsets, so weights are addressed by

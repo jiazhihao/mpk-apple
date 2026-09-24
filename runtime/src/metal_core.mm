@@ -129,3 +129,145 @@ RunResult Queue::run(const std::vector<Dispatch>& dispatches, bool concurrent) {
 }
 
 }  // namespace monolith
+
+// ---------------------------------------------------------------------------------------------------------------
+// ICB replay and the host pump
+#include <mach/mach.h>
+#include <deque>
+#include <mutex>
+
+namespace monolith {
+
+struct IcbImpl { id<MTLIndirectCommandBuffer> icb; size_t count = 0; };
+
+static void encode_icb_command(id<MTLIndirectComputeCommand> c, const Dispatch& d) {
+  [c setComputePipelineState:d.pipeline->impl->pso];
+  for (auto& b : d.buffers) {
+    if (b.offset > 0xFFFFFFFFull) throw std::runtime_error("ICB buffer offsets must fit 32 bits");
+    [c setKernelBuffer:b.buffer->impl->buf offset:b.offset atIndex:b.index];
+  }
+  for (auto& t : d.threadgroup_memory) [c setThreadgroupMemoryLength:t.second atIndex:t.first];
+  [c concurrentDispatchThreadgroups:MTLSizeMake(d.grid[0], d.grid[1], d.grid[2])
+              threadsPerThreadgroup:MTLSizeMake(d.threadgroup[0], d.threadgroup[1], d.threadgroup[2])];
+  if (d.barrier_after) [c setBarrier];
+}
+
+Icb::Icb(const Device& d, const std::vector<Dispatch>& ops) : impl(std::make_shared<IcbImpl>()) {
+  if (ops.empty()) throw std::runtime_error("Icb: no ops");
+  uint32_t max_bind = 0;
+  for (auto& o : ops) {
+    if (!o.bytes.empty()) throw std::runtime_error("Icb: setBytes is not available in an indirect command buffer; use a parameter buffer");
+    for (auto& b : o.buffers) max_bind = std::max(max_bind, b.index + 1);
+  }
+  MTLIndirectCommandBufferDescriptor* desc = [MTLIndirectCommandBufferDescriptor new];
+  desc.commandTypes = MTLIndirectCommandTypeConcurrentDispatch;
+  desc.inheritBuffers = NO;
+  desc.inheritPipelineState = NO;
+  desc.maxKernelBufferBindCount = max_bind;
+  impl->icb = [d.impl->dev newIndirectCommandBufferWithDescriptor:desc maxCommandCount:ops.size() options:0];
+  if (!impl->icb) throw std::runtime_error("newIndirectCommandBuffer failed");
+  for (size_t i = 0; i < ops.size(); i++) encode_icb_command([impl->icb indirectComputeCommandAtIndex:i], ops[i]);
+  impl->count = ops.size();
+}
+Icb::~Icb() = default;
+size_t Icb::count() const { return impl->count; }
+
+struct RunnerImpl {
+  id<MTLDevice> dev; id<MTLCommandQueue> q;
+  std::shared_ptr<IcbImpl> icb; std::vector<Dispatch> ops;
+  std::vector<id<MTLBuffer>> resources;
+  id<MTLBuffer> state; uint32_t done_off, head_off, tail_off;
+  id<MTLBuffer> ring; uint32_t cap;
+  uint32_t tail = 0;                       // next ring slot the host reads
+  std::vector<int32_t> tokens; std::mutex mu;
+};
+
+Runner::Runner(const Device& d, const Icb& icb, const std::vector<Dispatch>& ops, std::vector<const Buffer*> resources,
+               const Buffer& step_state, uint32_t done_offset, uint32_t ring_head_offset, uint32_t ring_tail_offset,
+               const Buffer& ring, uint32_t ring_capacity)
+    : impl(std::make_shared<RunnerImpl>()) {
+  impl->dev = d.impl->dev; impl->q = [d.impl->dev newCommandQueue];
+  impl->icb = icb.impl; impl->ops = ops;
+  for (auto* r : resources) impl->resources.push_back(r->impl->buf);
+  impl->state = step_state.impl->buf; impl->done_off = done_offset; impl->head_off = ring_head_offset; impl->tail_off = ring_tail_offset;
+  impl->ring = ring.impl->buf; impl->cap = ring_capacity;
+  if (ring.nbytes() < (size_t)ring_capacity * 8) throw std::runtime_error("ring buffer needs 8 bytes per slot (token + sequence)");
+}
+Runner::~Runner() = default;
+
+// CPU time of the CALLING thread only (getrusage would count Metal's driver threads too)
+static double cpu_ms_now() {
+  thread_basic_info_data_t info; mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+  if (thread_info(mach_thread_self(), THREAD_BASIC_INFO, (thread_info_t)&info, &count) != KERN_SUCCESS) return 0;
+  return (info.user_time.seconds + info.system_time.seconds) * 1e3 + (info.user_time.microseconds + info.system_time.microseconds) / 1e3;
+}
+
+// The ring is drained while later command buffers may still be running, so the host must not trust a head counter
+// it reads from the state buffer: writes of an in-flight buffer become visible in no particular order. Every slot
+// therefore carries its own 1-based sequence number in the high 32 bits (one aligned 8-byte store on the GPU); the
+// host takes slots as long as the next expected sequence is present and publishes its tail for the GPU's overflow
+// check. `ring_head` in StepState is the GPU's own counter and is read by the host only after everything completed.
+static void drain_ring(RunnerImpl& r) {
+  const volatile uint64_t* slots = (const volatile uint64_t*)r.ring.contents;
+  std::lock_guard<std::mutex> lk(r.mu);
+  for (;;) {
+    uint64_t v = slots[r.tail % r.cap];
+    if ((uint32_t)(v >> 32) != r.tail + 1) break;
+    r.tokens.push_back((int32_t)(uint32_t)v);
+    r.tail++;
+  }
+  *(volatile uint32_t*)((char*)r.state.contents + r.tail_off) = r.tail;
+}
+
+RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode) {
+  RunnerImpl& r = *impl;
+  RunnerStats st;
+  if (steps_per_cb == 0 || in_flight == 0) throw std::runtime_error("steps_per_cb and in_flight must be >= 1");
+  double t0 = now_ms(), c0 = cpu_ms_now();
+  std::deque<id<MTLCommandBuffer>> pending;
+  auto observe = [&](id<MTLCommandBuffer> cb) {
+    [cb waitUntilCompleted];
+    st.gpu_ms += (cb.GPUEndTime - cb.GPUStartTime) * 1e3;
+    st.command_buffers++;
+    if (cb.error && st.error.empty()) st.error = [cb.error.localizedDescription UTF8String];
+    drain_ring(r);
+    st.done = *(volatile uint32_t*)((char*)r.state.contents + r.done_off) != 0;
+  };
+  while (st.steps_submitted < max_steps && !st.done && st.error.empty()) {
+    @autoreleasepool {
+      uint32_t n = std::min<uint64_t>(steps_per_cb, max_steps - st.steps_submitted);
+      id<MTLCommandBuffer> cb = [r.q commandBuffer];
+      id<MTLComputeCommandEncoder> en = [cb computeCommandEncoder];   // serial: step s+1 starts after step s
+      if (reencode) {
+        for (uint32_t s = 0; s < n; s++)
+          for (auto& d : r.ops) {
+            [en setComputePipelineState:d.pipeline->impl->pso];
+            for (auto& b : d.buffers) [en setBuffer:b.buffer->impl->buf offset:b.offset atIndex:b.index];
+            for (auto& t : d.threadgroup_memory) [en setThreadgroupMemoryLength:t.second atIndex:t.first];
+            [en dispatchThreadgroups:MTLSizeMake(d.grid[0], d.grid[1], d.grid[2]) threadsPerThreadgroup:MTLSizeMake(d.threadgroup[0], d.threadgroup[1], d.threadgroup[2])];
+          }
+      } else {
+        for (auto& b : r.resources) [en useResource:b usage:(MTLResourceUsageRead | MTLResourceUsageWrite)];
+        for (uint32_t s = 0; s < n; s++) [en executeCommandsInBuffer:r.icb->icb withRange:NSMakeRange(0, r.icb->count)];
+      }
+      [en endEncoding];
+      [cb commit];
+      pending.push_back(cb);
+      st.steps_submitted += n;
+    }
+    while (pending.size() >= in_flight) { observe(pending.front()); pending.pop_front(); }
+  }
+  while (!pending.empty()) { observe(pending.front()); pending.pop_front(); }
+  st.wall_ms = now_ms() - t0;
+  st.host_busy_ms = cpu_ms_now() - c0;
+  return st;
+}
+
+std::vector<int32_t> Runner::drain() {
+  drain_ring(*impl);
+  std::lock_guard<std::mutex> lk(impl->mu);
+  std::vector<int32_t> out; out.swap(impl->tokens);
+  return out;
+}
+
+}  // namespace monolith
