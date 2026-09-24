@@ -9,10 +9,38 @@ for speculative decoding (D10, §5.8, [research note](../docs/research/dspark.md
 
 First target: `nvidia/Qwen3.8-27B-NVFP4`, **batch-1 decode latency**, M3/M4/M5 families, macOS 26+.
 Bring-up machines: an M3 Pro, 18-core GPU, 36 GB (21 GB of text weights + state fit in its ~28–30 GB working set; the
-only machine on hand that hosts the model) and an M5 Pro, 20-core GPU, **24 GB** (GPU characterization and kernel work
-only: its 19 GB working-set limit cannot host the 27B).
+only machine on hand that hosts the 27B) and an M5 Pro, 20-core GPU, **24 GB** (19 GB working-set limit). **Revised
+2026-09-24:** the 24 GB machine gets its own first-class target so that every milestone from M4 on is exercised
+end to end on it — the official **Qwen3.5** dense models quantized to NVFP4 by our own packer (§0.1); the 27B stays
+the judged v1 target on the M3 Pro.
 
 ## 0. Scope
+
+### 0.1 Targets by machine (2026-09-24)
+
+The engine is judged on the 27B, but the 24 GB M5 Pro is where most of the work happens, and it must run a real
+NVFP4 model end to end. The choice is constrained by its **19 GB Metal working-set limit** and by what exists as
+*official* checkpoints (Qwen and NVIDIA organizations only; community re-quantizations are not used):
+
+| Checkpoint (official) | Format | Weights on disk | Fits 19 GB with KV/state? | Role |
+|---|---|---|---|---|
+| `nvidia/Qwen3.8-27B-NVFP4` | NVFP4 MLP + `lm_head`, FP8 attention/GDN | ~21 GB | **no** | the judged v1 target — M3 Pro (36 GB) |
+| `nvidia/Qwen3.6-27B-NVFP4` | NVFP4 (ModelOpt 0.45) | 21.9 GB | no | same architecture package as 3.8-27B; M3 Pro only |
+| `nvidia/Qwen3.6-35B-A3B-NVFP4` | NVFP4 MoE | 23.4 GB | no | model-3 (MoE) candidate for M8 — M3 Pro |
+| `Qwen/Qwen3.5-27B` (`-FP8`, `-GPTQ-Int4`) | BF16 / FP8 block-128 / GPTQ | 54 / 27+ / 30.4 GB | no | — |
+| `Qwen/Qwen3.5-9B` | BF16 | 19.3 GB | **no as BF16; yes as NVFP4 (~6–7 GB)** | **the 24 GB target**: quantized by `pack_weights --quantize nvfp4` |
+| `Qwen/Qwen3.5-4B` | BF16 | 9.3 GB | yes (BF16 or NVFP4 ~3 GB) | second 24 GB size; FP8/NVFP4 A/B |
+| `Qwen/Qwen3.5-2B`, `Qwen/Qwen3.5-0.8B` | BF16 | 4 / 1.6 GB | yes | CI-class models; the 0.8B is the checked-in golden |
+| `nvidia/Qwen3.5-{122B-A10B,397B-A17B}-NVFP4` | NVFP4 MoE | 70–220 GB | no | the only official NVFP4 Qwen3.5 checkpoints; no Mac we have |
+
+Consequences: (1) **pack-time NVFP4 quantization** of an official BF16 checkpoint is an engine feature (M2), using
+the ModelOpt recipe our `nvfp4` plugin already decodes (E2M1 codes, E4M3 block-16 scales, per-tensor FP32 scale;
+weight-only, W4A16), so the 9B becomes an NVFP4 model with exactly the byte layout of the NVIDIA checkpoints;
+(2) correctness is still "HF on the dequantized weights" — the quantization's *quality* (perplexity and greedy
+agreement against the BF16 model) is reported, not gated; (3) every gate from M4 on has a 24 GB row (the 9B-NVFP4
+on the M5 Pro) next to the 27B row (M3 Pro); (4) the DSpark drafter for the 9B does not exist publicly — M6 develops
+the round on the 0.8B's public drafter (`satgeze/Qwen3.5-0.8B-DSpark`, Apache-2.0, block 7, 5 layers) and the 27B's on
+the M3 Pro; a 9B drafter is a training job (GPU box) if the 24 GB speculative number is wanted.
 
 **In scope (v1).** Text-only decode for the Qwen3.5-hybrid architecture from the NVFP4/FP8 checkpoint; greedy and
 stochastic sampling on the GPU; DSpark speculative decoding with a public drafter, entirely on the GPU; an extension
@@ -57,6 +85,11 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       parity" and the T-cost curves Apple10-only?
 * [ ] Baselines on the M3 Pro: `mlx-lm` (NVFP4 mode and affine 4-bit) and `llama.cpp` (Q4_K_M) on Qwen3.8-27B and on a
       small same-architecture model: tok/s, effective GB/s, CPU utilization, dispatches and command buffers per token.
+* [ ] **The 24 GB target (M5 Pro).** Fetch `Qwen/Qwen3.5-9B` and `Qwen/Qwen3.5-4B` (official BF16); quantize them to
+      NVFP4 with the packer (M2 item below); HF goldens for both (48 greedy tokens, per-layer hidden states) computed
+      with the HF model on the dequantized weights; baselines on the M5 Pro: `mlx-lm` (BF16 where it fits, its 4-bit
+      affine mode) and `llama.cpp` (Q4_K_M) on the 9B and the 4B — the numbers the 24 GB rows of the M4/M5 gates are
+      measured against. Done for the 0.8B: mlx-lm 0.31.3 decodes it at 161 tok/s on the M5 Pro.
 * [ ] **Drafters.** Fetch the Apache-2.0 DSpark drafters for the target — `DimInfer/Qwen3.8-27B-Dspark-v1` (safetensors
       + GGUF Q8/BF16, trained against the Q4_K_M target) and `gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4` (1.3 GB,
       MLP/o_proj in NVFP4, trained on-policy against an NVFP4 target) — and `Dogacel/Qwen3-8B-DSpark` for model 2.
@@ -154,6 +187,13 @@ Exit: a two-op toy program replayed for 1,000 self-advancing steps from one enco
 no `waitUntilCompleted` on the hot path; the full checkpoint and a drafter pack and verify; the repo skeleton of §2 is
 in place with the registries, the coverage guard stub and the contract tests running in CI.
 
+* [ ] **Pack-time NVFP4 quantization (24 GB target).** `pack_weights --quantize nvfp4[:mlp|:all]` turns an official
+      BF16 checkpoint into the NVIDIA layout: per-tensor FP32 `weight_scale_2` = amax / (6 · 448), E4M3 block-16
+      scales, E2M1 codes with round-to-nearest-even; optional FP8-E4M3 per-tensor for the attention/GDN projections
+      (the 27B's mix). Exact round trip through the format oracle; a quality report (perplexity on a fixed text,
+      greedy agreement vs the BF16 model over 48-token continuations) written next to the pack manifest. The dequantized
+      weights are the reference for every later gate, so this is a pack feature, not a numerics change.
+
 ### M3 — Kernel library v1 · 4 ew
 
 Block bodies + kernel wrappers, each with a torch oracle and a leaf test:
@@ -230,7 +270,9 @@ and MLX parity). Not yet: chunked prefill (prompts > `t_max`), dynamic T, the 27
 
 Exit: (a) small same-architecture model — 48 greedy tokens equal to the HF golden, in CI; (b) 27B-NVFP4 —
 `--num-layers-override 4/8` hidden-state gates, then full-model greedy equal to the reference; (c) decode tok/s ≥ the
-MLX baseline (parity); (d) host < 5 % of a core, no per-token synchronization.
+MLX baseline (parity); (d) host < 5 % of a core, no per-token synchronization. **24 GB rows (M5 Pro):** (b′) the
+9B quantized to NVFP4 by the packer — greedy equal to the HF reference on the dequantized weights; (c′) tok/s ≥
+`mlx-lm` on the 9B on the same machine.
 
 *Status (2026-09-24).* IR (with states, constants and in-place `updates`), the `nn` library, the registries and
 `models/qwen3_5` are in (#26–#28); the model lowers to the design's stage count (5 fused ops per layer + norm
@@ -240,6 +282,9 @@ tree (`tools/pack_weights.py --model`, 97 slabs + 135 aux tensors + RoPE tables 
 cos ≥ 0.9997 (`tests/models/qwen3_5/`); the GPU path needs the M3 kernels and the compiler passes (#29–#32).
 
 ### M5 — Performance pass · 3 ew · **go/no-go #2**
+
+*24 GB row (2026-09-24):* go/no-go #2 is also measured on the 9B-NVFP4 on the M5 Pro (the NVFP4 decode path at a
+real size: 32 layers, hidden 4096, ~6.5 GB per token), next to the 27B on the M3 Pro.
 
 Per-op GPU timestamps → a per-token budget (GB streamed, ms, % of bound) → close the gap: fusion completeness,
 norm-stat hoisting into producer epilogues, `lm_head` cost (4 % of traffic), barrier count, attention at 8 K / 32 K,
@@ -252,6 +297,10 @@ Exit gate: the plain-decode success metric. *If 1.10× is missed but parity hold
 not depend on it — and record why.
 
 ### M6 — DSpark speculative decoding · 4 ew
+
+*24 GB row (2026-09-24):* the round is developed and tested on the M5 Pro with the 0.8B and its public drafter
+(`satgeze/Qwen3.5-0.8B-DSpark`, Apache-2.0 — a poor speculation host, so a correctness and plumbing vehicle, not a
+speedup claim); the speedup gate is the 27B on the M3 Pro. A 9B drafter would need on-policy training (GPU box).
 
 Design §5.8. Everything on the GPU; the host only drains tokens.
 
@@ -288,6 +337,10 @@ experts) if per-op traces show tail skew.
 Exit: a short written result per chip; stealing enabled only for ops where it gains ≥ 2 %.
 
 ### M8 — Generality proof · 3 ew
+
+*24 GB row (2026-09-24):* model 3's MoE candidate is `nvidia/Qwen3.6-35B-A3B-NVFP4` (23.4 GB: M3 Pro only) or the
+official `Qwen/Qwen3.5-35B-A3B` quantized by our packer to ~20 GB — also beyond the M5 Pro; the 4B and 2B are the
+extra dense sizes the 24 GB machine can A/B (BF16 vs NVFP4 vs FP8).
 
 * Model 2, existing ops only: **Qwen3-8B** (dense) with its public DSpark drafter (`Dogacel/Qwen3-8B-DSpark`) — no
   kernel or runtime edits allowed, the CI extension test enforces it, and the drafter contract is exercised with a

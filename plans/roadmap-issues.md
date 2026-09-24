@@ -5,6 +5,8 @@
 **Monolith** (working codename) is a megakernel-style LLM inference engine for Apple silicon (M3 / M4 / M5, macOS 26+): the whole
 generation loop compiled into one GPU-resident static program of fused whole-GPU dispatches, replayed from an indirect command buffer with
 no CPU work on the critical path. First target: `nvidia/Qwen3.8-27B-NVFP4`, batch-1 decode latency, with **DSpark** speculative decoding.
+The 24 GB M5 Pro cannot host the 27B; its first-class target (2026-09-24, plan §0.1) is the official `Qwen/Qwen3.5-9B` (and 4B) quantized to
+NVFP4 by our own packer — no official NVFP4 Qwen3.5 checkpoint of a fitting size exists, and community re-quantizations are not used.
 The engine is model-agnostic by construction and this repository is standalone (code from MPK and other projects is copied in with
 its license headers, never depended on).
 
@@ -29,8 +31,8 @@ token; a 2nd model with zero engine edits and a 3rd model + 2nd format through t
 | M8 Generality proof | model 2 with zero engine edits; model 3; format 2 | 3 ew ‖ M9 |
 | M9 M4/M5 family tuning | per-chip results next to each chip's bound | 3 ew |
 
-Critical path: M0 → M1 → M3 → M4 → M5 → M6. Machines: an M3 Pro (36 GB, hosts the model) and an M5 Pro (24 GB, characterization and
-kernels only). Conventions: standalone repo (design D15), model-agnostic by construction (D16, §5.14), DSpark not the MTP head (D10).
+Critical path: M0 → M1 → M3 → M4 → M5 → M6. Machines: an M3 Pro (36 GB, hosts the 27B) and an M5 Pro (24 GB: characterization, kernels,
+and the 9B/4B-NVFP4 rows of every gate). Conventions: standalone repo (design D15), model-agnostic by construction (D16, §5.14), DSpark not the MTP head (D10).
 
 ## Tasks
 
@@ -40,6 +42,7 @@ kernels only). Conventions: standalone repo (design D15), model-agnostic by cons
 - [ ] M0: fetch the DSpark drafters and record their configs and licenses
 - [ ] M0: speculative baseline — llama.cpp draft-dspark on the M3 Pro
 - [ ] M0: exact NVFP4/FP8 → BF16 dequantizer and HF goldens
+- [ ] M0: the 24 GB target — Qwen3.5-9B/4B quantized to NVFP4 by the packer, goldens, mlx-lm/llama.cpp baselines on the M5 Pro
 - [ ] M0: on-screen frame-pacing check → the default max_cb_ms
 - [ ] M0: measure an M4-family Mac
 
@@ -56,6 +59,7 @@ kernels only). Conventions: standalone repo (design D15), model-agnostic by cons
 - [ ] M2: runtime core — device, mmap packs, pipeline cache, ICB builder and re-encode fallback
 - [ ] M2: host pump, token ring, StepState, nanobind bindings and C API
 - [ ] M2: contract tests (no GPU) and the two-op self-advancing toy program
+- [ ] M2: pack-time NVFP4 quantization of official BF16 checkpoints (the NVIDIA layout, weight-only)
 
 **M3 — Kernel library v1**
 - [ ] M3: embed, rmsnorm_stat and the fused-norm GEMV input
@@ -73,6 +77,7 @@ kernels only). Conventions: standalone repo (design D15), model-agnostic by cons
 - [ ] M4: compiler passes, coverage guard and dynamic-T emission
 - [ ] M4: generate CLI and Python API
 - [ ] M4: end-to-end gates — small-model golden in CI, 27B reduced-layer and full greedy match, MLX parity, host < 5 %
+- [ ] M4: end-to-end gates on the 24 GB target — Qwen3.5-9B-NVFP4 greedy equals the reference; tok/s ≥ mlx-lm on the M5 Pro
 - [ ] M4: CI extension test — model PRs touch only models/, tests/, docs/
 
 **M5 — Performance pass (go/no-go #2)**
@@ -88,6 +93,7 @@ kernels only). Conventions: standalone repo (design D15), model-agnostic by cons
 - [ ] M6: measurement — acceptance histograms, STS calibration, verify-length rule vs fixed L, tok/s vs plain and vs llama.cpp
 - [ ] M6 (optional, gated on the numbers): Markov top-M bias pruning, INT8 W₂, accelerator verify path
 - [ ] M6 (dependency): retrain a drafter on-policy if acceptance disappoints
+- [ ] M6: the DSpark round on the 24 GB machine — the 0.8B and its public drafter as the development vehicle
 
 **M7 — In-kernel runtime re-evaluation and intra-op stealing**
 - [ ] M7: re-run p10 and p6b on Max-class parts and small models
@@ -196,6 +202,23 @@ The numerics contract is 'HF model on the dequantized weights' (design D11, §5.
 **References**
 - https://github.com/jiazhihao/mpk-apple/blob/main/docs/design/design.md §5.9
 - https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md M0
+
+### M0: the 24 GB target — Qwen3.5-9B/4B quantized to NVFP4 by the packer, goldens, mlx-lm/llama.cpp baselines on the M5 Pro
+labels: area:models, area:perf, hardware:m5-pro
+
+The 24 GB M5 Pro cannot host the 27B and no official NVFP4 Qwen3.5 checkpoint of a fitting size exists (plan §0.1: NVIDIA publishes NVFP4 only for the 122B/397B MoEs; Qwen publishes FP8/GPTQ only from 27B up; the 9B is 19.3 GB in BF16). The official `Qwen/Qwen3.5-9B` and `Qwen/Qwen3.5-4B` quantized to NVFP4 by our own packer are the machine's first-class targets; community re-quantizations are not used.
+
+**Work**
+- Fetch `Qwen/Qwen3.5-9B` and `Qwen/Qwen3.5-4B` (Apache-2.0); quantize with `pack_weights --quantize nvfp4` (the M2 packer item) and record the pack sizes
+- HF goldens for both with the HF model on the dequantized weights (`tools/goldens/hf_golden.py`): 48 greedy tokens, per-layer hidden states; store with a manifest (too large to check in)
+- Baselines on the M5 Pro: `mlx-lm` (BF16 for the 4B, 4-bit affine for both) and `llama.cpp` (Q4_K_M): tok/s, effective GB/s, host CPU; the table goes into the plan next to the 27B rows
+
+**Done when**
+- Packs, goldens and the baseline table exist on the M5 Pro; the numbers the 24 GB rows of the M4/M5 gates are measured against
+
+**References**
+- https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md §0.1, M0
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/design/design.md §5.9
 
 ### M0: on-screen frame-pacing check → the default max_cb_ms
 labels: area:probes, area:runtime
@@ -407,6 +430,23 @@ M2's exit gate: a two-op program replayed for 1,000 self-advancing steps from on
 
 **References**
 - https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md M2 exit, §3
+
+### M2: pack-time NVFP4 quantization of official BF16 checkpoints (the NVIDIA layout, weight-only)
+labels: area:compiler, area:infra
+
+The 24 GB target (plan §0.1) needs an NVFP4 model that fits; the only way with official checkpoints is to quantize `Qwen/Qwen3.5-9B` ourselves. The `nvfp4` format plugin already decodes the ModelOpt layout (E2M1 codes, E4M3 block-16 scales, per-tensor FP32 `weight_scale_2`) and has a `quantize()`; this lifts it into `pack_weights`.
+
+**Work**
+- `pack_weights --quantize nvfp4[:mlp|:all]` and `--quantize fp8` per tensor class (the 27B's mix: NVFP4 MLP + lm_head, FP8 attention/GDN projections); `weight_scale_2 = amax / (6 · 448)`, block scales E4M3 with round-to-nearest-even, codes RNE; the manifest records the recipe
+- Round-trip test through the format oracle; a quality report next to the manifest: perplexity on a fixed text and greedy agreement vs the BF16 model over 48-token continuations (reported, not gated: correctness stays 'HF on the dequantized weights')
+- Memory-bounded: quantize tensor by tensor from the memmapped checkpoint (the 9B's 19 GB never has to be resident)
+
+**Done when**
+- `Qwen/Qwen3.5-9B` packs to ~6–7 GB of NVFP4 on the M5 Pro and round-trips exactly; the quality report is committed
+
+**References**
+- https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md §0.1, M2
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/design/design.md §5.5
 
 ---
 ## Milestone M3 — Kernel library v1
@@ -628,6 +668,21 @@ M4's exit gate.
 **References**
 - https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md M4 exit
 
+### M4: end-to-end gates on the 24 GB target — Qwen3.5-9B-NVFP4 greedy equals the reference; tok/s ≥ mlx-lm on the M5 Pro
+labels: area:models, gate, hardware:m5-pro
+
+The 24 GB rows of M4's exit (plan §0.1): the NVFP4 decode path at a real size (32 layers, hidden 4096, ~6.5 GB per token) on the machine most of the work happens on.
+
+**Work**
+- (b′) the packer-quantized 9B: `--num-layers-override` hidden-state gates against its goldens, then full greedy equal to the HF reference on the dequantized weights except at exact logit ties
+- (c′) decode tok/s ≥ the `mlx-lm` baseline on the 9B on the M5 Pro; host < 5 %; the 4B as a second data point (BF16 vs NVFP4 vs FP8 A/B)
+
+**Done when**
+- Both rows recorded in the plan with numbers next to the 27B rows
+
+**References**
+- https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md §0.1, M4 exit
+
 ### M4: CI extension test — model PRs touch only models/, tests/, docs/
 labels: area:infra
 
@@ -807,6 +862,23 @@ Public drafters were trained against Q4_K_M or NVFP4-W4A4 targets, not our W4A16
 **References**
 - https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/dspark.md §1, §4
 - https://docs.nvidia.com/nemo/automodel/recipes-e2e-examples/dspark-speculative-decoding
+
+### M6: the DSpark round on the 24 GB machine — the 0.8B and its public drafter as the development vehicle
+labels: area:spec, hardware:m5-pro
+
+No public DSpark drafter exists for the 9B/4B (2026-09-24). `satgeze/Qwen3.5-0.8B-DSpark` (Apache-2.0, 5 layers, block 7, Markov rank 256, confidence head) lets the whole round — feature taps, draft pass, Markov/confidence heads, verify-length select, accept scan — be built and tested on the M5 Pro against the checked-in 0.8B golden; its target is too fast for speculation to pay, so this is a correctness vehicle, not the speedup gate (that is the 27B on the M3 Pro).
+
+**Work**
+- Fetch the drafter; record its config and tensor names in `dspark.md` §2; pack it through the drafter weight map
+- Speculative greedy decode of the 0.8B token-identical to the plain program; the dynamic-T step program measured at γ = 1…7
+- If a 24 GB speculative number is wanted: an on-policy 9B drafter trained with the DeepSpec toolkit against our NVFP4 pack (GPU box; `needs-gpu-box`)
+
+**Done when**
+- Token-identical speculative decode of the 0.8B on the M5 Pro; the round's per-step cost table on this chip
+
+**References**
+- https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md §0.1, M6
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/dspark.md §2
 
 ---
 ## Milestone M7 — In-kernel runtime re-evaluation and intra-op stealing
