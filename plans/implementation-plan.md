@@ -194,6 +194,13 @@ the kernel-contract model, 1–2 ULP from the HF-faithful layer oracle. Cost on 
 82 µs/layer at 1 K, 245 µs at 4 K, 1.75 ms at 32 K (T = 1; 76 GB/s of KV — compute-bound); T = 4 is 2.5–3× T = 1
 because row groups re-stream K/V. Long context and T > 1 need the v2 structure sketched there (M5, #34 / before M6).
 
+*Status (2026-09-24, #22).* `gdn_mixer` + `gdn_norm` (decode-kernels.md §2): (value head, state-column slice group)
+blocks with the slice's FP32 state in registers, the reference's order and roundings; leaf gates green (conv state
+exact, recurrent state ≤ 8 FP32 ULP, output ≤ 2 BF16 ULP per element) for T = 1/4/8, Hv = Hk and 3·Hk, mixed-format
+a|b, continuation. Cost on the M5 Pro for the 27B's 16/48 heads: 26 µs per layer at T = 1 (state traffic at
+244 GB/s — the floor, ~1.2 ms per token over 48 layers), ~2.2× at T = 4. **Every op kind the model
+lowers to now has a kernel**; the coverage guard passes on both families.
+
 ### M4 — Compiler and end-to-end decode · 4 ew
 
 * IR (typed graph, symbolic `T`/context, op metadata: reads/writes, block domain, class, cost).

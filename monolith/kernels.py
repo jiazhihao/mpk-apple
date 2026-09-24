@@ -147,3 +147,32 @@ def gqa_workspace(kv_heads: int, n_chunks_max: int, rows_max: int, head_dim: int
     """Bytes of the ``part_o`` and ``part_md`` workspaces."""
     n = kv_heads * n_chunks_max * rows_max
     return n * head_dim * 4, n * 2 * 4
+
+
+# ---- Gated DeltaNet ----------------------------------------------------------------------------------------------
+
+def gdn_source() -> str:
+    return PRELUDE + template("gdn_mixer.metal")
+
+
+def gdn_macros(dk: int, dv: int, *, conv_width: int, t: int, slice_cols: int = 8, slices_per_block: int = 4,
+               tokens_per_pass: Optional[int] = None) -> Dict[str, str]:
+    """Measured defaults (docs/research/decode-kernels.md §2): 8-column state slices (the register budget: 16 spills)
+    and 4 slices per block (fewer, longer blocks amortize the per-block conv/norm prologue; the Hv·DV/32 blocks
+    still fill the crew for Hv ≥ 16)."""
+    if dk % 32 or dv % 32 or dv % (slice_cols * slices_per_block) or conv_width < 2:
+        raise ValueError("gdn_mixer: dk, dv must be multiples of 32, slice_cols·slices_per_block must divide dv, conv_width >= 2")
+    tp = min(t, 4) if tokens_per_pass is None else tokens_per_pass
+    return {"DK": str(dk), "DV": str(dv), "CW": f"{conv_width}u", "SL": f"{slice_cols}u", "SPB": f"{slices_per_block}u", "TP": f"{tp}u"}
+
+
+def gdn_workspace(t_max: int, hv: int, dv: int) -> int:
+    """Bytes of the ``o_part`` workspace (FP32 read-out before the gated norm)."""
+    return t_max * hv * dv * 4
+
+
+def gdn_params(*, hv: int, hk: int, t_active: int, q_off: int, k_off: int, v_off: int, z_off: int, a_off: int, b_off: int,
+               in_stride: int, ab_stride: int, ab_separate: bool, out_stride: int, n_sg: int, key_dim: int, eps: float) -> bytes:
+    """The ``GdnParams`` record (buffer 9)."""
+    return struct.pack("<IIIIIIIIIIIIIIIIffff", hv, hk, t_active, q_off, k_off, v_off, z_off, a_off, b_off, in_stride, ab_stride,
+                       1 if ab_separate else 0, out_stride, n_sg, key_dim, 0, eps, 0.0, 0.0, 0.0)

@@ -161,16 +161,23 @@ def test_mixed_format_parts_split_into_slabs(tmp_path):
 
 
 def test_coverage_of_the_lowered_model(tmp_path):
-    """Which op kinds still lack a kernel: after #19/#20/#21 (embed, rmsnorm_stat, norm_apply, gemv, lm_head, argmax
-    and gqa_decode are bound on every profile) only the GDN mixer remains (#22)."""
+    """Every op kind the model lowers to has a kernel binding (M3 #19–#22): the coverage guard passes on both
+    families, and still fails for an op kind nothing binds."""
     from monolith.compiler import CoverageError, check_coverage
     from monolith.core.profile import Profile
+    from monolith.core import BlockDomain, DType, OpClass
+    from monolith.ops import OPS, OpDef, register_op
 
     _checkpoint(tmp_path)
     m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
     g = Graph("step")
-    m.lower(g)
-    prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
-    with pytest.raises(CoverageError) as ei:
-        check_coverage(g, prof)
-    assert sorted({op.kind for op, _ in ei.value.missing}) == ["gdn_mixer"]
+    tok = m.lower(g)
+    for fam in ("Apple9", "Apple10"):
+        check_coverage(g, Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": fam, "lane_order": "interleaved16"}}))
+    register_op(OpDef("test_unbound", OpClass.MAP, "rows"))
+    try:
+        g.op("test_unbound", [tok], [g.value("unbound_out", (1,), DType.I32)], domain=BlockDomain("rows", 1), klass=OpClass.MAP)
+        with pytest.raises(CoverageError):
+            check_coverage(g, Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}}))
+    finally:
+        OPS.unregister("test_unbound")

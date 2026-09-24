@@ -55,14 +55,18 @@ class GatedDeltaNet(Module):
 
     # ---- oracle -----------------------------------------------------------------------------------------------
     def forward(self, x: Any, residual: Any, state: Dict[str, Any], pos: int = 0) -> Any:
+        return self.out_proj.forward(self.mix(self.in_proj.forward(x), state), residual)
+
+    def mix(self, proj: Any, state: Dict[str, Any]) -> Any:
+        """The mixer alone (what ``gdn_mixer`` computes): ``proj [T, N1]`` in checkpoint column order → the gated,
+        normalized output ``[T, v_heads·dv]`` BF16; conv and recurrent states advanced in place."""
         import torch
         import torch.nn.functional as F
 
         from . import oracle
 
-        t = x.shape[0]
+        t = proj.shape[0]
         kd, vd, hv = self.key_dim, self.value_dim, self.v_heads
-        proj = self.in_proj.forward(x)
         qkv, z = proj[:, :self.conv_dim], proj[:, self.conv_dim: self.conv_dim + vd]
         a, b = proj[:, self.conv_dim + vd: self.conv_dim + vd + hv], proj[:, self.conv_dim + vd + hv:]
         conv_name, rec_name = f"{self.prefix}conv_state", f"{self.prefix}rec_state"
@@ -81,7 +85,7 @@ class GatedDeltaNet(Module):
         o, new_rec = oracle.gated_delta_rule(q, k, v, g, beta, state[rec_name])       # o BF16 [T, Hv, dv]
         o = oracle.gated_rms_norm(o.reshape(t * hv, self.dv), z.reshape(t * hv, self.dv), self.param("norm_w"), self.eps)
         state[conv_name], state[rec_name] = new_conv, new_rec
-        return self.out_proj.forward(o.reshape(t, vd), residual)
+        return o.reshape(t, vd)
 
     # ---- IR ---------------------------------------------------------------------------------------------------
     def lower(self, g: Graph, h: Value, norm, ctx: LowerContext) -> Value:
