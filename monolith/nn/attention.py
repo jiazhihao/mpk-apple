@@ -76,13 +76,17 @@ class GQAAttention(Module):
 
     # ---- oracle -----------------------------------------------------------------------------------------------
     def forward(self, x: Any, residual: Any, state: Dict[str, Any], pos: int) -> Any:
+        return self.o_proj.forward(self.mix(self.qkv.forward(x), state, pos), residual)
+
+    def mix(self, proj: Any, state: Dict[str, Any], pos: int) -> Any:
+        """The mixer alone (what ``gqa_decode`` + ``gqa_merge`` compute): ``proj [T, N1]`` in checkpoint column
+        order → the gated attention output ``[T, heads·D]`` BF16, caches advanced in place."""
         import torch
 
         from . import oracle
 
-        t = x.shape[0]
+        t = proj.shape[0]
         d, hd, kd = self.head_dim, self.heads * self.head_dim, self.kv_heads * self.head_dim
-        proj = self.qkv.forward(x)
         q_rows = self.heads * (2 if self.gate else 1) * d
         if self.gate:
             qg = proj[:, :q_rows].reshape(t, self.heads, 2 * d)
@@ -94,13 +98,14 @@ class GQAAttention(Module):
         q = oracle.rms_norm(q, self.param("q_norm"), self.eps)
         k = oracle.rms_norm(k, self.param("k_norm"), self.eps)
         cos, sin = oracle.rope_tables(self.rope_theta, self.rotary_dim, torch.arange(pos, pos + t))
-        cos, sin = cos.to(x.dtype), sin.to(x.dtype)
+        cos, sin = cos.to(proj.dtype), sin.to(proj.dtype)
         q = oracle.apply_partial_rope(q, cos, sin)
         k = oracle.apply_partial_rope(k, cos, sin)
         o = oracle.attention_step(q, k, v, state[f"{self.prefix}k_cache"], state[f"{self.prefix}v_cache"], pos, d ** -0.5)
+        o = o.to(proj.dtype)                                                # the reference's BF16 attention output
         if gate is not None:
-            o = o * torch.sigmoid(gate.to(torch.float32))
-        return self.o_proj.forward(o.to(x.dtype).reshape(t, hd), residual)
+            o = o * torch.sigmoid(gate)                                     # BF16 · bf16(σ(gate)) → BF16, as the reference
+        return o.reshape(t, hd)
 
     # ---- IR ---------------------------------------------------------------------------------------------------
     def lower(self, g: Graph, h: Value, norm, ctx: LowerContext) -> Value:
