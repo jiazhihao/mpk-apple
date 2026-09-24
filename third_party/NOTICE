@@ -14,6 +14,9 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
   three-method module contract (oracle / lower / weights) and the streaming `load_weights` routing idea; the
   compile/grid methods, which are CUDA-specific, were not taken.
 
+- `monolith/packs/transforms.py` — `rope_head_perm` adapted from `python/mirage/mpk/models/qwen38/modeling.py` @ 5beaed8
+  (Apache-2.0): the head-dim permutation that implements partial RoPE as a load-time row permutation.
+
 ## Original
 
 - `probes/` — original to this repository.
