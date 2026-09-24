@@ -204,5 +204,35 @@
   142,
   196
  ],
- "results_files": 11
+ "results_files": 11,
+ "engine": {
+  "family": "Apple10",
+  "lane_order": "interleaved16",
+  "threadgroups_per_core": 1,
+  "sibling_order": "alu_first",
+  "max_cb_ms": 16,
+  "cost_T": {
+   "fp8": {
+    "1": 1.0,
+    "2": 1.08,
+    "4": 1.11,
+    "8": 3.6
+   },
+   "nvfp4": {
+    "1": 1.0,
+    "2": 1.28,
+    "4": 1.79,
+    "8": 5.3
+   },
+   "accelerator_fp8": {
+    "8": 1.49,
+    "32": 1.74
+   },
+   "accelerator_nvfp4": {
+    "8": 1.53,
+    "32": 1.78
+   }
+  },
+  "note": "normalized values the compiler reads (Profile.from_dict); cost_T = pass cost relative to a T = 1 pass, from p13 (shader ALUs, best geometry) and p14 (accelerator path, TM = 8 / 32)"
+ }
 }

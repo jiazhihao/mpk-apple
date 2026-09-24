@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monolith"
+version = "0.0.1"
+description = "A megakernel-style LLM inference engine for Apple silicon: front-end, compiler and runtime bindings (working codename)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+# Oracles, goldens and weight loading. The contract tier and the runtime never need these.
+oracle = ["torch>=2.4", "safetensors>=0.4", "transformers>=5.0", "huggingface_hub>=0.30"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["monolith*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
