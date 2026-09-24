@@ -108,7 +108,8 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
   float rn[T];                                 // the per-token RMSNorm scale, from the statistic's partial sums
   for (uint t = 0; t < T; t++) {
     float ssq = 0.0f;
-    if (t < T_act) for (uint i = 0; i < p.stat_parts; i++) ssq += stat[t * p.stat_parts + i];
+    if (t < T_act) for (uint i = lane; i < p.stat_parts; i += 32u) ssq += stat[t * p.stat_parts + i];
+    ssq = simd_sum(ssq);                       // lane-parallel: a serial loop pays a load latency per partial
     rn[t] = rsqrt(ssq / float(K) + p.eps);
   }
 #endif

@@ -212,3 +212,28 @@ def test_compile_program_from_the_pack(tmp_path):
     assert [o.bindings for o in again.ops] == [o.bindings for o in prog.ops] and again.buffers["pack.0"].file_offset == 0
     with pytest.raises(ValueError):
         compile_program(m, PackFile(tmp_path / "pack"), prof, t=9)
+
+
+def test_fuse_norm_stat_pass(tmp_path):
+    """Every norm fed by a residual-epilogue GEMV loses its statistic dispatch; the embedding-fed one keeps it."""
+    from monolith.compiler import compile_program
+    from monolith.compiler.passes import fuse_norm_stat
+    from monolith.core.profile import Profile
+
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    g = Graph("step")
+    m.lower(g)
+    assert fuse_norm_stat(g) == 4                                # 2 layers × 2 norms + final − the first input norm
+    assert fuse_norm_stat(g) == 0                                # idempotent
+    hoisted = [op for op in g.ops if op.kind == "rmsnorm_stat" and op.attrs.get("hoisted")]
+    assert len(hoisted) == 4 and all(op.inputs[0].producer.attrs["stat_value"] == op.outputs[0].name for op in hoisted)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
+    prog = compile_program(m, PackFile(tmp_path / "pack"), prof, t=2)
+    kinds = [o.name.split(":")[0] for o in prog.ops]
+    assert kinds.count("rmsnorm_stat") == 1 and kinds.count("norm_apply") == 5
+    stat_buf = prog.buffers["layers.0.post_norm.stat"]
+    assert stat_buf.nbytes == 2 * 16 * 4                          # T × n_blocks(hidden 256 / R 16) partials
+    plain = compile_program(m, PackFile(tmp_path / "pack"), prof, t=2, passes=())
+    assert [o.name.split(":")[0] for o in plain.ops].count("rmsnorm_stat") == 5
