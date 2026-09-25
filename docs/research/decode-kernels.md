@@ -376,3 +376,36 @@ variant for T ≥ 32. On the lm_head shape every format is within 5 % of its wid
 Profile rows (`profiles/apple-m5-pro-20c.json`, relative to `p13`'s T = 1 pass as the shader rows are):
 `accelerator_nvfp4` 8: 1.03, 16: 1.04, 32: 2.32; `accelerator_fp8` 8: 1.09, 16: 1.16, 32: 2.10.
 
+## 7. Intra-op stealing (#44) — own slice + steal on the attention core
+
+`kernels/common/steal.metal` is `p10`'s claim protocol (mode 2) as a helper a kernel's block loop opts into with
+`STEAL=1`: every nominal SIMD-group owns a contiguous slice of the op's blocks behind its own cursor (a device
+atomic zeroed by a `steal_reset` dispatch), drains it (an uncontended CAS per block), then visits the other slices
+in a per-SIMD-group order (a stride coprime with the crew) and steals what is left; surplus SIMD-groups own nothing
+and only steal, missing ones cost the others their slice. Lane 0 claims, `simd_broadcast_first` hands the block to
+the 32 lanes. The attention core (`gqa_decode` v1) carries the variant; `tests/kernels/test_gqa_decode.py` checks it
+claims every block exactly once (a claim counter per block) with the nominal crew, with a third of the crew missing
+and with a surplus, and that the outputs and the cache appends equal the static-slice kernel's bit for bit.
+
+**Paired A/B** (`tools/bench/gqa_bench.py --steal`, the cursor reset counted; heads 32, kv 4, d 256, chunk 64,
+4 rows per pass — the target's attention shape; 5 alternating rounds, min of 10 per round, ranges disjoint in every
+row) [M]:
+
+| context | T | blocks | static slices (µs / layer) | own slice + steal | steal / static |
+|---|---|---|---|---|---|
+| 4096 | 1 | 520 | 241–247 | 294–297 | 1.22 |
+| 8192 | 1 | 1032 | 452–456 | 498–501 | 1.10 |
+| 8192 | 4 | 4128 | 1429–1439 | 1370–1382 | **0.96** |
+| 32768 | 1 | 4104 | 1745–1761 | 1712–1720 | 0.98 |
+| 32768 | 4 | 16416 | 5516–5530 | 5189–5204 | **0.94** |
+
+What it says: the attention's blocks are even (a kv head × a 64-key chunk × a row group), so what stealing
+balances is not block cost but the *cores'* progress — twelve SIMD-groups share a core and cores finish at different
+times; with ≥ 4000 blocks the balancing pays 2–6 %, with fewer the CAS per block and the cursor scan at the end
+cost 10–22 %. Against the plan's rule (enabled only where it gains ≥ 2 %) the op qualifies at ≥ 8K context with
+T ≥ 4 and at 32K — where the attention is 3–10 % of a step, so the step gains under 1 %, and the per-layer cursor
+reset (a dispatch of ~2 µs × 36 layers) would take most of that back. **Decision: off by default, no per-op opt-in
+in the compiler yet**; the helper, its test and the bench flag stay for the first genuinely uneven op — the MoE
+experts of #46 (variable tokens per expert), which this machine cannot host. D9 stands: a dispatch boundary is the
+barrier, and stealing is a per-op tool, not the runtime.
+

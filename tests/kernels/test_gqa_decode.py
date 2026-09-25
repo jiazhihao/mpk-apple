@@ -25,9 +25,9 @@ def dev():
 
 
 class Cfg:
-    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None):
+    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False):
         self.heads, self.kv, self.d, self.rot, self.ctx_max, self.t_max = heads, kv, d, rot, ctx_max, t_max
-        self.v2, self.n_tg = v2, n_tg                                 # v2: the partial granularity is 32 keys (the numpy model's chunk)
+        self.v2, self.n_tg, self.steal = v2, n_tg, steal                # v2: the partial granularity is 32 keys (the numpy model's chunk)
         if v2:
             chunk = 32
         self.chunk, self.rb, self.gate = chunk, rb, gate
@@ -50,8 +50,10 @@ class Harness:
             lib = nt.Library(dev, kernels.gqa_source(True), kernels.gqa_v2_macros(cfg.d, rmax=cfg.rows_max, rg=cfg.rb))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v2"), nt.Pipeline(lib, "gqa_merge_v2")
         else:
-            lib = nt.Library(dev, kernels.gqa_source(), kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=cfg.rb))
+            lib = nt.Library(dev, kernels.gqa_source(steal=cfg.steal), kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=cfg.rb, steal=cfg.steal, steal_hits=cfg.steal))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode"), nt.Pipeline(lib, "gqa_merge")
+            if cfg.steal:
+                self.p_reset = nt.Pipeline(lib, "steal_reset")
         cos, sin = rope_tables_permuted(THETA, cfg.d, cfg.rot, cfg.ctx_max)
         self.cos_b, self.sin_b = f32_to_bf16(cos), f32_to_bf16(sin)
         self.cos, self.sin = bf16_to_f32(self.cos_b), bf16_to_f32(self.sin_b)
@@ -76,24 +78,39 @@ class Harness:
         return (bf16_to_f32(np.frombuffer(self.k_cache.read(0, self.cache_bytes), dtype=np.uint16).reshape(shape)),
                 bf16_to_f32(np.frombuffer(self.v_cache.read(0, self.cache_bytes), dtype=np.uint16).reshape(shape)))
 
-    def step(self, proj_bf16, position, t_active=None):
+    def step(self, proj_bf16, position, t_active=None, dispatch_sg=None):
+        """``dispatch_sg``: the SIMD-groups actually dispatched (the STEAL variant's crew may be short or surplus)."""
         c = self.cfg
         t = proj_bf16.shape[0]
         t_act = t if t_active is None else t_active
         params = kernels.gqa_params(heads=c.heads, kv_heads=c.kv, t_active=t_act, position=position, n_sg=self.n_tg if c.v2 else self.n_sg,
                                     q_off=c.q_off, gate_off=c.gate_off, k_off=c.k_off, v_off=c.v_off, in_stride=c.n1,
                                     out_stride=c.heads * c.d, ctx_max=c.ctx_max, eps=EPS, scaling=c.scaling, has_gate=c.gate,
-                                    n_chunks_max=c.n_chunks_max, rows_max=c.rows_max)
+                                    n_chunks_max=c.n_chunks_max, rows_max=c.rows_max, nominal_sg=self.n_sg)
         pb = nt.Buffer(self.dev, proj_bf16.tobytes())
         out = nt.Buffer(self.dev, t * c.heads * c.d * 2); out.fill(0)
+        n_disp = self.n_sg if dispatch_sg is None else dispatch_sg
         d1 = (nt.Dispatch().pipeline(self.p_dec).buffer(0, pb).buffer(1, self.k_cache).buffer(2, self.v_cache)
               .buffer(3, self.bufs["cos"]).buffer(4, self.bufs["sin"]).buffer(5, self.bufs["qn"]).buffer(6, self.bufs["kn"])
-              .buffer(7, self.part_o).buffer(8, self.part_md).bytes(9, params).grid(-(-(self.n_sg * 32) // 384)).threadgroup(384).barrier())
+              .buffer(7, self.part_o).buffer(8, self.part_md).bytes(9, params).grid(-(-(n_disp * 32) // 384)).threadgroup(384).barrier())
         d2 = (nt.Dispatch().pipeline(self.p_merge).buffer(0, self.part_o).buffer(1, self.part_md).buffer(2, pb).buffer(3, out)
               .bytes(4, params).grid(t * c.heads).threadgroup(32))
-        r = nt.Queue(self.dev).run([d1, d2])
+        ds = [d1, d2]
+        self.hits = None
+        if c.steal:
+            n_blocks = c.kv * (-(-(position + t_act) // c.chunk)) * (-(-(c.rep * t_act) // c.rb))
+            cursors = nt.Buffer(self.dev, max(4 * self.n_sg, 16)); cursors.fill(0)
+            self.hits = nt.Buffer(self.dev, max(4 * n_blocks, 16)); self.hits.fill(0)
+            self.n_blocks = n_blocks
+            d0 = nt.Dispatch().pipeline(self.p_reset).buffer(0, cursors).bytes(1, kernels.steal_reset_params(self.n_sg)).grid(-(-self.n_sg // 64)).threadgroup(64).barrier()
+            d1.buffer(10, cursors).buffer(12, self.hits)
+            ds = [d0, d1, d2]
+        r = nt.Queue(self.dev).run(ds)
         assert not r.error, r.error
         return bf16_to_f32(np.frombuffer(out.read(0, t * c.heads * c.d * 2), dtype=np.uint16).reshape(t, c.heads * c.d))
+
+    def block_hits(self):
+        return np.frombuffer(self.hits.read(0, 4 * self.n_blocks), dtype=np.uint32)
 
 
 # ---- the kernel's contract in numpy -----------------------------------------------------------------------------
@@ -333,3 +350,28 @@ def test_v2_matches_layer_oracle(dev):
         assert cos > 0.9999 and max_abs <= 1e-2 * scale, (t, pos, cos, max_abs, scale)
         pos += t
 
+
+def test_steal_variant_is_exactly_once_and_identical(dev):
+    """The own-slice + steal claim protocol (#44, kernels/common/steal.metal) on the attention core: every block is
+    claimed exactly once and the outputs equal the static-slice kernel's bit for bit — with the nominal crew, with a
+    third of it missing (the present SIMD-groups steal the rest) and with a surplus (the extra ones own nothing)."""
+    cfg = Cfg(heads=8, kv=2, d=64, rot=32, ctx_max=1024, t_max=4)
+    scfg = Cfg(heads=8, kv=2, d=64, rot=32, ctx_max=1024, t_max=4, steal=True)
+    rng = np.random.default_rng(21)
+    qn, kn = _norms(rng, cfg.d)
+    plain, steal = Harness(dev, cfg, qn, kn), Harness(dev, scfg, qn, kn)
+    k = rng.standard_normal((cfg.ctx_max, cfg.kv, cfg.d)).astype(np.float32) * 0.5
+    v = rng.standard_normal((cfg.ctx_max, cfg.kv, cfg.d)).astype(np.float32)
+    proj = _random_proj(rng, cfg, 4)
+    position = 700                                                        # 11 chunks × 2 kv heads × 4 row groups = 88 blocks
+    plain.set_caches(k, v)
+    ref = plain.step(proj, position)
+    for name, disp in (("nominal", None), ("missing a third", plain.n_sg * 2 // 3), ("surplus", plain.n_sg * 2)):
+        steal.set_caches(k, v)
+        out = steal.step(proj, position, dispatch_sg=disp)
+        hits = steal.block_hits()
+        assert hits.shape == (88,) and np.all(hits == 1), (name, hits.min(), hits.max())
+        assert np.array_equal(out, ref), name
+        kk, vv = steal.caches()
+        rk, rv = plain.caches()
+        assert np.array_equal(kk, rk) and np.array_equal(vv, rv), name

@@ -24,7 +24,7 @@ from monolith.nn.rope import rope_tables_permuted               # noqa: E402
 from monolith.runtime import _native as nt                     # noqa: E402
 
 
-def run(dev, heads, kv, d, ctx, t, chunk, rb, reps, v2=False):
+def run(dev, heads, kv, d, ctx, t, chunk, rb, reps, v2=False, steal=False):
     rng = np.random.default_rng(0)
     rep = heads // kv
     hd, kd = heads * d, kv * d
@@ -38,7 +38,7 @@ def run(dev, heads, kv, d, ctx, t, chunk, rb, reps, v2=False):
         lib = nt.Library(dev, kernels.gqa_source(True), kernels.gqa_v2_macros(d, rmax=rows_max, rg=rb))
         p_dec, p_merge = nt.Pipeline(lib, "gqa_decode_v2"), nt.Pipeline(lib, "gqa_merge_v2")
     else:
-        lib = nt.Library(dev, kernels.gqa_source(), kernels.gqa_macros(d, chunk=chunk, rb_max=rb))
+        lib = nt.Library(dev, kernels.gqa_source(steal=steal), kernels.gqa_macros(d, chunk=chunk, rb_max=rb, steal=steal))
         p_dec, p_merge = nt.Pipeline(lib, "gqa_decode"), nt.Pipeline(lib, "gqa_merge")
     cos, sin = rope_tables_permuted(10000.0, d, d // 4, ctx_max)
     kc = nt.Buffer(dev, f32_to_bf16(rng.standard_normal((ctx_max, kv, d)).astype(np.float32) * 0.5).tobytes())
@@ -52,25 +52,31 @@ def run(dev, heads, kv, d, ctx, t, chunk, rb, reps, v2=False):
     n_sg = 12 * dev.info().gpu_cores
     params = kernels.gqa_params(heads=heads, kv_heads=kv, t_active=t, position=ctx, n_sg=dev.info().gpu_cores if v2 else n_sg, q_off=0,
                                 gate_off=hd + 2 * kd, k_off=hd, v_off=hd + kd, in_stride=n1, out_stride=hd, ctx_max=ctx_max, eps=1e-6,
-                                scaling=d ** -0.5, has_gate=True, n_chunks_max=n_chunks_max, rows_max=rows_max)
+                                scaling=d ** -0.5, has_gate=True, n_chunks_max=n_chunks_max, rows_max=rows_max, nominal_sg=n_sg)
     d1 = (nt.Dispatch().pipeline(p_dec).buffer(0, proj).buffer(1, kc).buffer(2, vc).buffer(3, tabs[0]).buffer(4, tabs[1])
           .buffer(5, tabs[2]).buffer(6, tabs[3]).buffer(7, part_o).buffer(8, part_md).bytes(9, params)
           .grid(-(-(n_sg * 32) // 384)).threadgroup(384).barrier())
     d2 = (nt.Dispatch().pipeline(p_merge).buffer(0, part_o).buffer(1, part_md).buffer(2, proj).buffer(3, out).bytes(4, params)
           .grid(t * heads).threadgroup(32))
+    ds = [d1, d2]
+    if steal:                                            # the cursors' reset is part of the cost
+        cursors = nt.Buffer(dev, 4 * n_sg); cursors.fill(0)
+        d0 = nt.Dispatch().pipeline(nt.Pipeline(lib, "steal_reset")).buffer(0, cursors).bytes(1, kernels.steal_reset_params(n_sg)).grid(-(-n_sg // 64)).threadgroup(64).barrier()
+        d1.buffer(10, cursors)
+        ds = [d0, d1, d2]
     q = nt.Queue(dev)
     warm = 0.0
     while warm < 60.0:                               # untimed warm-up until 60 ms of GPU time: the clocks ramp from idle
-        r = q.run([d1, d2])
+        r = q.run(ds)
         if r.error:
             raise RuntimeError(r.error)
         warm += max(r.gpu_ms, 0.01)
     best = None
     for _ in range(reps):
-        r = q.run([d1, d2])
+        r = q.run(ds)
         best = r.gpu_ms if best is None else min(best, r.gpu_ms)
     kv_bytes = (ctx + t) * kv * d * 2 * 2
-    return {"kernel": "v2" if v2 else "v1", "heads": heads, "kv": kv, "d": d, "ctx": ctx, "t": t, "chunk": chunk, "rb": rb,
+    return {"kernel": "v2" if v2 else ("v1-steal" if steal else "v1"), "heads": heads, "kv": kv, "d": d, "ctx": ctx, "t": t, "chunk": chunk, "rb": rb,
             "n_blocks": kv * (-(-(ctx + t) // chunk)) * (-(-rows_max // rb)),
             "ms": round(best, 4), "kv_gbps": round(kv_bytes / 1e9 / (best / 1e3), 1), "us_per_layer": round(best * 1e3, 1)}
 
@@ -86,6 +92,7 @@ def main(argv=None) -> int:
     ap.add_argument("--rb", type=int, default=4)
     ap.add_argument("--reps", type=int, default=10)
     ap.add_argument("--v2", action="store_true", help="the v2 kernel (design §5.6 v2, #34); --rb is then the rows per pass")
+    ap.add_argument("--steal", action="store_true", help="v1 with own-slice + steal block claiming (#44), the cursor reset included")
     ap.add_argument("--out", type=Path)
     a = ap.parse_args(argv)
     dev = nt.Device()
@@ -94,7 +101,7 @@ def main(argv=None) -> int:
           f"chunk={'dynamic' if a.v2 else a.chunk} rows/pass={a.rb}; min of {a.reps}")
     for ctx in (int(x) for x in a.ctx.split(",")):
         for t in (int(x) for x in a.t.split(",")):
-            r = run(dev, a.heads, a.kv, a.d, ctx, t, a.chunk, a.rb, a.reps, v2=a.v2)
+            r = run(dev, a.heads, a.kv, a.d, ctx, t, a.chunk, a.rb, a.reps, v2=a.v2, steal=a.steal)
             r.update(chip=info.name, cores=info.gpu_cores)
             print(f"ctx {ctx:6d} T={t}: {r['us_per_layer']:8.1f} us/layer  {r['kv_gbps']:6.1f} GB/s of KV  ({r['n_blocks']} blocks)", flush=True)
             if a.out:

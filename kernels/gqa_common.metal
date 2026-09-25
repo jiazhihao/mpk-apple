@@ -6,6 +6,12 @@
 #ifndef DRAFT
 #define DRAFT 0
 #endif
+#ifndef STEAL
+#define STEAL 0                      // 1: gqa_decode claims its blocks own-slice-first-then-steal through the cursors of buffer 10 (#44)
+#endif
+#ifndef STEAL_HITS
+#define STEAL_HITS 0                 // 1 (tests): count the claims per block in buffer 12
+#endif
 #ifndef CH
 #define CH 64u
 #endif
@@ -22,8 +28,8 @@ struct GqaParams {
   uint n_sg; uint q_off; uint gate_off; uint k_off;
   uint v_off; uint in_stride; uint out_stride; uint ctx_max;
   float eps; float scaling; uint has_gate; uint n_chunks_max;
-  uint rows_max; uint pad0; uint pad1; uint pad2;
-};
+  uint rows_max; uint pad0; uint pad1; uint nominal_sg;                     // pad0 / pad1: the DRAFT variant's n_new and second row stride;
+};                                                                         // nominal_sg: the crew the STEAL variant's slices are cut for
 
 static inline float bf16f(ushort u) { return as_type<float>(uint(u) << 16); }
 static inline float round_bf16(float v) { uint u = as_type<uint>(v); u += 0x7FFFu + ((u >> 16) & 1u); return as_type<float>(u & 0xFFFF0000u); }

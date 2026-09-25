@@ -450,6 +450,12 @@ This milestone (a) re-runs `p10`/`p6b` on Max-class parts and on small models, w
 adds *own-slice + steal* to ops with uneven blocks (long-context attention, MoE
 experts) if per-op traces show tail skew.
 
+**(b) built and measured (#44, decode-kernels.md §7):** `kernels/common/steal.metal` (p10's mode 2 as a helper),
+the attention core's `STEAL` variant, the exactly-once test under missing and surplus SIMD-groups, and a paired A/B
+on the target's attention shape: 4–6 % faster at ≥ 8K context with T ≥ 4 and at 32K (16 K blocks: the cores'
+uneven progress, not uneven blocks), 10–22 % slower below 8K — under 1 % of a step either way, so it is off by
+default and stays in the toolbox for the MoE experts (#46). (a) needs a Max-class part.
+
 Exit: a short written result per chip; stealing enabled only for ops where it gains ≥ 2 %.
 
 ### M8 — Generality proof · 3 ew

@@ -261,18 +261,26 @@ def macro_key(macros: Mapping[str, str]) -> str:
 
 # ---- attention ----------------------------------------------------------------------------------------------------
 
-def gqa_source(v2: bool = False) -> str:
+def gqa_source(v2: bool = False, steal: bool = False) -> str:
     """The attention kernels: the shared helpers + v1 (``gqa_decode`` / ``gqa_merge``, with the DRAFT variant) or v2
     (``gqa_decode_v2`` / ``gqa_merge_v2``: the long-context structure of design §5.6, #34)."""
-    return PRELUDE + template("gqa_common.metal") + "\n" + template("gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
+    src = PRELUDE + template("gqa_common.metal") + "\n"
+    if steal:
+        src += template("common/steal.metal") + "\n"                                   # the claim protocol (#44), v1 only
+    return src + template("gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
 
 
-def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4) -> Dict[str, str]:
+def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4, steal: bool = False, steal_hits: bool = False) -> Dict[str, str]:
     """Measured on the M5 Pro (docs/research/decode-kernels.md §1): RBMAX = 4 query rows per pass is 13× faster than
     8 (register spills above 4 rows) and CH = 64 keys per chunk is the best chunk from 1 K to 32 K of context."""
     if head_dim % 32 or chunk % 32 or rb_max < 1:
         raise ValueError("gqa_decode: head_dim and chunk must be multiples of 32")
-    return {"D": str(head_dim), "CH": f"{chunk}u", "RBMAX": f"{rb_max}u"}
+    m = {"D": str(head_dim), "CH": f"{chunk}u", "RBMAX": f"{rb_max}u"}
+    if steal:
+        m["STEAL"] = "1"
+        if steal_hits:
+            m["STEAL_HITS"] = "1"
+    return m
 
 
 GQA_V2_CHUNK_MIN = 32
@@ -288,10 +296,16 @@ def gqa_v2_macros(head_dim: int, *, rmax: int, rg: int = 4) -> Dict[str, str]:
 
 def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg: int, q_off: int, gate_off: int, k_off: int,
                v_off: int, in_stride: int, out_stride: int, ctx_max: int, eps: float, scaling: float, has_gate: bool,
-               n_chunks_max: int, rows_max: int) -> bytes:
-    """The ``GqaParams`` record (buffer 9 of gqa_decode, 4 of gqa_merge)."""
+               n_chunks_max: int, rows_max: int, nominal_sg: int = 0) -> bytes:
+    """The ``GqaParams`` record (buffer 9 of gqa_decode, 4 of gqa_merge); ``nominal_sg`` = the crew the STEAL variant's
+    slices are cut for (the dispatch may bring fewer or more SIMD-groups)."""
     return struct.pack("<IIIIIIIIIIIIffIIIIII", heads, kv_heads, t_active, position, n_sg, q_off, gate_off, k_off, v_off,
-                       in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, 0, 0)
+                       in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, 0, nominal_sg)
+
+
+def steal_reset_params(n: int) -> bytes:
+    """``steal_reset``'s count (buffer 1): the cursors to zero (one per nominal SIMD-group)."""
+    return struct.pack("<I", n)
 
 
 def gqa_workspace(kv_heads: int, n_chunks_max: int, rows_max: int, head_dim: int) -> Tuple[int, int]:
