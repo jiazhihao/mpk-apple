@@ -40,6 +40,8 @@ class Generation:
     decode_tokens: int = 0         # tokens the decode steps produced (= steps without a drafter)
     accepted: Optional[List[int]] = None     # per decode step: drafts accepted (speculative sessions)
     committed: Optional[List[int]] = None    # per decode step: tokens committed (accepted + the bonus)
+    verify_len: Optional[List[int]] = None   # per decode step: drafts verified (L)
+    confidences: Optional[List[List[float]]] = None   # per decode step: the block's confidences [gamma]
 
     @property
     def ms_per_token(self) -> float:
@@ -70,7 +72,7 @@ class Session:
     def __init__(self, model: Model, pack_dir: str, profile: Optional[Profile] = None, *, layout: Optional[StepStateLayout] = None,
                  eos: int = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
                  min_p: float = 0.0, seed: int = 0, autotune: bool = True, drafter: Any = None, drafter_pack: Optional[str] = None,
-                 verify: str = "cost", verify_threshold: Optional[float] = None) -> None:
+                 verify: str = "cost", verify_threshold: Optional[float] = None, verify_length: Optional[int] = None) -> None:
         """``drafter`` (a ``Drafter`` built with the model's head) and its pack turn the session speculative: one
         dynamic-T program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
         from .bench import profile_for_device
@@ -88,7 +90,7 @@ class Session:
         if layout is None and drafter is not None:
             layout = StepStateLayout(t_max=max(8, drafter.gamma + 1), gamma_max=max(7, drafter.gamma))
         self.layout = layout or StepStateLayout()
-        self.verify, self.verify_threshold = verify, verify_threshold
+        self.verify, self.verify_threshold, self.verify_length = verify, verify_threshold, verify_length
         self.eos, self.ring_capacity = eos, ring_capacity
         self.seed = seed
         # temperature 0 = greedy (the argmax path); otherwise the Gumbel-max sampler with the thresholds
@@ -112,7 +114,8 @@ class Session:
         if t not in self.engines:
             prog = compile_program(self.model, self.pack, self.profile, t=None if t == 0 else t, dynamic_t=(t == 0), eos=self.eos,
                                    ring_capacity=self.ring_capacity, layout=self.layout, tuner=self.tuner, drafter=self.drafter,
-                                   drafter_pack=self.drafter_pack, verify=self.verify, verify_threshold=self.verify_threshold)
+                                   drafter_pack=self.drafter_pack, verify=self.verify, verify_threshold=self.verify_threshold,
+                                   verify_length=self.verify_length)
             if self.tuner is not None:
                 self.tuner.save(self.dev.info().name)
             eng = Engine(prog, self.dev, buffers=self.buffers)
@@ -163,34 +166,79 @@ class Session:
                 done = False                               # every step commits ≥ 1 token: the remaining count bounds the steps
                 while len(tokens) < max_new_tokens and not done:
                     need = max_new_tokens - len(tokens)
-                    r2 = pre.run(need, steps_per_cb=steps_per_cb, in_flight=in_flight, max_tokens=need)
+                    # short command buffers: a round is several plain steps long and the pump stops on the token count,
+                    # so the buffers still queued (in_flight × steps_per_cb steps) are the over-run past the request
+                    r2 = pre.run(need, steps_per_cb=min(steps_per_cb, 2), in_flight=min(in_flight, 2), max_tokens=need)
                     tokens += r2.tokens
                     dec_ms += r2.gpu_ms; dec_wall += r2.wall_ms; host += r2.host_busy_ms; steps += r2.steps
                     done = r2.done or r2.steps == 0
         gen = Generation(tokens[:max_new_tokens], prefill_ms, dec_ms, dec_wall, host, steps, decode_tokens=min(len(tokens), max_new_tokens) - n_pre)
         if self.drafter is not None:
-            gen.accepted, gen.committed = self._accept_stats(pre, len(chunks))
+            gen.accepted, gen.committed, gen.verify_len, gen.confidences = self._accept_stats(pre, len(chunks))
         return gen
 
     def _accept_stats(self, eng, n_prefill_steps: int):
-        """Per decode step (accepted drafts, committed tokens) from the program's accept log."""
+        """Per decode step (accepted drafts, committed tokens, verify length, the block's confidences) from the
+        program's accept and confidence logs."""
         import numpy as np
 
-        from .compiler.emit import ACCEPT_LOG
+        from .compiler.emit import ACCEPT_LOG, CONF_LOG
+        from .kernels import CONF_LOG_WIDTH
 
         n_steps = int(eng.state()["step"])
         log = np.frombuffer(eng.read(ACCEPT_LOG), dtype=np.uint32)[:n_steps]
-        dec = [int(v) for v in log[n_prefill_steps:] if (v & 0xFFFF) != 0xFFFF]
-        return [v & 0xFFFF for v in dec], [v >> 16 for v in dec]
+        confs = np.frombuffer(eng.read(CONF_LOG), dtype=np.float32).reshape(-1, CONF_LOG_WIDTH)[:n_steps]
+        g = self.drafter.gamma
+        rows = [(int(v), confs[i]) for i, v in enumerate(log) if i >= n_prefill_steps and (v & 0xFFFF) != 0xFFFF]
+        return ([v & 0xFF for v, _ in rows], [v >> 16 for v, _ in rows], [(v >> 8) & 0xFF for v, _ in rows],
+                [[float(x) for x in c[:g]] for _, c in rows])
 
     def read(self, name: str) -> bytes:
         eng = next(iter(self.engines.values()))
         return eng.read(name)
 
+    def bytes_per_step(self, t: Optional[int] = None) -> int:
+        """Weight bytes a decode step streams (the program's GEMV bytes; predicated per-T variants counted once)."""
+        eng = self.engines.get(0 if self.drafter is not None or t == 0 else (t if t is not None else 1))
+        if eng is None:
+            return 0
+        total, seen = 0, set()
+        for op in eng.program.ops:
+            b = int(op.meta.get("bytes", 0))
+            if not b:
+                continue
+            key = (op.name, op.meta.get("t_range") is not None)
+            if op.meta.get("t_range") is not None:
+                if key in seen:
+                    continue
+                seen.add(key)
+            total += b
+        return total
+
+    def report(self, gen: Generation, prompt_tokens: int) -> str:
+        """The run's numbers next to the chip's bound (design §5.10): ms per token, tok/s, GB/s and the share of the
+        profile's nominal bandwidth; a speculative session adds tokens per step and the acceptance histogram."""
+        bps = self.bytes_per_step()
+        steps = gen.steps if gen.decode_ms > 0 else 0
+        gbps = bps * steps / 1e9 / (gen.decode_ms / 1e3) if steps and gen.decode_ms > 0 else 0.0
+        line = (f"# {len(gen.tokens)} tokens; prefill {gen.prefill_ms:.1f} ms ({prompt_tokens} prompt tokens); decode {gen.ms_per_token:.2f} ms/token GPU "
+                f"({1000 / max(gen.ms_per_token, 1e-9):.1f} tok/s), {bps / 1e9:.2f} GB per step at {gbps:.0f} GB/s = "
+                f"{100 * gbps / self.profile.nominal_gbps:.0f} % of the chip's {self.profile.nominal_gbps:.0f} GB/s; wall "
+                f"{gen.decode_wall_ms / max(1, gen.decode_tokens):.2f} ms/token, host busy {100 * gen.host_busy_ms / max(gen.decode_wall_ms, 1e-9):.1f} %")
+        if gen.accepted is not None:
+            hist = {}
+            for c in gen.accepted:
+                hist[c] = hist.get(c, 0) + 1
+            line += (f"\n# speculative: {gen.steps} decode steps, {gen.tokens_per_step:.2f} tokens/step, mean accepted {gen.mean_accepted:.2f} of "
+                     f"{self.drafter.gamma}, mean verify length {sum(gen.verify_len) / max(1, len(gen.verify_len)):.2f}, accepted histogram "
+                     f"{dict(sorted(hist.items()))}")
+        return line
+
 
 def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos: Optional[int] = None, drafter_dir: Optional[str] = None,
-                 drafter_pack: Optional[str] = None, drafter_kind: str = "dspark", **options: Any) -> Session:
-    """The session for a checkpoint directory (+ optionally a drafter's: its kind names the ``Drafter`` plugin)."""
+                 drafter_pack: Optional[str] = None, drafter_kind: str = "dspark", sts_path: Optional[str] = None, **options: Any) -> Session:
+    """The session for a checkpoint directory (+ optionally a drafter's: its kind names the ``Drafter`` plugin;
+    ``sts_path`` = a JSON ``{"temperatures": [...]}`` from ``tools/bench/sts_calibrate.py``)."""
     with open(Path(model_dir) / "config.json") as f:
         arch = json.load(f)["architectures"][0]
     cls = resolve_model(arch)
@@ -204,7 +252,11 @@ def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos:
     if drafter_dir is not None:
         from .spec import DRAFTERS
 
-        drafter = DRAFTERS.get(drafter_kind).from_checkpoint(drafter_dir, target_lm_head=model.lm_head, max_context=max_context)
+        dopts = {}
+        if sts_path:
+            with open(sts_path) as f:
+                dopts["sts"] = json.load(f)["temperatures"]
+        drafter = DRAFTERS.get(drafter_kind).from_checkpoint(drafter_dir, target_lm_head=model.lm_head, max_context=max_context, **dopts)
     return Session(model, pack_dir, eos=eos, drafter=drafter, drafter_pack=drafter_pack, **options)
 
 
@@ -225,8 +277,10 @@ def main(argv=None) -> int:
     ap.add_argument("--drafter", default=None, help="a drafter checkpoint directory: speculative decoding (design §5.8)")
     ap.add_argument("--drafter-pack", default=None, help="the drafter's pack (tools/pack_weights.py --drafter-kind …)")
     ap.add_argument("--drafter-kind", default="dspark", help="the Drafter plugin the drafter checkpoint belongs to")
-    ap.add_argument("--verify", default="cost", choices=["cost", "threshold"], help="the verify-length rule (cost needs the chip's cost table)")
+    ap.add_argument("--verify", default="cost", choices=["cost", "threshold", "fixed"], help="the verify-length rule (cost needs the chip's cost table)")
     ap.add_argument("--verify-threshold", type=float, default=None, help="the confident-prefix threshold (<= 0: verify the whole block)")
+    ap.add_argument("--verify-length", type=int, default=None, help="with --verify fixed: the drafts verified every step")
+    ap.add_argument("--sts", default=None, help="STS temperatures JSON for the confidence chain (tools/bench/sts_calibrate.py)")
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
 
@@ -236,19 +290,11 @@ def main(argv=None) -> int:
     sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1 if a.no_eos else None,
                         temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed, autotune=not a.no_autotune,
                         drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind, verify=a.verify,
-                        verify_threshold=a.verify_threshold)
+                        verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts)
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0
     print(tok.decode(gen.tokens))
-    print(f"\n# {len(gen.tokens)} tokens; prefill {gen.prefill_ms:.1f} ms ({len(ids)} prompt tokens); decode {gen.ms_per_token:.2f} ms/token GPU "
-          f"({1000 / gen.ms_per_token:.1f} tok/s), wall {gen.decode_wall_ms / max(1, gen.decode_tokens):.2f} ms/token, host busy "
-          f"{100 * gen.host_busy_ms / max(gen.decode_wall_ms, 1e-9):.1f} %; total wall {wall:.1f} s incl. compile", file=sys.stderr)
-    if gen.accepted is not None:
-        hist = {}
-        for c in gen.accepted:
-            hist[c] = hist.get(c, 0) + 1
-        print(f"# speculative: {gen.steps} decode steps, {gen.decode_tokens / max(1, gen.steps):.2f} tokens/step, mean accepted "
-              f"{gen.mean_accepted:.2f}, accepted histogram {dict(sorted(hist.items()))}", file=sys.stderr)
+    print("\n" + sess.report(gen, len(ids)) + f"; total wall {wall:.1f} s incl. compile", file=sys.stderr)
     return 0
 
 

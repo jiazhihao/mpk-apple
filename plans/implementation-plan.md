@@ -390,6 +390,29 @@ generated tokens over 1 000 seeds agree with plain sampling's (TV < 0.15, every 
 gives the same draws while drafts are rejected, and a near-zero temperature reproduces the greedy sequence. Sampled
 (non-greedy) drafts, which need `q(d_k)` in the accept rule, are an extension for when acceptance measurements ask
 for them.
+
+*Status (2026-09-24, #40 on the M5 Pro).* `tools/bench/spec_bench.py` (plain vs the cost-aware rule, the confident
+prefix, fixed L = 1 / 2 / 3 / 7 over 11 prompts — code, math, chat with the chat template, plain text — with the
+accepted-length histogram per prompt) and `tools/bench/sts_calibrate.py` (per-position temperatures fitted against
+the measured acceptance from the program's confidence and accept logs) exist; `--sts` feeds the temperatures back.
+The gate table (dspark.md §3): plain 27.0 ms per token; the cost-aware rule **36.2 ms** (2.28 tokens per step, 1.28
+accepted, L̄ 1.8 — the best speculative configuration, matching fixed L = 3's 36.9 while adapting per prompt); the
+confident prefix at 0.5 46.0; fixed L = 1 / 2 / 7: 42.6 / 40.6 / 78.1. Every run's greedy tokens equal plain
+decode's. STS: the drafter's confidence head is calibrated as shipped (ECE 0.05–0.07, τ 0.67–1.27), the calibrated
+bench identical within noise. **Go / no-go on this chip: no-go on the shader-FMA GEMV path** — the round's fixed cost
+(the draft pass, 33 ms) plus ×1.28–×1.79 per verified draft cannot reach 1.5× plain at 0.62–0.72 acceptance per
+position; the same acceptance on the T ≥ 2 GEMM path (M9, #50/#51: the draft pass at bandwidth ≈ 9 ms, the verify
+pass at ~×1.1) projects to ≈ 17 ms per token, the gate. The exit gate for the 27B on the M3 Pro (and the llama.cpp
+`draft-dspark` comparison) needs that machine.
+
+*#41, decided by the numbers (2026-09-24).* The three optional optimizations of the round: (a) **INT8 `W₂` — not
+worth it now**: the Markov chain is 3 ms of a 70 ms round on the 8B (7 × 78 MB of BF16 `W₂` at T = 1, bandwidth-
+bound); INT8 would save ~1.5 ms per step (2 %) — the drafter's layers (19 ms) and the block's `lm_head` (11 ms) are
+the cost, and both are the T ≥ 2 GEMM path's job. (b) **Top-M bias pruning — not worth it, and only conditionally
+exact**: with `|bias(x)| ≤ ‖W₂[x]‖·‖W₁[prev]‖ ≤ B`, restricting the argmax of `U + bias` to the top-M base logits is
+exact only when the (M+1)-th base logit lies more than 2B below the top — a per-step check whose M grows with the
+flatness of `U`; it would save part of the 3 ms above at the price of a data-dependent argmax. (c) **The accelerator
+verify path** is #51 (M9): the measurement above is its justification.
 ### M7 — In-kernel runtime re-evaluation and intra-op stealing · 1.5 ew · time-boxed, off the critical path
 
 On the M3 Pro a dispatch boundary (1.8 µs) beats every in-kernel barrier we built (2.6–5.4 µs), and on the M5 Pro

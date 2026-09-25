@@ -131,13 +131,18 @@ class DSparkDrafter(Drafter):
     """``lm_head`` is the target's (the checkpoint carries none); ``embed_tokens`` is the drafter's own frozen copy."""
 
     def __init__(self, cfg: DSparkConfig, *, target_lm_head: Optional[LMHead], max_context: int = 4096, pack_rows: int = 16,
-                 confidence_threshold: float = 0.0) -> None:
+                 confidence_threshold: float = 0.0, sts: Optional[Sequence[float]] = None) -> None:
         """``target_lm_head``: the target's head (the block's logits go through it; None when only packing).
         ``confidence_threshold``: the confident-prefix rule's threshold (≤ 0 verifies the whole block, the
-        reference's default) used when the caller of ``lower_select`` has no cost table."""
+        reference's default) used when the caller of ``lower_select`` has no cost table. ``sts``: per-position
+        temperatures dividing the confidence logits (the calibration of the confidence chain, design §5.8;
+        ``tools/bench/sts_calibrate.py`` fits them against measured acceptance)."""
         super().__init__(prefix="draft.")
         self.cfg, self.gamma, self.max_context = cfg, cfg.block_size, max_context
         self.confidence_threshold = float(confidence_threshold)
+        self.sts = None if sts is None else [float(x) for x in sts]
+        if self.sts is not None and (len(self.sts) != self.gamma or any(x <= 0 for x in self.sts)):
+            raise ValueError(f"DSparkDrafter: sts needs {self.gamma} positive temperatures")
         h, eps = cfg.hidden_size, cfg.rms_norm_eps
         self.embed_tokens = Embedding(cfg.vocab_size, h, "embed_tokens.weight", prefix="draft.embed_tokens.")
         self.fc = Linear(cfg.n_taps * cfg.target_hidden, [Part("fc", "fc.weight", h)], prefix="draft.fc.")
@@ -353,19 +358,24 @@ class DSparkDrafter(Drafter):
             w = self.const_value(g, "draft.conf_w", (1, cfg.hidden_size + rank), DType.F32)
             b = self.const_value(g, "draft.conf_b", (1,), DType.F32)
             conf = g.value("draft.confidence", (gamma,), DType.F32)
-            g.op("confidence", [hidden, markov, w, b], [conf], domain=BlockDomain("rows", gamma), klass=OpClass.MAP, rank=rank)
+            attrs: Dict[str, Any] = dict(rank=rank)
+            if self.sts is not None:
+                attrs["sts"] = list(self.sts)
+            g.op("confidence", [hidden, markov, w, b], [conf], domain=BlockDomain("rows", gamma), klass=OpClass.MAP, **attrs)
         return DraftBlock(tokens=drafts, confidences=conf, hidden=hidden, gamma=gamma)
 
     def lower_select(self, g: Graph, block: DraftBlock, profile: Profile, *, cost: Optional[Sequence[float]] = None,
-                     threshold: Optional[float] = None) -> Value:
-        """With ``cost`` (the profile's relative cost of a (1 + l)-token target pass, l = 0 … γ) the cost-aware rule
-        of design §5.8; otherwise the confident-prefix rule with ``threshold`` (the drafter's default when None; the
-        whole block without a confidence head or with a threshold ≤ 0)."""
+                     threshold: Optional[float] = None, fixed: Optional[int] = None) -> Value:
+        """With ``fixed`` always that many drafts; with ``cost`` (the profile's relative cost of a (1 + l)-token target
+        pass, l = 0 … γ) the cost-aware rule of design §5.8; otherwise the confident-prefix rule with ``threshold``
+        (the drafter's default when None; the whole block without a confidence head or with a threshold ≤ 0)."""
         sel = g.value("draft.verify_len", (1,), DType.U32)
         ins = [block.tokens] + ([block.confidences] if block.confidences is not None else [])
         thr = self.confidence_threshold if threshold is None else float(threshold)
         attrs: Dict[str, Any] = dict(gamma=block.gamma, threshold=thr if block.confidences is not None else 0.0)
-        if cost is not None and block.confidences is not None:
+        if fixed is not None:
+            attrs["fixed"] = int(fixed)
+        elif cost is not None and block.confidences is not None:
             attrs["cost"] = [float(c) for c in cost]
         g.op("verify_select", ins, [sel], domain=BlockDomain("span", 1), klass=OpClass.SERIAL, **attrs)
         return sel

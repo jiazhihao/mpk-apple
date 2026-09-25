@@ -34,7 +34,8 @@ from .passes import DEFAULT_PASSES
 WINDOW_BYTES = 2 << 30          # pack windows: ICB bind offsets are 32-bit (design §5.1)
 ROW_SOURCE = {T: 0, N_INJ: 1}   # the StepState field a symbolic row count reads (T_SRC): t_this_step / n_inject
 STATIC_ROWS = 2
-ACCEPT_LOG = "accept_log"       # the speculative program's per-step (committed << 16 | accepted) log buffer
+ACCEPT_LOG = "accept_log"       # the speculative program's per-step (committed << 16 | verify_len << 8 | accepted) log buffer
+CONF_LOG = "conf_log"           # … and its per-step confidences (16 floats per step)
 COST_FORMAT = {"fp8_e4m3": "fp8"}   # pack format -> the profile's cost_T key
 FALLBACK_THRESHOLD = 0.5            # the confident-prefix threshold when no cost table exists (verifying the whole block costs ×5 at T = 8)
 
@@ -452,7 +453,7 @@ def _confidence(ctx: _Ctx, op: Op) -> None:
     if rank and ctx.shape(emb) != (gamma, rank):
         raise ValueError(f"confidence: emb must be [{gamma}, {rank}], got {ctx.shape(emb)}")
     k = ctx.kernel("spec_ops", _spec_ops(ctx), "confidence", {})
-    prm = ctx.params("confidence", kernels.conf_params(gamma, hid, rank))
+    prm = ctx.params("confidence", kernels.conf_params(gamma, hid, rank, sts=op.attrs.get("sts")))
     ctx.add(k, [(0, *ctx.buf(hidden)), (1, *ctx.buf(emb)), (2, *ctx.windows[w.name]), (3, *ctx.windows[b.name]), (4, *ctx.buf(conf)), (5, prm, 0)],
             (gamma, 1, 1), (32, 1, 1), op.kind)
 
@@ -465,10 +466,17 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
         raise ValueError(f"verify_select: gamma {gamma} exceeds the layout (gamma_max {ctx.layout.gamma_max}, t_max {ctx.layout.t_max})")
     k = ctx.kernel("spec_ops", _spec_ops(ctx), "verify_select", {})
     cost = op.attrs.get("cost") if conf is not None else None
-    prm = ctx.params("verify_select", kernels.select_params(gamma, float(op.attrs.get("threshold", 0.0)) if conf is not None else 0.0,
-                                                            ctx.layout.t_max, mode=1 if cost else 0, cost=cost))
+    fixed = op.attrs.get("fixed")
+    if fixed is not None:
+        mode, thr = 2, float(int(fixed))
+    elif cost:
+        mode, thr = 1, float(op.attrs.get("threshold", 0.0))
+    else:
+        mode, thr = 0, (float(op.attrs.get("threshold", 0.0)) if conf is not None else 0.0)
+    prm = ctx.params("verify_select", kernels.select_params(gamma, thr, ctx.layout.t_max, mode=mode, cost=cost, log_cap=kernels.ACCEPT_LOG_CAP))
+    ctx.program.buffers.setdefault(CONF_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * kernels.CONF_LOG_WIDTH * 4, None, "arena"))
     cb = ctx.buf(conf) if conf is not None else (ctx.scratch("verify_select.conf", gamma * 4), 0)
-    ctx.add(k, [(0, *ctx.buf(drafts)), (1, *cb), (2, ctx.program.step_state, 0), (3, prm, 0)], (1, 1, 1), (32, 1, 1), op.kind)
+    ctx.add(k, [(0, *ctx.buf(drafts)), (1, *cb), (2, ctx.program.step_state, 0), (3, prm, 0), (4, CONF_LOG, 0)], (1, 1, 1), (32, 1, 1), op.kind)
 
 
 def _accept_scan(ctx: _Ctx, op: Op) -> None:
@@ -556,7 +564,7 @@ def verify_costs(profile: Profile, pack: PackFile, gamma: int, t_max: int) -> Op
 
 
 def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Profile, *, cost: Optional[Sequence[float]] = None,
-                threshold: Optional[float] = None) -> Value:
+                threshold: Optional[float] = None, fixed: Optional[int] = None) -> Value:
     """Append the speculative round (design §5.8) to a lowered target step: the accept scan on the sampled tokens,
     the state commit passes of the mixers that declare one (``commit_kind``), the drafter's draft pass on the
     target's tapped residual streams and the verify-length select. Returns the select's value."""
@@ -575,17 +583,18 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
             raise ValueError(f"lower_round: the drafter taps layer {i}, which the model does not expose ({sorted(model.tap_values)})")
         taps.append(model.tap_values[i])
     block = drafter.lower_draft(g, DraftContext(taps, None))
-    return drafter.lower_select(g, block, profile, cost=cost, threshold=threshold)
+    return drafter.lower_select(g, block, profile, cost=cost, threshold=threshold, fixed=fixed)
 
 
 def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: int = -1, ring_capacity: int = 4096,
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
-                    verify_threshold: Optional[float] = None) -> Program:
+                    verify_threshold: Optional[float] = None, verify_length: Optional[int] = None) -> Program:
     """Lower ``model``, run the ``passes`` and emit its step program (see :func:`emit_program`). With a ``drafter``
     (and its pack) the dynamic-T program carries the speculative round instead of the advance: ``verify`` = ``"cost"``
     (the cost-aware verify-length rule when the profile has a cost table for the pack's dominant format, otherwise the
-    threshold rule) or ``"threshold"`` (``verify_threshold``; None = 0.5, ≤ 0 = verify the whole block)."""
+    threshold rule), ``"threshold"`` (``verify_threshold``; None = 0.5, ≤ 0 = verify the whole block) or ``"fixed"``
+    (``verify_length`` drafts every step — the measurement's baseline)."""
     layout = layout or StepStateLayout()
     g = Graph("step")
     token = model.lower(g)
@@ -602,12 +611,17 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     if drafter.gamma > layout.gamma_max or drafter.gamma + 1 > layout.t_max:
         raise ValueError(f"compile_program: a block of {drafter.gamma} needs gamma_max >= {drafter.gamma} and t_max >= {drafter.gamma + 1} "
                          f"(layout: {layout.gamma_max}, {layout.t_max})")
-    if verify not in ("cost", "threshold"):
-        raise ValueError(f"compile_program: verify must be 'cost' or 'threshold', got {verify!r}")
+    if verify not in ("cost", "threshold", "fixed"):
+        raise ValueError(f"compile_program: verify must be 'cost', 'threshold' or 'fixed', got {verify!r}")
+    fixed = None
+    if verify == "fixed":
+        if verify_length is None or not 0 <= verify_length <= drafter.gamma:
+            raise ValueError(f"compile_program: verify='fixed' needs verify_length in 0..{drafter.gamma}")
+        fixed = int(verify_length)
     cost = verify_costs(profile, pack, drafter.gamma, layout.t_max) if verify == "cost" else None
-    if cost is None and verify_threshold is None:
+    if cost is None and fixed is None and verify_threshold is None:
         verify_threshold = FALLBACK_THRESHOLD           # no cost table (or the threshold rule asked for without a threshold)
-    lower_round(g, model, drafter, token, profile, cost=cost, threshold=verify_threshold)
+    lower_round(g, model, drafter, token, profile, cost=cost, threshold=verify_threshold, fixed=fixed)
     g.check()
     for p in passes:
         p(g)

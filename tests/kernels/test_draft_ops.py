@@ -245,15 +245,26 @@ def test_confidence(dev):
     got = np.frombuffer(out.read(0, gamma * 4), dtype=np.float32)
     z = rbf(rbf(bf16_to_f32(hidden).astype(np.float64) @ w[:hid].astype(np.float64)) + b[0])
     assert np.abs(got - 1.0 / (1.0 + np.exp(-z))).max() <= 2e-3
+    # STS temperatures divide the logit per position
+    sts = [0.5, 1.0, 2.0, 1.5, 0.8, 1.2, 3.0]
+    out.fill(0)
+    d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, hidden.tobytes())).buffer(1, nt.Buffer(dev, emb.tobytes()))
+         .buffer(2, nt.Buffer(dev, w.astype(np.float32).tobytes())).buffer(3, nt.Buffer(dev, b.astype(np.float32).tobytes())).buffer(4, out)
+         .bytes(5, kernels.conf_params(gamma, hid, 0, sts=sts)).grid(gamma).threadgroup(32))
+    _run(dev, d)
+    got = np.frombuffer(out.read(0, gamma * 4), dtype=np.float32)
+    assert np.abs(got - 1.0 / (1.0 + np.exp(-z / np.array(sts)))).max() <= 2e-3
 
 
 # ---- verify_select and accept_scan on StepState ---------------------------------------------------------------
 
-def _select(dev, state, drafts, conf, gamma, threshold, t_max=8):
+def _select(dev, state, drafts, conf, gamma, threshold, t_max=8, mode=0, cost=None, log=None):
     pso = nt.Pipeline(_spec_lib(dev), "verify_select")
     st = nt.Buffer(dev, LAYOUT.pack(state))
+    lb = log if log is not None else nt.Buffer(dev, 16 * 4)
     d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, np.asarray(drafts, np.int32).tobytes()))
-         .buffer(1, nt.Buffer(dev, np.asarray(conf, np.float32).tobytes())).buffer(2, st).bytes(3, kernels.select_params(gamma, threshold, t_max))
+         .buffer(1, nt.Buffer(dev, np.asarray(conf, np.float32).tobytes())).buffer(2, st)
+         .bytes(3, kernels.select_params(gamma, threshold, t_max, mode=mode, cost=cost, log_cap=4 if log is not None else 0)).buffer(4, lb)
          .grid(1).threadgroup(32))
     _run(dev, d)
     return LAYOUT.unpack(st.read(0, LAYOUT.size))
@@ -273,6 +284,20 @@ def test_verify_select(dev):
     assert s["drafter_ctx_len"] == 13 and s["n_inject"] == 0 and s["t_this_step"] == 8 and s["pending_tokens"] == [1, 2, 3, 4, 5, 6, 7, 8]
     s = _select(dev, dict(base, done=1), drafts, conf, 5, 0.0)
     assert s["drafter_ctx_len"] == 10 and s["n_inject"] == 3
+    # the cost-aware rule: argmax_l (1 + Σ a_i) / cost[l] with a_i = Π c_j
+    cost = [1.0, 1.28, 1.535, 1.79, 2.67, 3.55, 4.4, 5.3]
+    s = _select(dev, base, drafts, conf, 5, 0.0, mode=1, cost=cost)
+    a, best, exp_L, e = 1.0, 1.0, 0, 1.0
+    for l in range(1, 6):
+        a *= conf[l - 1]; e += a
+        if e / cost[l] > best:
+            best, exp_L = e / cost[l], l
+    assert s["verify_len"] == exp_L == 2 and s["t_this_step"] == 3
+    # a fixed L, clamped to the block and to t_max - 1; the confidence log
+    log = nt.Buffer(dev, 4 * 16 * 4); log.fill(0)
+    s = _select(dev, dict(base, step=6), drafts, conf, 5, 2.0, mode=2, log=log)
+    assert s["verify_len"] == 2 and np.frombuffer(log.read(0, 4 * 16 * 4), dtype=np.float32).reshape(4, 16)[6 % 4, :5].tolist() == pytest.approx(conf)
+    assert _select(dev, base, drafts, conf, 5, 9.0, mode=2)["verify_len"] == 5 and _select(dev, base, drafts, conf, 5, 9.0, t_max=4, mode=2)["verify_len"] == 3
 
 
 def model_accept(state, tokens, ring_cap, eos):
@@ -324,8 +349,9 @@ def _accept(dev, state, tokens, ring_cap=16, eos=-1):
     slots = np.frombuffer(ring.read(0, ring_cap * 8), dtype=np.uint64)
     entry = int(np.frombuffer(log.read(0, 64 * 4), dtype=np.uint32)[state["step"] % 64])
     if not state.get("done"):
-        exp_entry = ((state["t_this_step"] << 16) | 0xFFFF) if state.get("prefill_left") else ((got["position"] - state["position"] - (state["t_this_step"] - 1 - state["verify_len"])) << 16 | got["accepted"])
-        assert entry == exp_entry or got["error"], (entry, exp_entry)      # the step's log: (committed << 16) | accepted
+        committed = got["position"] - state["position"] - (state["t_this_step"] - 1 - state["verify_len"])
+        exp_entry = ((state["t_this_step"] << 16) | 0xFFFF) if state.get("prefill_left") else ((committed << 16) | (state["verify_len"] << 8) | got["accepted"])
+        assert entry == exp_entry or got["error"], (entry, exp_entry)      # the step's log: (committed << 16) | (L << 8) | accepted
     return got, {i: int(v) for i, v in enumerate(slots) if v}
 
 

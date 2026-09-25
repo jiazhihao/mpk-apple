@@ -106,6 +106,32 @@ def test_verify_costs_and_cost_mode(pair):
     assert struct.unpack_from("<IfII", prog2.buffers[[b for b in vs2.bindings if b[0] == 3][0][1]].init)[1:] == (0.5, 8, 0)
 
 
+def test_fixed_length_sts_and_logs(pair):
+    model, drafter, tp, dp = pair
+    prog = compile_program(model, tp, PROF, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="fixed", verify_length=2)
+    vs = [o for o in prog.ops if o.name == "verify_select"][0]
+    prm = prog.buffers[[b for b in vs.bindings if b[0] == 3][0][1]].init
+    assert struct.unpack_from("<IfII", prm)[1:] == (2.0, 8, 2) and struct.unpack_from("<I", prm, 16 + 64)[0] == 65536
+    assert any(b[0] == 4 and b[1] == "conf_log" for b in vs.bindings) and prog.buffers["conf_log"].nbytes == 65536 * 16 * 4
+    with pytest.raises(ValueError):
+        compile_program(model, tp, PROF, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="fixed")
+    with pytest.raises(ValueError):
+        compile_program(model, tp, PROF, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="fixed", verify_length=9)
+    # STS temperatures reach the confidence kernel's params
+    from dspark_synth import build as _build
+
+    d2, _, _, _ = _build(pair_dir(tp), target_lm_head=model.lm_head, sts=[0.5, 1.0, 2.0])
+    prog2 = compile_program(model, tp, PROF, dynamic_t=True, drafter=d2, drafter_pack=dp)
+    cf = [o for o in prog2.ops if o.name == "confidence"][0]
+    assert struct.unpack_from("<3f", prog2.buffers[[b for b in cf.bindings if b[0] == 5][0][1]].init, 16) == (0.5, 1.0, 2.0)
+    with pytest.raises(ValueError):
+        _build(pair_dir(tp), target_lm_head=model.lm_head, sts=[1.0])
+
+
+def pair_dir(tp):
+    return tp.dir.parent.parent / "drafter"
+
+
 def test_round_needs_the_dynamic_program_and_a_fitting_layout(pair):
     model, drafter, tp, dp = pair
     with pytest.raises(ValueError):
