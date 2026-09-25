@@ -18,6 +18,7 @@ weights from a block-lane-major pack — not one never-returning kernel with spe
 | [`docs/research/apple-gpu-probes.md`](docs/research/apple-gpu-probes.md) | Measured Apple-GPU execution model (M3 Pro, M5 Pro): core mapping, in-kernel sync, preemption and sharing, bandwidth vs access pattern and lane order, in-kernel barriers vs dispatch boundaries, real FP8/NVFP4 decode kernels, the M5 `matmul2d` path |
 | [`docs/research/apple-inference-systems.md`](docs/research/apple-inference-systems.md) | How MLX, llama.cpp and others run LLMs on Apple silicon; what we reuse |
 | [`docs/research/dspark.md`](docs/research/dspark.md) | DSpark speculative decoding: the method, the public drafters for our targets, what a round costs on our hardware |
+| [`docs/porting.md`](docs/porting.md) | The porting guide: adding a model, a format, an op, a drafter or a chip — the contracts, the registries, the CI checks, the golden workflow, with the time each port took ([`porting-log.md`](docs/research/porting-log.md)) |
 | [`probes/`](probes) | The 16 probe programs. `./probes/run_all.sh` runs them on this machine (Command Line Tools only, ~5 min) and saves `probes/results/<chip>….txt`; `./probes/remote_run.sh user@host` does the same on another bare-metal Mac. Measured: M3 Pro (2026-09-19), M5 Pro (2026-09-22) |
 | [`profiles/`](profiles) | Provisional per-chip profiles derived by hand from the probe results (M3 Pro, M5 Pro) |
 
