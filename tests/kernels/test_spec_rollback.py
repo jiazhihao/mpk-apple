@@ -59,3 +59,49 @@ def test_speculative_equals_plain_greedy(packs, verify):
     st = spec.engine(0).state()
     assert st["drafter_ctx_len"] == st["position"] == 1 + 12 - 1 and st["ring_head"] == st["ring_tail"] == 12
     assert st["error"] == 0
+
+
+def _counts(tokens_by_seed, position):
+    c = {}
+    for toks in tokens_by_seed:
+        t = toks[position]
+        c[t] = c.get(t, 0) + 1
+    return c
+
+
+def test_speculative_sampling_preserves_the_target_distribution(packs):
+    """Temperature > 0 with a drafter: every committed token is a sample of the target's conditional (design §5.8)
+    — the empirical distributions of the 2nd and 3rd generated tokens over many seeds agree with plain sampling's,
+    and at a near-zero temperature the speculative sequence equals the plain one token for token."""
+    tdir, ddir = packs
+    model = _model(tdir)
+    drafter, _, cfg, _ = build(ddir, target_lm_head=model.lm_head)
+    pack_model(drafter, str(ddir), str(ddir / "pack"), PackLayout(rows=16))
+    ids = [7, 23, 41, 3]
+    n_seeds, n_new = 1000, 3
+    plain_seqs, spec_seqs, same_seed = [], [], []
+    plain = Session(_model(tdir), str(tdir / "pack"), eos=-1, autotune=False, temperature=0.9, top_k=12)
+    spec = Session(model, str(tdir / "pack"), eos=-1, autotune=False, temperature=0.9, top_k=12, drafter=drafter, drafter_pack=str(ddir / "pack"),
+                   verify="threshold", verify_threshold=0.0)
+    for seed in range(n_seeds):
+        plain.seed, spec.seed = seed, seed + 100_000                        # independent streams: two samples of one distribution
+        plain_seqs.append(plain.generate(ids, n_new).tokens)
+        spec_seqs.append(spec.generate(ids, n_new).tokens)
+        if seed < 50:                                                      # the same seed: the draws coincide while drafts are rejected
+            spec.seed = seed
+            same_seed.append(spec.generate(ids, 2).tokens)
+    assert all(p[:2] == s for p, s in zip(plain_seqs, same_seed))
+    for pos in (1, 2):
+        cp, cs = _counts(plain_seqs, pos), _counts(spec_seqs, pos)
+        tv = 0.5 * sum(abs(cp.get(t, 0) - cs.get(t, 0)) for t in set(cp) | set(cs)) / n_seeds
+        worst = max(abs(cp.get(t, 0) - cs.get(t, 0)) / (2.0 * max(cp.get(t, 0), 1)) ** 0.5 for t in cp if cp[t] >= 20)
+        print(f"\nposition {pos}: plain {dict(sorted(cp.items(), key=lambda kv: -kv[1])[:5])} spec {dict(sorted(cs.items(), key=lambda kv: -kv[1])[:5])} "
+              f"TV {tv:.3f} worst z {worst:.2f}")
+        assert tv < 0.15 and worst < 4.5, (pos, tv, worst)                 # two empirical distributions of n = 1000 over ≤ 12 tokens
+    assert len(set(tuple(s) for s in spec_seqs)) > 10                        # it does sample
+    # a near-greedy temperature: identical sequences (the sampler's draws are the argmax)
+    cold_p = Session(_model(tdir), str(tdir / "pack"), eos=-1, autotune=False, temperature=1e-3, seed=5)
+    cold_s = Session(model, str(tdir / "pack"), eos=-1, autotune=False, temperature=1e-3, seed=5, drafter=drafter, drafter_pack=str(ddir / "pack"))
+    greedy = Session(_model(tdir), str(tdir / "pack"), eos=-1, autotune=False)
+    a, b, c = cold_p.generate(ids, 16).tokens, cold_s.generate(ids, 16).tokens, greedy.generate(ids, 16).tokens
+    assert a == b == c

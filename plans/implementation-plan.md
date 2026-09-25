@@ -377,9 +377,19 @@ the M5 Pro: **not the gate yet** — 37.5 ms per token on a story prompt (1.05 a
 plain decode on a chat-template code prompt (2.14 accepted); the round's fixed cost is the draft pass, 33 ms on the
 shader GEMV path (the drafter's BF16 layers and the `lm_head` at T = 7 run at ~110 GB/s), and each verified draft
 costs the NVFP4 table's ×1.28–×1.79. The exit gate therefore rests on the T ≥ 2 GEMM path (M9, #51) and on the
-drafter's weights in a narrower format, as §5.8 anticipated. Remaining in #39: rejection sampling for temperature
-> 0 (the session refuses a drafter with sampling for now); in #40: the acceptance histograms on the prompt set, STS
-calibration and the gate table (the 27B on the M3 Pro).
+drafter's weights in a narrower format, as §5.8 anticipated. Remaining in #40: the acceptance histograms on the
+prompt set, STS calibration and the gate table (the 27B on the M3 Pro).
+
+*Status (2026-09-24, #39).* Sampling with a drafter is exact speculative sampling without a sampling mode in the
+accept scan: the drafts are greedy (a point-mass proposal), so the rejection rule `min(1, p_t/q)` reduces to
+"draw `y_k ~ p_t(· | prefix, d_1 … d_k)` at every position with the ordinary GPU sampler, accept `d_{k+1}` exactly
+when `y_k` equals it; the first mismatch's `y_k` is the correction, `y_L` the bonus" — which is what the accept scan
+already does with the sampled tokens. Every committed token is a sample of the target's conditional. Verified on
+the synthetic hybrid target (`tests/kernels/test_spec_rollback.py`): the empirical distributions of the 2nd and 3rd
+generated tokens over 1 000 seeds agree with plain sampling's (TV < 0.15, every token within 4.5 σ), the same seed
+gives the same draws while drafts are rejected, and a near-zero temperature reproduces the greedy sequence. Sampled
+(non-greedy) drafts, which need `q(d_k)` in the accept rule, are an extension for when acceptance measurements ask
+for them.
 ### M7 — In-kernel runtime re-evaluation and intra-op stealing · 1.5 ew · time-boxed, off the critical path
 
 On the M3 Pro a dispatch boundary (1.8 µs) beats every in-kernel barrier we built (2.6–5.4 µs), and on the M5 Pro
