@@ -17,6 +17,7 @@ class KernelSpec:
     source: str                          # MSL source (already assembled: prelude + snippets + template)
     function: str
     macros: Dict[str, str] = field(default_factory=dict)
+    language_version: int = 0            # 0 = the compiler's default; the tensor-ops kernels need MSL 4.0 (4 << 16)
 
 
 @dataclass
@@ -53,7 +54,8 @@ class Program:
     def to_json(self) -> str:
         d = {"version": 1, "step_state": self.step_state, "ring": self.ring, "ring_capacity": self.ring_capacity,
              "layout": {"t_max": self.layout.t_max, "gamma_max": self.layout.gamma_max},
-             "kernels": {k: {"function": v.function, "macros": v.macros, "source": v.source} for k, v in self.kernels.items()},
+             "kernels": {k: {"function": v.function, "macros": v.macros, "source": v.source, "language_version": v.language_version}
+                         for k, v in self.kernels.items()},
              "buffers": {k: {"nbytes": v.nbytes, "role": v.role, "init_hex": v.init.hex() if v.init is not None else None,
                              "file": v.file, "file_offset": v.file_offset} for k, v in self.buffers.items()},
              "ops": [{"kernel": o.kernel, "bindings": o.bindings, "grid": o.grid, "threadgroup": o.threadgroup,
@@ -66,7 +68,7 @@ class Program:
         if d.get("version") != 1:
             raise ValueError("unsupported program version")
         return cls(
-            kernels={k: KernelSpec(v["source"], v["function"], dict(v.get("macros", {}))) for k, v in d["kernels"].items()},
+            kernels={k: KernelSpec(v["source"], v["function"], dict(v.get("macros", {})), int(v.get("language_version", 0))) for k, v in d["kernels"].items()},
             buffers={k: BufferSpec(v["nbytes"], bytes.fromhex(v["init_hex"]) if v.get("init_hex") else None, v.get("role", "arena"),
                                    v.get("file"), int(v.get("file_offset", 0))) for k, v in d["buffers"].items()},
             ops=[OpSpec(o["kernel"], [tuple(b) for b in o["bindings"]], tuple(o["grid"]), tuple(o["threadgroup"]), o.get("barrier_before", o.get("barrier_after", True)),

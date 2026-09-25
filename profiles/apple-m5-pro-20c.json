@@ -234,6 +234,14 @@
     "threadgroups_per_core": 1,
     "sibling_order": "alu_first",
     "max_cb_ms": 16,
+    "accelerator": "on",
+    "accelerator_min_t": {
+      "nvfp4": 2,
+      "fp8": 2,
+      "int4_affine": 2,
+      "int8": 2,
+      "bf16": 2
+    },
     "cost_T": {
       "fp8": {
         "1": 1.0,
@@ -259,6 +267,7 @@
       }
     },
     "note": "normalized values the compiler reads (Profile.from_dict); cost_T = pass cost relative to a T = 1 pass, from p13 (shader ALUs, best geometry) and gemm_tile (#50, the cooperative-fill accelerator path, TM = 8 / 16 / 32; p14's staged tile was 1.49 / - / 1.74 and 1.53 / - / 1.78)",
-    "cost_T_note": "shader-FMA kernels (p13); a SIMD-group-matrix verify kernel is expected to bring T=2-4 to ~1.05-1.15 (MLX qmm_t reaches 85-91 % of nominal at T=2-4 on this chip) - re-measure when it exists"
+    "cost_T_note": "shader-FMA kernels (p13); a SIMD-group-matrix verify kernel is expected to bring T=2-4 to ~1.05-1.15 (MLX qmm_t reaches 85-91 % of nominal at T=2-4 on this chip) - re-measure when it exists",
+    "accelerator_note": "gemm_tile (#50/#51): at 17408x5120 the tile at TM = 8 costs 1.03 (NVFP4) / 1.09 (FP8) of a T = 1 shader pass against the shader's 1.28 / 1.08 at T = 2 and 1.79 / 1.11 at T = 4, so every format's T > 1 GEMVs take the tile (min_t 2); the shader keeps T = 1"
   }
 }

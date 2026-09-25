@@ -61,6 +61,7 @@ def main() -> int:
     ap.add_argument("-n", "--max-new-tokens", type=int, default=128)
     ap.add_argument("--max-context", type=int, default=4096)
     ap.add_argument("--sts", default=None)
+    ap.add_argument("--accelerator", default=None, choices=["on", "off"], help="T > 1 GEMVs on the tensor-ops tile (default: the chip profile's)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     from tokenizers import Tokenizer
@@ -75,9 +76,9 @@ def main() -> int:
         opts = parse_mode(mode)
         if opts:
             sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1, drafter_dir=a.drafter, drafter_pack=a.drafter_pack,
-                                drafter_kind=a.drafter_kind, sts_path=a.sts, **opts)
+                                drafter_kind=a.drafter_kind, sts_path=a.sts, accelerator=a.accelerator, **opts)
         else:
-            sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1)
+            sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1, accelerator=a.accelerator)
         sessions[mode] = sess
         info = sess.dev.info()
         for cat, i, prompt in prompts:
@@ -86,7 +87,8 @@ def main() -> int:
             hist = {}
             for c in (gen.accepted or []):
                 hist[c] = hist.get(c, 0) + 1
-            row = {"chip": info.name, "date": time.strftime("%Y-%m-%d %H:%M"), "mode": mode, "prompt": f"{cat}{i}", "prompt_tokens": len(ids),
+            row = {"chip": info.name, "date": time.strftime("%Y-%m-%d %H:%M"), "mode": mode, "accelerator": a.accelerator or "profile",
+                   "prompt": f"{cat}{i}", "prompt_tokens": len(ids),
                    "new_tokens": len(gen.tokens), "steps": gen.steps, "ms_per_token": round(gen.ms_per_token, 3),
                    "tokens_per_step": round(gen.tokens_per_step, 3), "mean_accepted": round(gen.mean_accepted, 3),
                    "mean_verify_len": round(sum(gen.verify_len) / len(gen.verify_len), 3) if gen.verify_len else 0.0,

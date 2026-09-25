@@ -78,13 +78,13 @@ def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None
     macros = kernels.gemm_macros(info, tm=tm, out_bf16=out_bf16, tn=tn, tk=tk)
     tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
     lib = _lib(dev, fmt, macros)
-    pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(lib, "x_permute")
+    pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(_lib(dev, fmt, dict(macros, **kernels.x_permute_macros(False))), "x_permute")
     xp = nt.Buffer(dev, tm * k * 2)
     y = nt.Buffer(dev, tm * n * (2 if out_bf16 else 4)); y.fill(0)
     tg = min(384, pso.max_threads_per_threadgroup)
     n_sg = (tg // 32) * dev.info().gpu_cores
-    d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(dev, xb.tobytes())).buffer(1, xp)
-          .bytes(2, kernels.x_permute_params(k, t_act, tm, int(f.weights_per_word), tk)).grid(-(-(tm * k) // 256)).threadgroup(256).barrier())
+    d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(dev, xb.tobytes())).buffer(3, xp)
+          .bytes(4, kernels.x_permute_params(k, t_act, tm, int(f.weights_per_word), tk)).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
     d1 = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, data)).buffer(1, nt.Buffer(dev, row_scales.tobytes())).buffer(2, xp).buffer(3, y)
           .bytes(4, kernels.gemm_params(n, kernels.gemm_tiles(n, tn), n_sg, t_act)).grid(-(-(n_sg * 32) // tg)).threadgroup(tg))
     r = nt.Queue(dev).run([d0, d1])
@@ -126,3 +126,197 @@ def test_gemm_tile_other_tile_shapes(dev, fmt, tn, tk):
     out, ref = _run(dev, fmt, 200, 2048, 16, 11, "interleaved16", tn=tn, tk=tk)
     chk = check_against_oracle(out[:11], ref)
     assert chk.ok(), chk
+
+
+# ---- the fusions the tile takes over from gemv_T (#51) --------------------------------------------------------------
+
+EPS = 1e-6
+
+
+def _rbf(a):
+    return bf16_to_f32(f32_to_bf16(np.asarray(a, np.float32)))
+
+
+class Gemm:
+    """One packed matrix and the dispatch plumbing for the tile's variants (mirrors the fused-GEMV harness)."""
+
+    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16"):
+        self.dev, self.n, self.k, self.tm, self.fmt = dev, n, k, tm, fmt
+        rng = np.random.default_rng(seed)
+        self.spec = random_spec(fmt, n, k, rng)
+        self.data, self.info, self.row_scales = pack_spec(self.spec, PackLayout(rows=rows, lane_order=lane_order))
+        f = FORMATS.get(fmt)
+        rs = self.row_scales.astype(np.float64)[:, None]
+        self.w = _rbf((f.dequantize(self.spec) / rs).astype(np.float32)).astype(np.float64) * rs      # the BF16 operand × the tensor scale
+        self.wpw = int(f.weights_per_word)
+        self.wbuf, self.rsbuf = nt.Buffer(dev, self.data), nt.Buffer(dev, self.row_scales.tobytes())
+
+    def run(self, x_bf16, *, t_active=None, norm=None, epilogue=None, residual=None, stat_out=False, out_bf16=None,
+            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None):
+        """``norm`` = (stat [T, parts] float32, parts, norm_w [K]); ``row_range`` = (start, count) in slab rows;
+        ``step_state`` = (layout, values) with ``t_range`` = (lo, hi) for a predicated variant."""
+        t_act = self.tm if t_active is None else t_active
+        if out_bf16 is None:
+            out_bf16 = epilogue is not None
+        macros = kernels.gemm_macros(self.info, tm=self.tm, out_bf16=out_bf16, epilogue=epilogue, stat_out=stat_out, round_before_residual=round_residual)
+        tk = int(macros["TK"].rstrip("u"))
+        pmacros = dict(kernels.x_permute_macros(norm is not None))
+        src = kernels.gemm_source(self.fmt)
+        if step_state is not None:
+            layout, values = step_state
+            src = src.replace(kernels.PRELUDE, kernels.PRELUDE + layout.to_msl() + "\n", 1)
+            macros["STEP_STATE"] = pmacros["STEP_STATE"] = "1"
+            if t_range is not None:
+                macros["T_LO"] = pmacros["T_LO"] = str(t_range[0])
+                macros["T_HI"] = pmacros["T_HI"] = str(t_range[1])
+            st = nt.Buffer(self.dev, layout.pack(values))
+        macros.update(extra_macros or {}); pmacros.update(extra_macros or {})
+        lib = nt.Library(self.dev, src, macros, language_version=kernels.MSL_TENSOR_OPS)
+        plib = nt.Library(self.dev, src, {**macros, **pmacros}, language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
+        pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(plib, "x_permute")
+        tg = min(384, pso.max_threads_per_threadgroup)
+        n_sg = (tg // 32) * self.dev.info().gpu_cores
+        n = self.n
+        if row_range is None:
+            tile0, n_tiles, n_rows = 0, kernels.gemm_tiles(n, int(macros["TN"].rstrip("u"))), n
+        else:
+            tn = int(macros["TN"].rstrip("u"))
+            tile0, n_tiles, n_rows = row_range[0] // tn, -(-row_range[1] // tn), row_range[1]
+        n_blocks = -(-n_rows // self.info.rows)
+        n_out = n_rows // 2 if epilogue == "silu_mul" else n_rows
+        xp = nt.Buffer(self.dev, self.tm * self.k * 2)
+        y = nt.Buffer(self.dev, self.tm * n_out * 4); y.fill(0)
+        parts = norm[1] if norm else 1
+        d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(self.dev, x_bf16.tobytes())).buffer(3, xp)
+              .bytes(4, kernels.x_permute_params(self.k, t_act, self.tm, self.wpw, tk, parts, EPS)).grid(self.tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
+        if norm:
+            d0.buffer(1, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes())).buffer(2, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
+        d1 = (nt.Dispatch().pipeline(pso).buffer(0, self.wbuf).buffer(1, self.rsbuf).buffer(2, xp).buffer(3, y)
+              .bytes(4, kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks)).grid(-(-(n_sg * 32) // tg)).threadgroup(tg))
+        if epilogue == "residual":
+            d1.buffer(7, nt.Buffer(self.dev, residual.tobytes()))
+        so = None
+        if stat_out:
+            so = nt.Buffer(self.dev, self.tm * n_blocks * 4); so.fill(0)
+            d1.buffer(8, so)
+        if step_state is not None:
+            d0.buffer(15, st); d1.buffer(15, st)
+        r = nt.Queue(self.dev).run([d0, d1])
+        assert not r.error, r.error
+        raw = y.read(0, self.tm * n_out * (2 if out_bf16 else 4))
+        out = bf16_to_f32(np.frombuffer(raw, dtype=np.uint16)).reshape(self.tm, n_out) if out_bf16 else np.frombuffer(raw, dtype=np.float32).reshape(self.tm, n_out)
+        so_arr = np.frombuffer(so.read(0, self.tm * n_blocks * 4), dtype=np.float32).reshape(self.tm, n_blocks) if stat_out else None
+        return out, so_arr
+
+
+def _norm_inputs(rng, t, k, scale=1.0):
+    h = f32_to_bf16(rng.standard_normal((t, k)).astype(np.float32) * scale)
+    hf = bf16_to_f32(h)
+    nw = (1.0 + rng.standard_normal(k).astype(np.float32) * 0.1).astype(np.float32)
+    stat = (hf.astype(np.float64) ** 2).sum(-1).astype(np.float32)
+    r = 1.0 / np.sqrt(stat.astype(np.float64) / k + EPS)
+    return h, nw, stat, _rbf(hf * r[:, None] * nw[None, :])
+
+
+@pytest.mark.parametrize("fmt,k", [("nvfp4", 1024), ("fp8_e4m3", 1024), ("bf16", 1024), ("int4_affine", 1024), ("bf16", 256), ("nvfp4", 2048)])
+def test_gemm_norm_on_the_way_in(dev, fmt, k):
+    """x_permute with PERM_NORM: the tile multiplies the reference norm's BF16 output; K = 256 is a slice shorter
+    than the permute's unroll (a synthetic drafter's hidden size)."""
+    t = 8
+    g = Gemm(dev, fmt, 96, k, t)
+    h, nw, stat, x_ref = _norm_inputs(np.random.default_rng(11), t, k)
+    y, _ = g.run(h, norm=(stat, 1, nw), out_bf16=False)
+    ref = (x_ref.astype(np.float64) @ g.w.T).astype(np.float32)
+    chk = check_against_oracle(y, ref)
+    assert chk.ok(), chk
+
+
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16"])
+@pytest.mark.parametrize("rounded", [False, True])
+def test_gemm_residual_epilogue(dev, fmt, rounded):
+    t = 8
+    g = Gemm(dev, fmt, 96, 1024, t)
+    rng = np.random.default_rng(7)
+    x = f32_to_bf16(rng.uniform(-1, 1, size=(t, 1024)).astype(np.float32))
+    res = f32_to_bf16(rng.standard_normal((t, 96)).astype(np.float32))
+    y, _ = g.run(x, epilogue="residual", residual=res, round_residual=rounded)
+    prod = bf16_to_f32(x).astype(np.float64) @ g.w.T
+    ref = _rbf((_rbf(prod) if rounded else prod) + bf16_to_f32(res))
+    chk = check_against_oracle(y, ref)
+    assert chk.ok_rounded() and chk.max_ulp_at_scale <= 1.0, chk     # one BF16 rounding of the sum (the product ~1e-6 off)
+
+
+@pytest.mark.parametrize("fmt,rows", [("nvfp4", 16), ("fp8_e4m3", 16), ("bf16", 8), ("int4_affine", 16)])
+@pytest.mark.parametrize("t_act", [8, 5])
+def test_gemm_silu_mul_epilogue(dev, fmt, rows, t_act):
+    """Chunk-interleaved gate|up rows (chunk = R/2): the partner row lives in the lane differing in bit 3 (R = 16) or
+    bit 0 (R = 8); N/2 outputs, rows beyond t_active untouched."""
+    n = 192
+    g = Gemm(dev, fmt, n, 1024, 8, rows=rows)
+    rng = np.random.default_rng(9)
+    x = f32_to_bf16(rng.uniform(-1, 1, size=(8, 1024)).astype(np.float32))
+    y, _ = g.run(x, epilogue="silu_mul", t_active=t_act)
+    full = bf16_to_f32(x).astype(np.float64) @ g.w.T                      # [T, N] in slab-row order
+    chunk = rows // 2
+    blocks = full.reshape(8, n // rows, rows)
+    gate, up = blocks[:, :, :chunk], blocks[:, :, chunk:]
+    ref = _rbf((gate / (1 + np.exp(-gate)) * up).reshape(8, n // 2))
+    chk = check_against_oracle(y[:t_act], ref[:t_act])
+    assert chk.ok_rounded(), chk
+    assert np.all(y[t_act:] == 0)
+
+
+@pytest.mark.parametrize("fmt,rows", [("fp8_e4m3", 16), ("bf16", 8)])
+def test_gemm_stat_out_and_row_range(dev, fmt, rows):
+    """STAT_OUT: per pack block, the sum of squares of the BF16-rounded outputs per token; a row range of the slab
+    (whole tiles) gives range-relative outputs and partials."""
+    t = 8
+    n = 320
+    g = Gemm(dev, fmt, n, 1024, t, rows=rows)
+    rng = np.random.default_rng(5)
+    x = f32_to_bf16(rng.uniform(-1, 1, size=(t, 1024)).astype(np.float32))
+    res = f32_to_bf16(rng.standard_normal((t, n)).astype(np.float32))
+    y, so = g.run(x, epilogue="residual", residual=res, stat_out=True, t_active=6)
+    ref = _rbf(bf16_to_f32(x).astype(np.float64) @ g.w.T + bf16_to_f32(res))
+    assert check_against_oracle(y[:6], ref[:6]).ok_rounded()
+    assert so.shape == (t, n // rows) and np.all(so[6:] == 0)
+    blocks = (y[:6].astype(np.float64) ** 2).reshape(6, n // rows, rows).sum(-1)
+    assert np.allclose(so[:6], blocks, rtol=1e-5)
+    # the last 128 rows as a range (tiles of 16): the same values, relative indices
+    start = 192
+    y2, so2 = g.run(x, epilogue="residual", residual=np.ascontiguousarray(res[:, start:]), stat_out=True, row_range=(start, n - start), t_active=6)
+    assert np.array_equal(y2, np.concatenate([y[:6, start:], np.zeros((2, n - start), np.float32)]))
+    assert np.allclose(so2[:6], (y2[:6].astype(np.float64) ** 2).reshape(6, (n - start) // rows, rows).sum(-1), rtol=1e-5) and np.all(so2[6:] == 0)
+
+
+def test_gemm_step_state_predicate(dev):
+    """A per-T variant: the tile and its permute read T from StepState and run only for T_LO < T <= T_HI."""
+    from monolith.core import StepStateLayout
+
+    layout = StepStateLayout(t_max=8, gamma_max=7)
+    g = Gemm(dev, "nvfp4", 96, 1024, 8)
+    rng = np.random.default_rng(3)
+    x = f32_to_bf16(rng.uniform(-1, 1, size=(8, 1024)).astype(np.float32))
+    ref = (bf16_to_f32(x).astype(np.float64) @ g.w.T).astype(np.float32)
+    y, _ = g.run(x, out_bf16=False, step_state=(layout, {"t_this_step": 6}), t_range=(1, 8))
+    assert check_against_oracle(y[:6], ref[:6]).ok() and np.all(y[6:] == 0)
+    y, _ = g.run(x, out_bf16=False, step_state=(layout, {"t_this_step": 1}), t_range=(1, 8))
+    assert np.all(y == 0)                                                    # T = 1 belongs to the shader variant
+    y, _ = g.run(x, out_bf16=False, step_state=(layout, {"t_this_step": 6, "done": 1}), t_range=(1, 8))
+    assert np.all(y == 0)
+    y, _ = g.run(x, out_bf16=False, step_state=(layout, {"n_inject": 3, "t_this_step": 8}), t_range=(1, 8))
+    assert not np.all(y == 0)                                                # the t_this_step source by default
+
+
+def test_gemm_static_rows_source(dev):
+    """A static row count in a dynamic-T program (the drafter's block pass): T_SRC = 2 takes T_STATIC_ROWS, no predicate."""
+    from monolith.core import StepStateLayout
+
+    layout = StepStateLayout(t_max=8, gamma_max=7)
+    g = Gemm(dev, "bf16", 96, 1024, 8)
+    rng = np.random.default_rng(4)
+    x = f32_to_bf16(rng.uniform(-1, 1, size=(8, 1024)).astype(np.float32))
+    ref = (bf16_to_f32(x).astype(np.float64) @ g.w.T).astype(np.float32)
+    macros_extra = {"T_SRC": "2", "T_STATIC_ROWS": "3u"}
+    y, _ = g.run(x, out_bf16=False, step_state=(layout, {"t_this_step": 1, "n_inject": 0}), extra_macros=macros_extra)
+    assert check_against_oracle(y[:3], ref[:3]).ok() and np.all(y[3:] == 0)

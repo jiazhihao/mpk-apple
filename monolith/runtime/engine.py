@@ -57,7 +57,7 @@ class Engine:
             self.buffers[name] = buf
         self.pipelines: Dict[str, nt.Pipeline] = {}
         for key, k in program.kernels.items():
-            lib = nt.Library(self.dev, k.source, k.macros, 0, fast_math)
+            lib = nt.Library(self.dev, k.source, k.macros, k.language_version, fast_math)
             self.pipelines[key] = nt.Pipeline(lib, k.function, True)
         self.ops = []
         for o in program.ops:

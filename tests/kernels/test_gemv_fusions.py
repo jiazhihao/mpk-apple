@@ -176,9 +176,12 @@ def test_autotuner_picks_and_caches(dev, tmp_path):
     assert cn.ms > 0 and isinstance(cn.fuse_norm, bool)
     g = tuner.tune_gdn(4, 4, 128, 128, 4, 1)
     assert g.ms > 0 and g.macros["SL"] in ("4u", "8u", "16u")
+    m = tuner.tune_gemm(info, 8, "residual")                                # the tensor-ops tile: one or two threadgroups per core
+    assert m.ms > 0 and m.grid_mode in ("crew", "crew2") and m.ms <= m.default_ms * 1.001
     tuner.save("test-chip")
     again = Autotuner(dev, dev.info().gpu_cores, str(cache))
-    assert again.tune_gemv(info, 1, "residual", False).macros == c.macros and len(again.choices) == 3
+    assert again.tune_gemv(info, 1, "residual", False).macros == c.macros and len(again.choices) == 4
+    assert again.tune_gemm(info, 8, "residual").grid_mode == m.grid_mode
 
 
 def test_row_range_equals_the_slice_of_the_whole(dev):

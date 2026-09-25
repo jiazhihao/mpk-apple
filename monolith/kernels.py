@@ -96,6 +96,7 @@ def gemv_params(n_rows: int, n_blocks: int, n_sg: int, t_active: int, *, out_sca
 MSL_TENSOR_OPS = 4 << 16          # the language version the tensor-ops kernels need (MSL 4.0: <metal_tensor>, MPP)
 GEMM_TN = 16                      # rows per accelerator tile (the default up to 16 tokens; gemm_tile_shape)
 GEMM_TK = 256                     # columns per accelerator tile
+GEMM_PERM_SG = 4                  # SIMD-groups per row of x_permute (its grid is tm * GEMM_PERM_SG SIMD-groups of 32)
 
 
 def gemm_source(fmt: str) -> str:
@@ -110,14 +111,23 @@ def gemm_tile_shape(tm: int) -> Tuple[int, int]:
     return (16, 256) if tm <= 16 else (32, 128)
 
 
-def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional[int] = None, tk: Optional[int] = None) -> Dict[str, str]:
+def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional[int] = None, tk: Optional[int] = None,
+                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False) -> Dict[str, str]:
     """The specialization of gemm_tile for one slab geometry, ``tm`` token rows (8, 16 or 32 — the accelerator's
-    16-row minimum makes 8 cost what 16 costs; the operation's T_act ≤ tm is a run-time parameter) and the tile shape
-    ``tn × tk`` (64×64, 32×128 or 16×256: 4096 weights, one per thread register; the measured default per ``tm``)."""
+    16-row minimum makes 8 cost what 16 costs; the operation's T_act ≤ tm is a run-time parameter), the tile shape
+    ``tn × tk`` (64×64, 32×128 or 16×256: 4096 weights, one per thread register; the measured default per ``tm``) and
+    the GEMV fusions it takes over (``epilogue`` residual | silu_mul, ``stat_out``, ``round_before_residual``; the
+    input norm is applied by x_permute on the way in)."""
     f = FORMATS.get(info.format)
     wpw = int(f.weights_per_word)
     if tn is None or tk is None:
         tn, tk = gemm_tile_shape(tm)
+    if info.rows not in (8, 16):
+        raise ValueError(f"gemm_tile: R={info.rows} must be 8 or 16 (the epilogues index pack blocks)")
+    if epilogue not in EPILOGUES:
+        raise ValueError(f"gemm_tile: unknown epilogue {epilogue!r}")
+    if round_before_residual and epilogue != "residual":
+        raise ValueError("gemm_tile: round_before_residual needs the residual epilogue")
     if (tn, tk) not in ((64, 64), (32, 128), (16, 256)):
         raise ValueError(f"gemm_tile: tile {tn}x{tk} is not one of 64x64, 32x128, 16x256")
     if info.k % (32 * wpw) or info.k % tk or tk % wpw:
@@ -128,7 +138,10 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         raise ValueError(f"gemm_tile: TM must be 8, 16 or 32 (got {tm})")
     macros = {"K": str(info.k), "R": str(info.rows), "TM": str(tm), "TN": f"{tn}u", "TK": f"{tk}u",
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
-              "UNIT_WORDS": str(info.unit_bytes // 16), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0"}
+              "UNIT_WORDS": str(info.unit_bytes // 16), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0",
+              "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
+    if round_before_residual:
+        macros["EPILOGUE_ROUND"] = "1"
     lpt = tk // wpw                                            # lanes per tile: LPT * 16 bytes of each row's 128-byte line
     if lpt * 16 >= 64:
         macros["Q_OUTER"] = "1"                                # lane group outer (half a line or more per row piece) …
@@ -139,18 +152,29 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
     return macros
 
 
-def gemm_params(n_rows: int, n_tiles: int, n_sg: int, t_active: int, *, out_scale: float = 1.0) -> bytes:
-    """The ``GemmParams`` record (buffer 4): ``n_tiles`` = ceil(N / 64) row tiles."""
-    return struct.pack("<IIIIfIII", n_rows, n_tiles, n_sg, t_active, out_scale, 0, 0, 0)
+def gemm_params(n_rows: int, n_tiles: int, n_sg: int, t_active: int, *, out_scale: float = 1.0, tile0: int = 0, n_blocks: int = 0) -> bytes:
+    """The ``GemmParams`` record (buffer 4): a row range of the slab as ``tile0`` / ``n_tiles`` / ``n_rows`` (a whole
+    slab: 0 / all / N), ``n_blocks`` its pack blocks (the stat partials' stride)."""
+    return struct.pack("<IIIIfIII", n_rows, n_tiles, n_sg, t_active, out_scale, tile0, n_blocks, 0)
 
 
 def gemm_tiles(n_rows: int, tn: int = GEMM_TN) -> int:
     return -(-n_rows // tn)
 
 
-def x_permute_params(k: int, t_active: int, tm: int, wpw: int, tk: int = GEMM_TK) -> bytes:
-    """The ``XPermParams`` record of x_permute (buffer 2): x [T, K] → x' [tm, K] in gemm_tile's reduction order."""
-    return struct.pack("<IIIIIIII", k, t_active, tm, wpw, tk, 0, 0, 0)
+def x_permute_params(k: int, t_active: int, tm: int, wpw: int, tk: int = GEMM_TK, stat_parts: int = 1, eps: float = 0.0) -> bytes:
+    """The ``XPermParams`` record of x_permute (buffer 4): x [T, K] → x' [tm, K] in gemm_tile's reduction order, the
+    RMSNorm scaling applied on the way with ``PERM_NORM`` (``stat_parts`` partial sums per token, ``eps``)."""
+    return struct.pack("<IIIIIIfI", k, t_active, tm, wpw, tk, stat_parts, eps, 0)
+
+
+def x_permute_macros(norm: bool = False) -> Dict[str, str]:
+    return {"PERM_NORM": "1" if norm else "0", "PERM_SG": f"{GEMM_PERM_SG}u"}
+
+
+def x_permute_grid(tm: int) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+    """(grid, threadgroup) of x_permute for ``tm`` output rows: GEMM_PERM_SG SIMD-groups per row, 32 threads each."""
+    return (tm * GEMM_PERM_SG, 1, 1), (32, 1, 1)
 
 
 def x_permute_columns(k: int, wpw: int, tk: int = GEMM_TK) -> "np.ndarray":

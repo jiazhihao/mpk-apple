@@ -252,12 +252,29 @@ plain decode's in every run; `python -m monolith.trace … --drafter …` for th
 | speculative, whole block verified (L = 7), story prompt | 76.1 | 13.1 | 1.76 | 1.74 |
 | speculative, L = 0 (the round's fixed cost) | 60.0 | 16.7 | 1.00 | 0 |
 | speculative, cost-aware rule, chat-template code prompt | 27.1 | 36.9 | 1.98 | 2.14 |
+| **with the tensor-ops tile (#51)**: cost-aware rule, the golden prompt (48 tokens) | 19.8 | 50.5 | 2.94 | 2.19 |
+| with the tile: confident-prefix 0.5, the golden prompt | 20.7 | 48.3 | 2.61 | 1.83 |
+| with the tile: cost-aware rule, the 11-prompt set (dspark.md §3) | 19.9 | 50.3 | 3.08 | 2.08 |
 
 The step's budget with the cost-aware rule (sum of per-op minima over 5 profiled steps, story prompt): 70.4 ms —
 GEMVs 52.6 ms (the target's 36 layers at T ≤ 4 ≈ 33 ms, the drafter's 5 BF16 layers at T = 7 ≈ 19 ms: its
 `gate_up` alone 1.85 ms per layer = 109 GB/s), `lm_head` 15.3 ms (the drafter's block at T = 7: 11.1 ms = 112 GB/s;
 the target's at T ≤ 4: 4.2 ms), attention 1.3 ms, `norm_apply` 0.9 ms, the draft attention 0.18 ms, the serial ops
 < 0.05 ms. The L = 0 run measures the round's fixed cost directly: 60 ms = the plain step (27) + the draft pass (33).
+
+**The step with the tensor-ops tile (#51)** — every T > 1 GEMV of the target and of the drafter on `gemm_tile`
+(§6) as the predicated variant above T = 1, its input through `x_permute` (the normalize-and-permute, one per
+GEMV input, shared by siblings); the cost-aware rule verifies the whole block (L̄ 7): the same trace, 6 profiled
+steps, sum of per-op minima **52.6 ms** against a bandwidth bound of 49.4 ms for the 11.4 GB the step streams —
+**94 % bus-bound**: GEMVs 40.6 ms (323 dispatches, 281 GB/s: the target's verify pass at T = 8 and the drafter's
+block pass at T = 7 both at bandwidth now — the drafter's `gate_up` 0.72 ms per layer, was 1.85), `lm_head`
+8.6 ms (two full BF16 passes of 1.24 GB: the target's at T = 8 and the drafter's block's at T = 7 — the 27B's
+NVFP4 head would be a quarter of that), attention 1.5 ms, `x_permute` 1.2 ms (168 dispatches; the first version
+cost 8.8 ms — per-element runtime divisions and dependent gathers on one SIMD-group per row — and now has
+compile-time strides, four SIMD-groups per row and unrolled independent gathers), the draft attention 0.2 ms, the
+serial ops < 0.05 ms. The 615 dispatches (the shader's T = 1 variants return at once above T = 1) cost the
+encoder gaps the sum excludes; the measured step is 61 ms for 3.08 tokens on the prompt set — 19.9 ms per token
+against 27.0 plain (dspark.md §3).
 
 What it says: (1) correctness holds — greedy speculative decode is token-identical to plain greedy decode on the
 8B (and on the hybrid 0.8B with a random drafter that forces a rollback every step: the GDN commit pass); (2) on the
