@@ -136,7 +136,9 @@ class Runner {
   // Replays the step program up to `max_steps` times: `steps_per_cb` steps per command buffer (the max_cb_ms
   // control), `in_flight` command buffers queued ahead. `reencode` = the fallback path (fresh encoder per step,
   // same ops) instead of ICB replay. Blocks until done / max_steps; tokens are collected as buffers complete.
-  RunnerStats run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode);
+  // `max_tokens` > 0 stops submitting once that many tokens have been drained during this call (a speculative
+  // program commits several tokens per step, so a step count over-runs); the buffers already queued still complete.
+  RunnerStats run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode, uint64_t max_tokens = 0);
   // Tokens drained so far (in ring order); cleared by the call.
   std::vector<int32_t> drain();
   std::shared_ptr<RunnerImpl> impl;

@@ -86,7 +86,7 @@ NB_MODULE(_native, m) {
            nb::arg("device"), nb::arg("icb"), nb::arg("ops"), nb::arg("resources"), nb::arg("step_state"), nb::arg("done_offset"),
            nb::arg("ring_head_offset"), nb::arg("ring_tail_offset"), nb::arg("ring"), nb::arg("ring_capacity"),
            nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 10>())
-      .def("run", &Runner::run, nb::arg("max_steps"), nb::arg("steps_per_cb") = 8, nb::arg("in_flight") = 3, nb::arg("reencode") = false,
+      .def("run", &Runner::run, nb::arg("max_steps"), nb::arg("steps_per_cb") = 8, nb::arg("in_flight") = 3, nb::arg("reencode") = false, nb::arg("max_tokens") = 0,
            nb::call_guard<nb::gil_scoped_release>())
       .def("drain", &Runner::drain);
 }

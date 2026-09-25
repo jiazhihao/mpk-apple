@@ -356,6 +356,30 @@ is the L = 0 case). Not yet: the round inside the target's step program — the 
 `advance`, the checkpoint slots — and the cost-aware verify-length rule (#38); the confident-prefix rule with a fixed
 threshold stands in for it. The measured drafter attention is 1 ms per round for five layers at 1 K of context and
 4 ms at 4 K (v1 row groups re-stream the context, as for the target's attention at T > 1).
+
+*Status (2026-09-24, #38 + the greedy half of #39).* The round runs inside the target's dynamic-T program
+(decode-kernels.md §5): `compile_program(model, pack, profile, dynamic_t=True, drafter=…, drafter_pack=…)` appends
+the accept scan, the recurrent-state commit passes, the drafter's draft pass on the model's tapped residual streams
+(`Model.tap_values`, `Drafter.tap_layers`) and the verify select; the program maps the target's and the drafter's
+packs and is replayed for prefill chunks and decode alike (`Session(model, pack, drafter=…)`, `python -m
+monolith.generate --drafter … --drafter-pack …`, `tools/pack_weights.py --drafter-kind dspark`). The verify length
+comes from the cost-aware rule of §5.8 with the profile's cost table (the confident-prefix rule at 0.5 without one);
+the target's GEMVs are predicated per-T variants (T = 1, 2, 4, 8) so a step's ALU work follows its verify length;
+the pump stops on a token count; a per-step accept log feeds the statistics. The GDN states are double-buffered by
+step parity — the step's pass reads one slot and writes the other, which also removes a latent in-dispatch race on
+the conv window — and a speculative program's commit pass (`gdn_commit`, the same kernel with `COMMIT=1`)
+recomputes the recurrence for the committed positions so a rejected draft never reaches the state. Correctness:
+greedy speculative decode is token-identical to plain greedy decode on Qwen3-8B with its public drafter (both verify
+rules, `tests/models/qwen3/test_spec_golden.py`), on the hybrid 0.8B with a random drafter that forces a rollback at
+every step (`tests/models/qwen3_5/test_spec_rollback.py`), and on the synthetic hybrid target (`tests/kernels/`);
+the GPU's drafts equal the oracle's on the golden's real target features; the host is idle during decode. Speed on
+the M5 Pro: **not the gate yet** — 37.5 ms per token on a story prompt (1.05 accepted of 7), 27.1 ms = parity with
+plain decode on a chat-template code prompt (2.14 accepted); the round's fixed cost is the draft pass, 33 ms on the
+shader GEMV path (the drafter's BF16 layers and the `lm_head` at T = 7 run at ~110 GB/s), and each verified draft
+costs the NVFP4 table's ×1.28–×1.79. The exit gate therefore rests on the T ≥ 2 GEMM path (M9, #51) and on the
+drafter's weights in a narrower format, as §5.8 anticipated. Remaining in #39: rejection sampling for temperature
+> 0 (the session refuses a drafter with sampling for now); in #40: the acceptance histograms on the prompt set, STS
+calibration and the gate table (the 27B on the M3 Pro).
 ### M7 — In-kernel runtime re-evaluation and intra-op stealing · 1.5 ew · time-boxed, off the critical path
 
 On the M3 Pro a dispatch boundary (1.8 µs) beats every in-kernel barrier we built (2.6–5.4 µs), and on the M5 Pro

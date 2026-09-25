@@ -96,7 +96,7 @@ def test_lowering_stage_count(tmp_path):
     assert [s[0] for s in gdn.attrs["segments"]] == ["q", "k", "v", "z", "a", "b"]
     attn = next(op for op in g.ops if op.kind == "gqa_decode")
     assert attn.attrs["rope"] == "permuted" and attn.attrs["segments"][1][0] == "gate"
-    assert sorted(m.tap_values) == [0, 1]
+    assert sorted(m.tap_values) == [-1, 0, 1]                  # the embedding and every layer
     # the tied lm_head reads the embedding slab
     embed_w = next(op for op in g.ops if op.kind == "embed").inputs[1]
     assert next(op for op in g.ops if op.kind == "lm_head").inputs[1] is embed_w

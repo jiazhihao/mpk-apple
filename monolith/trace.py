@@ -33,13 +33,28 @@ class OpTiming:
 
 
 def op_timings(program: Program, runs: Sequence[Sequence[Tuple[float, float]]]) -> List[OpTiming]:
+    """One timing per op; the predicated per-T variants of a GEMV (consecutive ops of one name with ``t_range``)
+    count as one op whose per-step time is the sum over its variants (one runs, the others return at once) and whose
+    bytes are counted once."""
     out = []
-    for i, op in enumerate(program.ops):
-        durs = sorted(max(0.0, e - s) for run in runs for (s, e) in [run[i]] if s >= 0)
-        if not durs:
-            continue
-        out.append(OpTiming(i, op.name, op.kernel.split("|")[0], str(op.meta.get("kind", op.name.split(":")[0])),
-                            durs[0], durs[len(durs) // 2], int(op.meta.get("bytes", 0))))
+    i = 0
+    n = len(program.ops)
+    while i < n:
+        op = program.ops[i]
+        j = i + 1
+        if op.meta.get("t_range") is not None:
+            while j < n and program.ops[j].name == op.name and program.ops[j].meta.get("t_range") is not None:
+                j += 1
+        durs = []
+        for run in runs:
+            d = [max(0.0, e - s) for (s, e) in run[i:j] if s >= 0]
+            if d:
+                durs.append(sum(d))
+        if durs:
+            durs.sort()
+            out.append(OpTiming(i, op.name, op.kernel.split("|")[0], str(op.meta.get("kind", op.name.split(":")[0])),
+                                durs[0], durs[len(durs) // 2], int(op.meta.get("bytes", 0))))
+        i = j
     return out
 
 
@@ -91,6 +106,9 @@ def main(argv=None) -> int:
     ap.add_argument("--max-context", type=int, default=4096)
     ap.add_argument("--trace", type=Path)
     ap.add_argument("--no-autotune", action="store_true")
+    ap.add_argument("--drafter", default=None, help="profile the speculative round with this drafter checkpoint")
+    ap.add_argument("--drafter-pack", default=None)
+    ap.add_argument("--drafter-kind", default="dspark")
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
 
@@ -98,9 +116,10 @@ def main(argv=None) -> int:
 
     tok = Tokenizer.from_file(str(Path(a.model) / "tokenizer.json"))
     ids = tok.encode(a.prompt, add_special_tokens=False).ids
-    sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1, autotune=not a.no_autotune)
+    sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1, autotune=not a.no_autotune, drafter_dir=a.drafter,
+                        drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind)
     sess.generate(ids, 4)                                  # prefill + a few decode steps so the states are real
-    dec = sess.engine(1)
+    dec = sess.engine(0 if sess.drafter is not None else 1)
     runs = dec.profile(a.steps)
     timings = op_timings(dec.program, runs)
     print(f"# decode step of {Path(a.model).name} on {sess.dev.info().name}: {len(dec.program.ops)} dispatches, {a.steps} profiled steps")

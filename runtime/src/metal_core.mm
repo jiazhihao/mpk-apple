@@ -280,13 +280,14 @@ static void drain_ring(RunnerImpl& r) {
   *(volatile uint32_t*)((char*)r.state.contents + r.tail_off) = r.tail;
 }
 
-RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode) {
+RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode, uint64_t max_tokens) {
   impl->tail = *(volatile uint32_t*)((char*)impl->state.contents + impl->tail_off);   // the ring tail lives in StepState: resume (or restart after a reset) from it
   RunnerImpl& r = *impl;
   RunnerStats st;
   if (steps_per_cb == 0 || in_flight == 0) throw std::runtime_error("steps_per_cb and in_flight must be >= 1");
   double t0 = now_ms(), c0 = cpu_ms_now();
   std::deque<id<MTLCommandBuffer>> pending;
+  size_t tokens_seen = 0;
   auto observe = [&](id<MTLCommandBuffer> cb) {
     [cb waitUntilCompleted];
     st.gpu_ms += (cb.GPUEndTime - cb.GPUStartTime) * 1e3;
@@ -294,8 +295,9 @@ RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_f
     if (cb.error && st.error.empty()) st.error = [cb.error.localizedDescription UTF8String];
     drain_ring(r);
     st.done = *(volatile uint32_t*)((char*)r.state.contents + r.done_off) != 0;
+    { std::lock_guard<std::mutex> lk(r.mu); tokens_seen = r.tokens.size(); }   // drained since the last drain(): this call's tokens
   };
-  while (st.steps_submitted < max_steps && !st.done && st.error.empty()) {
+  while (st.steps_submitted < max_steps && !st.done && st.error.empty() && (max_tokens == 0 || tokens_seen < max_tokens)) {
     @autoreleasepool {
       uint32_t n = std::min<uint64_t>(steps_per_cb, max_steps - st.steps_submitted);
       id<MTLCommandBuffer> cb = [r.q commandBuffer];

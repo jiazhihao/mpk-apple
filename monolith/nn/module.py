@@ -42,12 +42,20 @@ class WeightSpec:
 
 @dataclass(frozen=True)
 class StateEntry:
-    """A persistent per-sequence state buffer the runtime allocates (KV cache, recurrent state, conv state)."""
+    """A persistent per-sequence state buffer the runtime allocates (KV cache, recurrent state, conv state).
+    ``checkpoints`` > 1 allocates that many slots of ``shape`` (the recurrent states: two, by step parity — the
+    step's pass reads one and writes the other, and a speculative program's commit pass rewrites the written one
+    with the accepted prefix; the oracle path keeps one)."""
 
     name: str
     shape: Tuple[Any, ...]
     dtype: DType
-    checkpoints: int = 1        # slots for speculative rollback (γ + 1 for states a verify pass advances)
+    checkpoints: int = 1
+
+
+def state_shape(e: StateEntry) -> Tuple[Any, ...]:
+    """The buffer shape of a state entry: its slots (if several) ahead of the per-slot shape."""
+    return ((e.checkpoints,) + tuple(e.shape)) if e.checkpoints > 1 else tuple(e.shape)
 
 
 @dataclass(frozen=True)
@@ -191,9 +199,13 @@ class Module:
 
 
 class Model(Module):
-    """A registered architecture: the module tree plus what the runtime must allocate around it."""
+    """A registered architecture: the module tree plus what the runtime must allocate around it.
+
+    ``lower`` fills ``tap_values``: the residual-stream value after each layer by layer index, and the embedding
+    output at ``-1`` — what a drafter's feature taps read (``Drafter.tap_layers``)."""
 
     config: Any = None
+    tap_values: Dict[int, Value] = {}
 
     def layers(self) -> Sequence[Module]:
         raise NotImplementedError
@@ -202,7 +214,7 @@ class Model(Module):
         raise NotImplementedError
 
     def feature_taps(self) -> List[int]:
-        """Layers whose residual stream a drafter may read (empty if the model exposes none)."""
+        """Layers whose residual stream a drafter may read (empty if the model exposes none); ``-1`` = the embedding."""
         return []
 
     def tables(self) -> Dict[str, Tuple[str, Any]]:

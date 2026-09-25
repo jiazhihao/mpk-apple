@@ -72,8 +72,10 @@ class Engine:
         self.runner = nt.Runner(self.dev, self.icb, self.ops, list(self.buffers.values()), self.buffers[program.step_state],
                                 lay.offset("done"), lay.offset("ring_head"), lay.offset("ring_tail"), ring, program.ring_capacity)
 
-    def run(self, max_steps: int, *, steps_per_cb: int = 8, in_flight: int = 3, reencode: bool = False) -> StepReport:
-        st = self.runner.run(max_steps, steps_per_cb, in_flight, reencode)
+    def run(self, max_steps: int, *, steps_per_cb: int = 8, in_flight: int = 3, reencode: bool = False, max_tokens: int = 0) -> StepReport:
+        """Replay up to ``max_steps`` steps (``max_tokens`` > 0: stop submitting once that many tokens arrived; the
+        queued buffers still complete, so a few more steps may run)."""
+        st = self.runner.run(max_steps, steps_per_cb, in_flight, reencode, max_tokens)
         if st.error:
             raise RuntimeError(st.error)
         return StepReport(st.steps_submitted, st.command_buffers, st.gpu_ms, st.wall_ms, st.host_busy_ms, st.done, self.runner.drain())

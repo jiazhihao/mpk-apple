@@ -27,7 +27,7 @@ from ...core.dtypes import DType
 from ...core.ir import BlockDomain, Graph, OpClass, Value
 from ...core.shapes import N_INJ
 from ...core.profile import Profile
-from ...nn import DecoderLayer, Embedding, GatedMLP, Linear, LMHead, LowerContext, Module, Part, RMSNorm, StateEntry
+from ...nn import DecoderLayer, Embedding, GatedMLP, Linear, LMHead, LowerContext, Module, Part, RMSNorm, StateEntry, state_shape
 from ...nn.rope import rope_tables_permuted
 from ...packs.transforms import rope_head_perm
 from ..drafter import DraftBlock, DraftContext, Drafter
@@ -130,10 +130,11 @@ class DraftAttention(Module):
 class DSparkDrafter(Drafter):
     """``lm_head`` is the target's (the checkpoint carries none); ``embed_tokens`` is the drafter's own frozen copy."""
 
-    def __init__(self, cfg: DSparkConfig, *, target_lm_head: LMHead, max_context: int = 4096, pack_rows: int = 16,
+    def __init__(self, cfg: DSparkConfig, *, target_lm_head: Optional[LMHead], max_context: int = 4096, pack_rows: int = 16,
                  confidence_threshold: float = 0.0) -> None:
-        """``confidence_threshold``: the confident-prefix rule's threshold (≤ 0 verifies the whole block, the
-        reference's default); the cost-aware verify-length rule of design §5.8 replaces it with the wiring (#38)."""
+        """``target_lm_head``: the target's head (the block's logits go through it; None when only packing).
+        ``confidence_threshold``: the confident-prefix rule's threshold (≤ 0 verifies the whole block, the
+        reference's default) used when the caller of ``lower_select`` has no cost table."""
         super().__init__(prefix="draft.")
         self.cfg, self.gamma, self.max_context = cfg, cfg.block_size, max_context
         self.confidence_threshold = float(confidence_threshold)
@@ -155,6 +156,17 @@ class DSparkDrafter(Drafter):
         # the product rounded first reproduces both roundings
         self.markov_w2 = Linear(cfg.markov_rank, [Part("w2", "markov_head.markov_w2.weight", cfg.vocab_size)], prefix="draft.markov_w2.",
                                 epilogue="residual", round_residual=True)
+
+    @classmethod
+    def from_checkpoint(cls, path: str, *, target_lm_head: Optional[LMHead], max_context: int = 4096, **options: Any) -> "DSparkDrafter":
+        from .weights import bind_checkpoint_formats
+
+        drafter = cls(DSparkConfig.from_pretrained(path), target_lm_head=target_lm_head, max_context=max_context, **options)
+        bind_checkpoint_formats(drafter, path)
+        return drafter
+
+    def tap_layers(self) -> List[int]:
+        return list(self.cfg.target_layer_ids)
 
     def weight_map(self):
         from ...nn.module import WeightSpec
@@ -275,7 +287,7 @@ class DSparkDrafter(Drafter):
 
         lc = LowerContext(t=self.gamma)
         for e in self.state_entries():
-            lc.states[e.name] = g.values[e.name] if e.name in g.values else g.state(e.name, e.shape, e.dtype)
+            lc.states[e.name] = g.values[e.name] if e.name in g.values else g.state(e.name, state_shape(e), e.dtype)
         for name, (dtype, arr) in self.tables().items():
             shape = tuple(int(x) for x in np.asarray(arr).shape)
             lc.consts[name] = g.values[name] if name in g.values else g.const(name, shape, DType.parse(dtype.lower()))
@@ -298,6 +310,8 @@ class DSparkDrafter(Drafter):
         block; the Markov chain (per position: the previous token's embedding, the bias added to the base logits,
         argmax — chained through row views); the confidence head."""
         cfg, gamma, h_t = self.cfg, self.gamma, self.cfg.target_hidden
+        if self._lm_head is None:
+            raise ValueError("DSparkDrafter: lowering needs the target's lm_head (built with target_lm_head=None)")
         taps = list(ctx.taps)
         if len(taps) != cfg.n_taps:
             raise ValueError(f"DSparkDrafter: {cfg.n_taps} taps expected, got {len(taps)}")
@@ -342,13 +356,18 @@ class DSparkDrafter(Drafter):
             g.op("confidence", [hidden, markov, w, b], [conf], domain=BlockDomain("rows", gamma), klass=OpClass.MAP, rank=rank)
         return DraftBlock(tokens=drafts, confidences=conf, hidden=hidden, gamma=gamma)
 
-    def lower_select(self, g: Graph, block: DraftBlock, profile: Profile) -> Value:
-        """The confident-prefix rule on the block's confidences (the whole block without a confidence head or with
-        a threshold ≤ 0); ``profile`` is unused until the cost-aware rule lands with the wiring (#38)."""
+    def lower_select(self, g: Graph, block: DraftBlock, profile: Profile, *, cost: Optional[Sequence[float]] = None,
+                     threshold: Optional[float] = None) -> Value:
+        """With ``cost`` (the profile's relative cost of a (1 + l)-token target pass, l = 0 … γ) the cost-aware rule
+        of design §5.8; otherwise the confident-prefix rule with ``threshold`` (the drafter's default when None; the
+        whole block without a confidence head or with a threshold ≤ 0)."""
         sel = g.value("draft.verify_len", (1,), DType.U32)
         ins = [block.tokens] + ([block.confidences] if block.confidences is not None else [])
-        g.op("verify_select", ins, [sel], domain=BlockDomain("span", 1), klass=OpClass.SERIAL, gamma=block.gamma,
-             threshold=self.confidence_threshold if block.confidences is not None else 0.0)
+        thr = self.confidence_threshold if threshold is None else float(threshold)
+        attrs: Dict[str, Any] = dict(gamma=block.gamma, threshold=thr if block.confidences is not None else 0.0)
+        if cost is not None and block.confidences is not None:
+            attrs["cost"] = [float(c) for c in cost]
+        g.op("verify_select", ins, [sel], domain=BlockDomain("span", 1), klass=OpClass.SERIAL, **attrs)
         return sel
 
     def lower_context_update(self, g: Graph, taps: List[Value], accepted: Value) -> None:

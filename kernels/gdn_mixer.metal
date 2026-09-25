@@ -21,6 +21,13 @@
 // Macros: DK, DV (multiples of 32), CW (conv width), SL (columns per state slice), SPB (slices per block), TP (tokens
 // per pass). The conv state is written by the block with slice group 0 of each head (q/k channels only by the
 // first value head of the key head).
+//
+// State slots (SLOTS=2, needs STEP_STATE): the two states are double-buffered by step parity — the step's pass reads
+// slot (step & 1) and writes the other, so the writer of a step never aliases the window its readers replay (with
+// one slot, a fast head could overwrite the conv window a slower block of the same head is still reading). In a
+// speculative program (design §5.8) the same kernel with COMMIT=1 runs after the accept scan (which advanced
+// `step`): it recomputes the recurrence for the committed n_inject tokens from the slot the step's pass read and
+// overwrites the slot the pass wrote — the rejected positions never reach the state. Plain programs keep SLOTS=1.
 #ifndef SL
 #define SL 8u
 #endif
@@ -32,6 +39,15 @@
 #endif
 #ifndef STEP_STATE
 #define STEP_STATE 0
+#endif
+#ifndef SLOTS
+#define SLOTS 1u
+#endif
+#ifndef COMMIT
+#define COMMIT 0
+#endif
+#if (SLOTS == 2u || COMMIT) && !STEP_STATE
+#error "state slots and the commit pass read StepState"
 #endif
 #define KR (DK / 32u)
 #define VR (DV / 32u)
@@ -71,14 +87,14 @@ static inline void conv_channel(device const ushort* proj, uint in_stride, devic
   }
 }
 
-static inline void conv_state_update(device const ushort* proj, uint in_stride, device ushort* conv_state, uint c, uint T) {
+static inline void conv_state_update(device const ushort* proj, uint in_stride, device const ushort* src, device ushort* dst, uint c, uint T) {
   ushort win[CW - 1u];
-  for (uint j = 0; j < CW - 1u; j++) win[j] = conv_state[c * (CW - 1u) + j];
+  for (uint j = 0; j < CW - 1u; j++) win[j] = src[c * (CW - 1u) + j];
   for (uint t = 0; t < T; t++) {
     for (uint j = 0; j + 1u < CW - 1u; j++) win[j] = win[j + 1u];
     win[CW - 2u] = proj[t * in_stride + c];
   }
-  for (uint j = 0; j < CW - 1u; j++) conv_state[c * (CW - 1u) + j] = win[j];
+  for (uint j = 0; j < CW - 1u; j++) dst[c * (CW - 1u) + j] = win[j];
 }
 
 static inline float pick(thread const float* arr, uint i) {         // arr[i] with a compile-time-indexed body
@@ -100,9 +116,31 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
   const uint rep = p.hv / p.hk;
 #if STEP_STATE
   if (st->done) return;
+#if COMMIT
+  const uint T = st->n_inject;                               // the committed tokens of the step that just ended
+#else
   const uint T = st->t_this_step;
+#endif
 #else
   const uint T = p.t_active;
+#endif
+#if SLOTS == 2u
+#if COMMIT
+  const uint rd = (st->step + 1u) & 1u, wr = st->step & 1u;  // the accept scan advanced `step`: re-read the pass's input slot
+#else
+  const uint rd = st->step & 1u, wr = (st->step + 1u) & 1u;
+#endif
+  const ulong rec_stride = (ulong)p.hv * DK * DV;
+  const uint conv_stride = (2u * p.key_dim + p.hv * DV) * (CW - 1u);
+  device const ushort* conv_in = conv_state + rd * conv_stride;
+  device ushort* conv_out = conv_state + wr * conv_stride;
+  device const float* rec_in = rec_state + rd * rec_stride;
+  device float* rec_out = rec_state + wr * rec_stride;
+#else
+  device const ushort* conv_in = conv_state;
+  device ushort* conv_out = conv_state;
+  device const float* rec_in = rec_state;
+  device float* rec_out = rec_state;
 #endif
   const uint n_blocks = p.hv * NSG;
   for (uint b = sg; b < n_blocks; b += p.n_sg) {
@@ -114,14 +152,14 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
       float qv[TP][KR], kv[TP][KR], vv[TP][VR];
       for (uint i = 0; i < KR; i++) {
         float y[TP];
-        conv_channel(proj, p.in_stride, conv_state, conv_w, p.q_off + kh * DK + lane + 32u * i, t0, n, y);
+        conv_channel(proj, p.in_stride, conv_in, conv_w, p.q_off + kh * DK + lane + 32u * i, t0, n, y);
         for (uint t = 0; t < TP; t++) qv[t][i] = y[t];
-        conv_channel(proj, p.in_stride, conv_state, conv_w, p.k_off + kh * DK + lane + 32u * i, t0, n, y);
+        conv_channel(proj, p.in_stride, conv_in, conv_w, p.k_off + kh * DK + lane + 32u * i, t0, n, y);
         for (uint t = 0; t < TP; t++) kv[t][i] = y[t];
       }
       for (uint i = 0; i < VR; i++) {
         float y[TP];
-        conv_channel(proj, p.in_stride, conv_state, conv_w, p.v_off + h * DV + lane + 32u * i, t0, n, y);
+        conv_channel(proj, p.in_stride, conv_in, conv_w, p.v_off + h * DV + lane + 32u * i, t0, n, y);
         for (uint t = 0; t < TP; t++) vv[t][i] = y[t];
       }
       // 2. per-token scalars and the q/k L2 norms
@@ -148,8 +186,8 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
       // 3. the recurrence over this block's state slices
       for (uint s = grp * SPB; s < (grp + 1u) * SPB; s++) {
         float S[KR][SL];
-        for (uint i = 0; i < KR; i++) {
-          device const float* row = rec_state + ((ulong)(h * DK + lane + 32u * i)) * DV + s * SL;
+        for (uint i = 0; i < KR; i++) {                        // the first pass reads the step's input slot, later passes the slot the block writes
+          device const float* row = ((t0 == 0u) ? rec_in : (device const float*)rec_out) + ((ulong)(h * DK + lane + 32u * i)) * DV + s * SL;
           for (uint j = 0; j < SL; j++) S[i][j] = row[j];
         }
         for (uint t = 0; t < TP; t++) {
@@ -173,7 +211,7 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
           }
         }
         for (uint i = 0; i < KR; i++) {
-          device float* row = rec_state + ((ulong)(h * DK + lane + 32u * i)) * DV + s * SL;
+          device float* row = rec_out + ((ulong)(h * DK + lane + 32u * i)) * DV + s * SL;
           for (uint j = 0; j < SL; j++) row[j] = S[i][j];
         }
       }
@@ -183,11 +221,11 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
     if (grp == 0u) {
       if (h % rep == 0u) {
         for (uint i = 0; i < KR; i++) {
-          conv_state_update(proj, p.in_stride, conv_state, p.q_off + kh * DK + lane + 32u * i, T);
-          conv_state_update(proj, p.in_stride, conv_state, p.k_off + kh * DK + lane + 32u * i, T);
+          conv_state_update(proj, p.in_stride, conv_in, conv_out, p.q_off + kh * DK + lane + 32u * i, T);
+          conv_state_update(proj, p.in_stride, conv_in, conv_out, p.k_off + kh * DK + lane + 32u * i, T);
         }
       }
-      for (uint i = 0; i < VR; i++) conv_state_update(proj, p.in_stride, conv_state, p.v_off + h * DV + lane + 32u * i, T);
+      for (uint i = 0; i < VR; i++) conv_state_update(proj, p.in_stride, conv_in, conv_out, p.v_off + h * DV + lane + 32u * i, T);
     }
   }
 }

@@ -49,7 +49,9 @@ class GatedDeltaNet(Module):
         return [("q", 0, kd), ("k", kd, kd), ("v", 2 * kd, vd), ("z", self.conv_dim, vd),
                 ("a", self.conv_dim + vd, hv), ("b", self.conv_dim + vd + hv, hv)]
 
-    def state_entries(self, checkpoints: int = 1) -> List[StateEntry]:
+    def state_entries(self, checkpoints: int = 2) -> List[StateEntry]:
+        """Two slots by step parity (the step's pass reads one and writes the other; the speculative commit pass
+        rewrites the written one with the accepted prefix)."""
         return [StateEntry(f"{self.prefix}conv_state", (self.conv_dim, self.conv_width - 1), DType.BF16, checkpoints),
                 StateEntry(f"{self.prefix}rec_state", (self.v_heads, self.dk, self.dv), DType.F32, checkpoints)]
 
@@ -99,5 +101,5 @@ class GatedDeltaNet(Module):
         g.op("gdn_mixer", [*proj.values, cs, rs, conv_w, nea, dtb, nw], [o], domain=BlockDomain("heads", self.v_heads),
              klass=OpClass.MAP, updates=[cs.name, rs.name], k_heads=self.k_heads, v_heads=self.v_heads, dk=self.dk,
              dv=self.dv, conv_width=self.conv_width, eps=self.eps, segments=self.kernel_segments(),
-             proj_segments=proj.segments)
+             proj_segments=proj.segments, commit_kind="gdn_commit")
         return self.out_proj.lower(g, o, residual=h, name=f"{self.prefix}h").value
