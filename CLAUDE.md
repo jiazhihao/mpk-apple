@@ -119,9 +119,11 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — what is left on this machine: the autotuner-at-install profile writer (#49), the staged
-   multi-SIMD-group tile for T ≥ 32 and the K-split for the down projection (decode-kernels.md §6), the attention
-   core's SIMD-group-matrix scoring for the long-context rows. Intra-op stealing (#44) is built, measured and off by
+0. **Keep building** — what is left on this machine: the staged multi-SIMD-group tile for T ≥ 32 and the K-split
+   for the down projection (decode-kernels.md §6), the attention core's SIMD-group-matrix scoring for the
+   long-context rows. The autotuner at install time is built (#49, `tools/profile_writer.py`: it measures the
+   `engine` block from the kernel harnesses and merges it into `profiles/<chip>-<cores>c.json`; the other chips'
+   profiles wait for the machines). Intra-op stealing (#44) is built, measured and off by
    default (decode-kernels.md §7). The 27B items (#36, #40's M3 Pro rows, #46 — the smallest MoE checkpoint in a
    format we read, `nvidia/Qwen3-30B-A3B-NVFP4`, is ~18.5 GB resident against this machine's 19.07 GB GPU working
    set), the M3 Pro / M4 rows of the A/B tables (#2, #3, #5, #7, #8, #49), #42 (a GPU box), #43 (Max-class parts)

@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+COST_FORMAT = {"fp8_e4m3": "fp8"}   # pack format -> the profile's cost_T key (the others use their own name)
+
 
 @dataclass
 class Profile:

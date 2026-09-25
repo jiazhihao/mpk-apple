@@ -282,14 +282,24 @@ token against plain decode.
 
 ## 5. Adding a chip
 
-Profiles are measured, never hard-coded. `./probes/run_all.sh` on the bare-metal machine (~5 minutes, Command Line
-Tools only) writes `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`; commit every results file. Derive
-`profiles/<chip>-<cores>c.json` from them (the README there lists which probe each value comes from); the `engine`
-block is what the compiler reads — `family` (the kernel-binding key: an op bound to `"*"` runs on every family, one
-bound to `"apple10"` only there), `lane_order`, `threadgroups_per_core`, `sibling_order`, `max_cb_ms`, `attention`,
-`cost_T` per format (the verify-length rule refuses to extrapolate outside the measured T range). The engine picks
-the profile by GPU family and core count (`monolith.bench.profile_for_device`). On an M4, walk the hypotheses H1–H10
-of `docs/research/apple-gpu-probes.md §4`: they say which design decisions a differing measurement would change.
+Profiles are measured, never hard-coded. Two tools write `profiles/<chip>-<cores>c.json`:
+
+1. `python tools/profile_writer.py` (~5 minutes; `--dry-run` prints without writing) — the autotuner at install
+   time: it runs the kernel harnesses and writes the `engine` block the compiler reads — `lane_order` and
+   `threadgroups_per_core` (the T = 1 GEMV rate), `cost_T` per format (the shader GEMV at T = 1, 2, 4, 8 relative to
+   T = 1), the tile's `accelerator_<fmt>` rows and the `accelerator` / `accelerator_min_t` decision, `attention` (v1
+   vs v2). A new chip without a spec bandwidth gets a measured stand-in (`--nominal-gbps` sets the spec figure).
+   The decisions (`monolith/core/profile_writer.py`) follow the autotuner's 3 % noise rule; the raw numbers and the
+   reason for each go under `writer`.
+2. `./probes/run_all.sh` (~5 minutes, Command Line Tools only) writes `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`;
+   commit every results file. The probe blocks of the profile are derived from them by hand (the README there lists
+   which probe each value comes from), as are the two engine values the writer does not measure: `sibling_order`
+   (p11's overlap A/B) and `max_cb_ms` (p6/p6b's sharing) — until then the writer leaves the safe defaults.
+
+`family` is the kernel-binding key (an op bound to `"*"` runs on every family, one bound to `"apple10"` only there);
+the verify-length rule refuses to extrapolate outside the measured T range of `cost_T`. The engine picks the profile
+by GPU family and core count (`monolith.bench.profile_for_device`). On an M4, walk the hypotheses H1–H10 of
+`docs/research/apple-gpu-probes.md §4`: they say which design decisions a differing measurement would change.
 
 ## 6. Checklists
 

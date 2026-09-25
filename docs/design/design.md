@@ -384,7 +384,10 @@ path.
   GEMV inner loops if the layer gates hold.
 * **Chip profiles.** `{cores, full-speed SIMD-groups per core, GB/s, lane order, threadgroups per core, block sizes,
   R, T_max, γ, cost(T) per format, sibling-order rule, max_cb_ms}` — produced by the probe suite and an autotuner at
-  install time, never hard-coded (`profiles/` holds the hand-derived first cut).
+  install time, never hard-coded. The autotuner is `tools/profile_writer.py` (#49): the kernel harnesses measure the
+  lane order, the threadgroups per core, `cost_T` per format at the best geometry per T, the tile's rows and the
+  accelerator switch, and the attention kernel; the probes' values (sibling order, `max_cb_ms`) carry over from the
+  hand-derived record. Decisions follow the autotuner's noise rule (3 %; a tie keeps the file's value).
 * **Dynamic T.** With DSpark the verify length changes every round, so `T_this_step` is read from `StepState` by every
   kernel (T_max = 1 + γ fixed at compile time; the crew geometry never changes). Where the best kernel differs by T —
   the shader GEMV at T = 1, the tensor-ops tile above it on Apple10 (the profile's `accelerator_min_t`, 2 on the

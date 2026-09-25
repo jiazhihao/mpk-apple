@@ -16,9 +16,9 @@ def test_repo_profiles_load():
 
 def test_cost_tables_measured_points_and_interpolation():
     m5 = load_profiles()["apple-m5-pro-20c"]
-    assert m5.cost("fp8", 1) == 1.0 and m5.cost("fp8", 2) == pytest.approx(1.08) and m5.cost("nvfp4", 4) == pytest.approx(1.79)
-    assert m5.cost("fp8", 3) == pytest.approx((1.08 + 1.11) / 2)         # linear between T = 2 and T = 4
-    assert m5.cost("accelerator_fp8", 8) == pytest.approx(1.09) and m5.cost("accelerator_nvfp4", 16) == pytest.approx(1.04)   # gemm_tile (#50)
+    assert m5.cost("fp8", 1) == 1.0 and m5.cost("fp8", 2) == pytest.approx(1.094) and m5.cost("nvfp4", 4) == pytest.approx(2.459)
+    assert m5.cost("fp8", 3) == pytest.approx((1.094 + 2.141) / 2)       # linear between T = 2 and T = 4
+    assert m5.cost("accelerator_fp8", 8) == pytest.approx(1.108) and m5.cost("accelerator_nvfp4", 16) == pytest.approx(1.356)   # gemm_tile rows (the writer, #49)
     with pytest.raises(ValueError):
         m5.cost("fp8", 9)                                                    # never extrapolate
     with pytest.raises(KeyError):
@@ -47,4 +47,4 @@ def test_accelerator_fields():
     with pytest.raises(ValueError):
         Profile.from_dict("p", dict(base, engine=dict(base["engine"], accelerator_min_t={"nvfp4": 0})))
     m5 = load_profiles()["apple-m5-pro-20c"]
-    assert m5.accelerator == "on" and m5.accelerator_min_t["nvfp4"] == 2 and m5.cost("accelerator_nvfp4", 8) == pytest.approx(1.03)
+    assert m5.accelerator == "on" and m5.accelerator_min_t["nvfp4"] == 2 and m5.accelerator_min_t["bf16"] == 4 and m5.cost("accelerator_nvfp4", 8) == pytest.approx(1.348)

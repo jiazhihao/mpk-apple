@@ -481,7 +481,10 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
 
 ### M9 — M4/M5 family tuning · 3 ew · hardware-dependent
 
-Profiles + autotune on M4 Pro/Max, M5, M5 Pro/Max (Ultra if available); MPP TensorOps block for `T > 1` on M5 —
+Profiles + autotune on M4 Pro/Max, M5, M5 Pro/Max (Ultra if available) — **the autotuner at install time is built
+(#49, `tools/profile_writer.py`)**: it measures the `engine` block from the kernel harnesses (lane order, threadgroups
+per core, `cost_T` per format, the tile's rows and the accelerator decision, the attention kernel) and merges it into
+the chip's profile; the other chips' profiles wait for the machines. MPP TensorOps block for `T > 1` on M5 —
 validated on the M5 Pro by `probes/p14_tensor_ops` (dequantize a [64 × 64] tile into threadgroup memory →
 `tensor_inline` → `matmul2d<…, execution_simdgroups<S>>` → cooperative-tensor accumulate; 8 tokens for 1.5× a T = 1
 pass in FP8 and NVFP4, 32 tokens for 1.7–1.8×; compiles from the Command Line Tools at MSL 4.0). **#50 built
