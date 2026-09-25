@@ -27,7 +27,14 @@
 // one slot, a fast head could overwrite the conv window a slower block of the same head is still reading). In a
 // speculative program (design §5.8) the same kernel with COMMIT=1 runs after the accept scan (which advanced
 // `step`): it recomputes the recurrence for the committed n_inject tokens from the slot the step's pass read and
-// overwrites the slot the pass wrote — the rejected positions never reach the state. Plain programs keep SLOTS=1.
+// overwrites the slot the pass wrote — the rejected positions never reach the state — and writes no read-out: its
+// o_part binding is a placeholder the kernel never touches (an early version stored the read-out through it, past
+// the end of a 16-byte value: the source of an intermittent wrong-token / hang / empty-generation failure of the
+// speculative programs, found with MTL_SHADER_VALIDATION=1). The emitter compiles every
+// program with SLOTS=2 (the advance op alternates `step` too): with one slot and several value heads per key head
+// (hv > hk), the v-head blocks sharing a key head's conv window race on it — a block that finishes first overwrites
+// the window a slower sibling is still reading (seen as a flaky oracle test under GPU contention). SLOTS=1 is a
+// bench-only mode for hv == hk.
 #ifndef SL
 #define SL 8u
 #endif
@@ -206,12 +213,14 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
             delta[j] = (vt - kvm) * beta[t];
           }
           for (uint i = 0; i < KR; i++) for (uint j = 0; j < SL; j++) S[i][j] = fma(kv[t][i], delta[j], S[i][j]);
-          for (uint j = 0; j < SL; j++) {
-            float part = 0.0f;
+#if !COMMIT
+          for (uint j = 0; j < SL; j++) {                        // the read-out: the step's pass only (the commit pass
+            float part = 0.0f;                                   // advances the state and binds no output of its own)
             for (uint i = 0; i < KR; i++) part = fma(S[i][j], qv[t][i], part);
             const float o = simd_sum(part);
             if (lane == 0) o_part[(t0 + t) * p.out_stride + h * DV + s * SL + j] = o;
           }
+#endif
         }
         for (uint i = 0; i < KR; i++) {
           device float* row = rec_out + ((ulong)(h * DK + lane + 32u * i)) * DV + s * SL;

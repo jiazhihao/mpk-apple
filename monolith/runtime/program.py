@@ -50,9 +50,11 @@ class Program:
     ring: str = "ring"                   # buffer name of the token ring: 8-byte slots, (sequence << 32) | token
     ring_capacity: int = 4096
     layout: StepStateLayout = field(default_factory=StepStateLayout)
+    context_capacity: int = 0            # positions a sequence may occupy (0 = unbounded): the serial ops stop the program (error 2) beyond it
 
     def to_json(self) -> str:
         d = {"version": 1, "step_state": self.step_state, "ring": self.ring, "ring_capacity": self.ring_capacity,
+             "context_capacity": self.context_capacity,
              "layout": {"t_max": self.layout.t_max, "gamma_max": self.layout.gamma_max},
              "kernels": {k: {"function": v.function, "macros": v.macros, "source": v.source, "language_version": v.language_version}
                          for k, v in self.kernels.items()},
@@ -73,7 +75,7 @@ class Program:
                                    v.get("file"), int(v.get("file_offset", 0))) for k, v in d["buffers"].items()},
             ops=[OpSpec(o["kernel"], [tuple(b) for b in o["bindings"]], tuple(o["grid"]), tuple(o["threadgroup"]), o.get("barrier_before", o.get("barrier_after", True)),
                         [tuple(t) for t in o.get("threadgroup_memory", [])], o.get("name", ""), dict(o.get("meta", {}))) for o in d["ops"]],
-            step_state=d["step_state"], ring=d["ring"], ring_capacity=d["ring_capacity"],
+            step_state=d["step_state"], ring=d["ring"], ring_capacity=d["ring_capacity"], context_capacity=int(d.get("context_capacity", 0)),
             layout=StepStateLayout(d["layout"]["t_max"], d["layout"]["gamma_max"]))
 
     def save(self, path: str | Path) -> None:

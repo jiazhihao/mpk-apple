@@ -296,7 +296,11 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   the next round's anchor, append to the **token ring** (shared memory — the CPU reads it without a copy; each 8-byte
   slot carries the token and its sequence number in one store, because the host drains while later command buffers
   are still running and cannot trust a head counter it reads from an in-flight buffer), check stop conditions (EOS set,
-  max length, stop-token table), advance positions and `step`.
+  max length, stop-token table), advance positions and `step`. It also guards the caches: a `Program` carries its
+  `context_capacity` (the smallest KV cache of the target and, with a drafter, of its context less the block it
+  appends after it), the verify-length select clamps L to the target's rows, and a step whose first position would
+  reach the capacity sets `error = 2` and `done` — no kernel ever indexes past a cache (`error = 1` is the token ring
+  overflowing). The host refuses a request that cannot fit before it starts; the guard catches the pump's over-run.
 * **Host pump.** The host keeps a few command buffers in flight (≈ 50–100 ms of queued work), each replaying one
   bounded range of the step ICB (§5.1). A completion handler drains the token ring and enqueues more. When `done` is set, steps already queued return at their first
   instruction (~2 µs per dispatch). The host never waits on the GPU to decide what runs next, so host latency is off
@@ -469,7 +473,12 @@ possible second `Drafter` plugin — the contract (§5.14) is drafter-agnostic �
 ### 5.10 Profiling and debugging
 
 * Every op is its own dispatch, so per-op GPU timestamps come straight from counter sample buffers (one encoder per
-  op in profiling builds), and Xcode GPU capture and shader validation work normally.
+  op in profiling builds), and Xcode GPU capture and shader validation work normally. Shader validation
+  (`MTL_SHADER_VALIDATION=1`) is the test for out-of-bounds stores **[M]**: it works on the ICB replay path (the first
+  violation per kernel) and per dispatch with re-encoding, and it found the three writes behind an intermittent
+  wrong-token / hang / empty-generation failure of the speculative programs (the GDN commit pass storing its
+  read-out through a 16-byte placeholder output, the tile's input permute of a value narrower than the slab's K, a
+  drafter's context appends past its cache) that no numerical test could see until the corrupted neighbour mattered.
 * For intra-op detail a **clock SIMD-group** free-runs an atomic tick counter; workers stamp block begin/end. Ticks
   are calibrated against the command buffer's `GPUStartTime/GPUEndTime`. Compile-time switch only (PR #278: a runtime
   profiling flag cost 0.4–0.5 ms/step).

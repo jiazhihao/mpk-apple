@@ -4,7 +4,10 @@
 // One thread. T is `t_this_step` (the host sets it per prefill chunk; the advance leaves 1 for decode). A prompt
 // longer than one step is fed in chunks: while `prefill_left > 0` the step only advances the position and emits
 // nothing (the next chunk's tokens come from the prompt); the last chunk's last position is the first sampled token.
-struct AdvanceParams { uint t_active; uint ring_cap; int eos; uint pad; };
+// ctx_cap > 0 is the program's context capacity (the KV caches' rows): when the next step's first position would
+// reach it the step sets error = 2 and done, so no later step writes past a cache (the host refuses a request that
+// cannot fit up front; the guard catches the pump's over-run and any host-side miscount).
+struct AdvanceParams { uint t_active; uint ring_cap; int eos; uint ctx_cap; };
 
 kernel void advance(device const int* token [[buffer(0)]], device StepState* st [[buffer(1)]], device ulong* ring [[buffer(2)]],
                     constant AdvanceParams& p [[buffer(3)]], uint i [[thread_position_in_grid]]) {
@@ -13,6 +16,7 @@ kernel void advance(device const int* token [[buffer(0)]], device StepState* st 
   if (st->prefill_left > 0u) {
     st->position = st->position + t;
     st->step = st->step + 1u;
+    if (p.ctx_cap && st->position >= p.ctx_cap) { st->error = 2u; st->done = 1u; }   // the context is full
     return;
   }
   const int tok = token[t - 1u];
@@ -25,4 +29,5 @@ kernel void advance(device const int* token [[buffer(0)]], device StepState* st 
   st->step = st->step + 1u;
   st->t_this_step = 1u;
   if (p.eos >= 0 && tok == p.eos) st->done = 1;
+  if (p.ctx_cap && st->position >= p.ctx_cap) { st->error = 2u; st->done = 1u; }     // the context is full
 }

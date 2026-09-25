@@ -31,6 +31,19 @@ python -c "import monolith.runtime as r; print(r.is_available())"     # True: th
 Tests that need a checkpoint or torch **skip** when they are missing, so the contract tier stays hermetic. A
 virtualized macOS (hosted CI) exposes a paravirtual GPU: only bare-metal numbers mean anything.
 
+After a kernel or emitter change, run the GPU tiers once more under Metal's shader validation — it instruments
+every kernel and reports each out-of-bounds device load or store with the kernel, the source line and the buffer's
+length (an intermittent wrong-token / hang / empty-generation failure of the speculative programs turned out to be
+three such writes, invisible to every other test until the corrupted neighbour happened to matter):
+
+```bash
+MTL_SHADER_VALIDATION=1 MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1 python -m pytest tests/kernels tests/models tests/spec -x 2>&1 | grep -A3 Invalid
+```
+
+It works on the ICB replay path (the first violation per kernel is reported); `Engine.run(reencode=True)` reports
+every dispatch. Any report is a bug: kernels index by the compiled shapes, so a value narrower than a slab's K, a
+placeholder output, or a position past a cache's rows is memory corruption, not a numerical error.
+
 Numerics contract (CLAUDE.md): weight-only dequantization, BF16 residual stream, FP32 accumulators and recurrent
 state. The reference is the HF model run on the dequantized weights. Gates: leaf ops ≤ 2 ULP, layers cos > 0.999,
 greedy tokens equal to the golden, repeated runs bit-identical.
@@ -252,6 +265,13 @@ the drafter's own rule) and `lower_context_update(g, taps, accepted)`. Register 
 and import the package in `monolith/spec/__init__.py`. The target exposes taps through `Model.feature_taps()` and
 `tap_values`; `tools/pack_weights.py --drafter-kind <name>` packs the drafter next to the target's pack;
 `generate --drafter … --drafter-kind <name>` runs the round.
+
+Two shape rules the emitter enforces: a value that feeds a GEMV has exactly the slab's K columns (a drafter whose
+block goes through the target's head has the target's hidden width), and a sequence occupies at most the program's
+context capacity — the smallest KV cache of the target and, for the drafter, its context cache less the block it
+appends after the context (`Program.context_capacity`; `Session.generate` refuses a request past it, and the serial
+ops stop the program with `StepState.error = 2` if a step would reach it, so no kernel writes past a cache). Give
+the drafter the target's `max_context`.
 
 Tests: a synthetic drafter for the torch-free lowering test and the GPU program test (`tests/dspark_synth.py`,
 `tests/contract/test_dspark_lowering.py`, `tests/kernels/test_draft_program.py`), the oracle against the method's

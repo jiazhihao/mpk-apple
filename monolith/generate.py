@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -93,6 +94,8 @@ class Session:
         self.layout = layout or StepStateLayout()
         self.verify, self.verify_threshold, self.verify_length = verify, verify_threshold, verify_length
         self.barriers, self.attention, self.fast_math, self.accelerator = barriers, attention, fast_math, accelerator
+        if accelerator is None and os.environ.get("MONOLITH_ACCELERATOR") in ("on", "off"):
+            self.accelerator = os.environ["MONOLITH_ACCELERATOR"]                    # an A/B knob for the test tiers
         self.eos, self.ring_capacity = eos, ring_capacity
         self.seed = seed
         # temperature 0 = greedy (the argmax path); otherwise the Gumbel-max sampler with the thresholds
@@ -143,6 +146,10 @@ class Session:
         t_max = self.layout.t_max
         chunks = [list(prompt_ids[i: i + t_max]) for i in range(0, p, t_max)]
         pre = self.engine(0)
+        cap = pre.program.context_capacity                    # the last new token is sampled at position p + max_new_tokens - 2
+        if cap and p + max_new_tokens - 1 > cap:
+            raise ValueError(f"generate: a {p}-token prompt plus {max_new_tokens} new tokens exceeds the context capacity of {cap} positions "
+                             f"(the smaller of the model's and the drafter's max_context, less the draft block)")
         st = pre.buffers[pre.program.step_state]
         prefill_ms = 0.0
         tokens: List[int] = []
@@ -174,6 +181,11 @@ class Session:
                     tokens += r2.tokens
                     dec_ms += r2.gpu_ms; dec_wall += r2.wall_ms; host += r2.host_busy_ms; steps += r2.steps
                     done = r2.done or r2.steps == 0
+        if len(tokens) < max_new_tokens:
+            err = int(pre.state()["error"])                       # 1: the ring overflowed; 2: the context filled (the pump's over-run
+            if err:                                               # past a request that fits sets 2 harmlessly, so only a short result is one)
+                raise RuntimeError(f"generate: the program stopped with error {err} after {len(tokens)} of {max_new_tokens} tokens "
+                                   f"({'the token ring overflowed' if err == 1 else 'the context capacity was reached'})")
         gen = Generation(tokens[:max_new_tokens], prefill_ms, dec_ms, dec_wall, host, steps, decode_tokens=min(len(tokens), max_new_tokens) - n_pre)
         if self.drafter is not None:
             gen.accepted, gen.committed, gen.verify_len, gen.confidences = self._accept_stats(pre, len(chunks))
