@@ -18,7 +18,7 @@ def test_cost_tables_measured_points_and_interpolation():
     m5 = load_profiles()["apple-m5-pro-20c"]
     assert m5.cost("fp8", 1) == 1.0 and m5.cost("fp8", 2) == pytest.approx(1.08) and m5.cost("nvfp4", 4) == pytest.approx(1.79)
     assert m5.cost("fp8", 3) == pytest.approx((1.08 + 1.11) / 2)         # linear between T = 2 and T = 4
-    assert m5.cost("accelerator_fp8", 8) == pytest.approx(1.49)
+    assert m5.cost("accelerator_fp8", 8) == pytest.approx(1.09) and m5.cost("accelerator_nvfp4", 16) == pytest.approx(1.04)   # gemm_tile (#50)
     with pytest.raises(ValueError):
         m5.cost("fp8", 9)                                                    # never extrapolate
     with pytest.raises(KeyError):

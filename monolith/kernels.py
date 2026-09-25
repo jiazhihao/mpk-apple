@@ -93,6 +93,81 @@ def gemv_params(n_rows: int, n_blocks: int, n_sg: int, t_active: int, *, out_sca
 
 # ---- the other decode kernels -------------------------------------------------------------------------------
 
+MSL_TENSOR_OPS = 4 << 16          # the language version the tensor-ops kernels need (MSL 4.0: <metal_tensor>, MPP)
+GEMM_TN = 16                      # rows per accelerator tile (the default up to 16 tokens; gemm_tile_shape)
+GEMM_TK = 256                     # columns per accelerator tile
+
+
+def gemm_source(fmt: str) -> str:
+    """The gemm_tile kernel (the M5 accelerator path for T > 1, #50) for storage format ``fmt``; compile it with
+    ``language_version=MSL_TENSOR_OPS``."""
+    return PRELUDE + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+
+
+def gemm_tile_shape(tm: int) -> Tuple[int, int]:
+    """The measured default tile per token count (decode-kernels.md §6): 16 × 256 up to 16 tokens (a row piece is one
+    cache line), 32 × 128 at 32 (the activation slice's traffic grows with TM × TK)."""
+    return (16, 256) if tm <= 16 else (32, 128)
+
+
+def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional[int] = None, tk: Optional[int] = None) -> Dict[str, str]:
+    """The specialization of gemm_tile for one slab geometry, ``tm`` token rows (8, 16 or 32 — the accelerator's
+    16-row minimum makes 8 cost what 16 costs; the operation's T_act ≤ tm is a run-time parameter) and the tile shape
+    ``tn × tk`` (64×64, 32×128 or 16×256: 4096 weights, one per thread register; the measured default per ``tm``)."""
+    f = FORMATS.get(info.format)
+    wpw = int(f.weights_per_word)
+    if tn is None or tk is None:
+        tn, tk = gemm_tile_shape(tm)
+    if (tn, tk) not in ((64, 64), (32, 128), (16, 256)):
+        raise ValueError(f"gemm_tile: tile {tn}x{tk} is not one of 64x64, 32x128, 16x256")
+    if info.k % (32 * wpw) or info.k % tk or tk % wpw:
+        raise ValueError(f"gemm_tile: K must be a multiple of {32 * wpw} and of {tk} for {info.format} (K={info.k})")
+    if tn % info.rows:
+        raise ValueError(f"gemm_tile: R={info.rows} must divide the {tn}-row tile")
+    if tm not in (8, 16, 32):
+        raise ValueError(f"gemm_tile: TM must be 8, 16 or 32 (got {tm})")
+    macros = {"K": str(info.k), "R": str(info.rows), "TM": str(tm), "TN": f"{tn}u", "TK": f"{tk}u",
+              "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
+              "UNIT_WORDS": str(info.unit_bytes // 16), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0"}
+    lpt = tk // wpw                                            # lanes per tile: LPT * 16 bytes of each row's 128-byte line
+    if lpt * 16 >= 64:
+        macros["Q_OUTER"] = "1"                                # lane group outer (half a line or more per row piece) …
+        if info.scale_bytes:                                   # … and the scale words of a thread's rows and lanes can stay
+            nw = max(1, (tk // 4) // wpw)                      #     in registers across the lane group's words (≤ 16 uints)
+            if (tn // 8) * nw * int(macros["SCALE_WORDS"]) * 4 <= 16:
+                macros["SCALE_CACHE"] = "1"
+    return macros
+
+
+def gemm_params(n_rows: int, n_tiles: int, n_sg: int, t_active: int, *, out_scale: float = 1.0) -> bytes:
+    """The ``GemmParams`` record (buffer 4): ``n_tiles`` = ceil(N / 64) row tiles."""
+    return struct.pack("<IIIIfIII", n_rows, n_tiles, n_sg, t_active, out_scale, 0, 0, 0)
+
+
+def gemm_tiles(n_rows: int, tn: int = GEMM_TN) -> int:
+    return -(-n_rows // tn)
+
+
+def x_permute_params(k: int, t_active: int, tm: int, wpw: int, tk: int = GEMM_TK) -> bytes:
+    """The ``XPermParams`` record of x_permute (buffer 2): x [T, K] → x' [tm, K] in gemm_tile's reduction order."""
+    return struct.pack("<IIIIIIII", k, t_active, tm, wpw, tk, 0, 0, 0)
+
+
+def x_permute_columns(k: int, wpw: int, tk: int = GEMM_TK) -> "np.ndarray":
+    """``perm`` with ``x'[:, i] = x[:, perm[i]]`` — the reduction order gemm_tile reads (numpy reference): the
+    pack's column order, then the accelerator's slot order inside each tk-column tile (see x_permute)."""
+    import numpy as np
+
+    kl = k // 32
+    i = np.arange(k)
+    kt, slot = i // tk, i % tk
+    mq, jump, qq = ((slot >> 2) & 1) + 2 * ((slot >> 3) & 1), slot >> 4, slot & 3
+    c = kt * tk + (tk // 4) * mq + 4 * jump + qq
+    span = 32 * wpw
+    j, rem = c // span, c % span
+    return (rem // wpw) * kl + j * wpw + rem % wpw
+
+
 def embed_source(fmt: Optional[str] = None) -> str:
     """The gather kernel; ``fmt`` = the quantized format of a packed table to decode on the fly (its snippet is
     pasted ahead of the template)."""

@@ -33,7 +33,10 @@ is not the long-context win, SIMD-group-matrix scoring is (M9); fast math buys 1
 so safe stays. Format 2 (#47) is built: affine INT4 groups (`formats/int4_affine`, MLX / AWQ / GPTQ) as a plugin —
 the MLX 4-bit 0.8B decodes token-identical to its oracle; the port needed a per-group bias hook, the quantized-embedding
 gather, ragged lane stripes and a package-declared value adapter (mlx_lm folds `1 +` into the zero-centered norms;
-porting-log.md); the porting guide (#48, `docs/porting.md`) closes M8. Next: M9 (the GEMM path). Speculative decoding targets a **DSpark** drafter, not the MTP head.
+porting-log.md); the porting guide (#48, `docs/porting.md`) closes M8. M9's accelerator GEMM is built (#50,
+`kernels/gemm_tile.metal`): the cooperative right-input fill from the pack words streams NVFP4 at 177 GB/s and FP8
+at 253 for 8 or 16 tokens — 0.9–1.1× a T = 1 shader pass, 34–49 % above `p14`'s staged tile; at 32 tokens it is
+below `p14` (decode-kernels.md §6). Next: the accelerator verify path in the step program (#51). Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order
 
@@ -103,10 +106,10 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order: M9 — the
-   T ≥ 2 GEMM kernel (#50/#51: SIMD-group matrices / MPP tensor ops for the GEMVs at T ≥ 2 and the attention core)
-   is what the speculative gate and the long-context rows need on this chip. The 27B items (#36, #40's M3 Pro rows,
-   #46) and the M3 Pro / M4 rows of the A/B tables need those machines.
+0. **Keep building** — the roadmap issues in order: M9 — the accelerator verify path (#51: `gemm_tile` as the
+   predicated T ≥ 5 variant of the verify pass, the cost table's accelerator column) is what the speculative gate
+   needs on this chip; the attention core's SIMD-group-matrix scoring for the long-context rows. The 27B items
+   (#36, #40's M3 Pro rows, #46) and the M3 Pro / M4 rows of the A/B tables need those machines.
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
    H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).

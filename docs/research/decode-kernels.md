@@ -272,3 +272,90 @@ the acceptance measurement on the prompt set (#40) — done: dspark.md §3 has t
 cost-aware rule 36.2 ms per token vs plain 27.0; fixed L = 1 / 2 / 3 / 7: 42.6 / 40.6 / 36.9 / 78.1) and the STS
 calibration (not needed: the head is calibrated as shipped).
 
+## 6. The accelerator GEMM for T > 1 (#50) — `apple-m5-pro-20c_gemm.jsonl`
+
+`kernels/gemm_tile.metal`: `y = x · Wᵀ` for T ≤ TM token rows through `mpp::tensor_ops::matmul2d` (MSL 4.0 from
+the Command Line Tools), reading the engine's block-lane-major pack — the same slabs, the same format snippets
+(`decode_word`, `decode_scale`, `decode_bias`) as `gemv_T`. The design's untested refinement of `p14` — filling a
+**cooperative right-input tensor** straight from the pack words instead of staging a dequantized tile through
+threadgroup memory — is built and measured (`tools/bench/gemm_bench.py`, every point checked against the CPU
+reference on the BF16 operands the accelerator multiplies, relative error 0.9–1.1e-6 as `p14`'s).
+
+**What the accelerator exposes.** Input cooperative tensors need the single-SIMD-group scope (a static assert), so
+one SIMD-group owns a tile; the register layout, read back from `get_multidimensional_index` for every element
+(`tests/kernels/test_gemm_tile.py` keeps checking it), is MLX's NAX fragment layout: thread `lane` holds reduction
+slots `4·(bit0 + 2·bit3) + 16·jump + q` for rows `(bits 1,2,4) + 8·slot` — a quarter of the tile's columns in runs
+of 4, for TN/8 rows; the destination's elements go `q, slot (2), jump, 16-row block`, the right operand's
+`q, slot (TN/8), jump`. TM = 8 leaves half of a 16-row minimum unused: **16 tokens cost what 8 cost** (`p14` saw the
+same, 0.505 vs 0.522 ms, without saying why).
+
+**What it took (17408 × 5120, TM = 8, NVFP4 / FP8 ms per matrix; `p14`'s staged tile: 0.421 / 0.480):**
+
+| step | NVFP4 | FP8 | what changed |
+|---|---|---|---|
+| per-element fill, lane-dependent register indices | 1.48 | 1.64 | dynamic indexing put the operand and the decoded word in memory |
+| constant-indexed registers, per-run decode, `clang loop unroll(full)` | 0.83 | 0.98 | the fill is compute-bound: matmul alone 0.18 (`EXP_MODE=2`), fill from synthetic words 0.24 (`=5`) |
+| quad sharing of the words by SIMD shuffles (8 loads instead of 32) | 1.96 | 1.39 | the shuffles cost more than the loads they save |
+| the reduction index permuted: a thread owns TK/4 *consecutive* columns per row | 0.66 | 0.61 | one contiguous half-word / word per row, no exchange, one scale per 16 columns |
+| the tile 16 × 256 (a row piece is one cache line) instead of 64 × 64 | 0.35 | 0.36 | 32-byte row pieces thrashed the L1 across 12 SIMD-groups per core (96 KB of lines in flight) |
+| lane group outer, block-scale words cached in registers | 0.30 | 0.35 | NVFP4 reloaded its scale words for every word of a lane (+60 % traffic) |
+| two threadgroups per core (24 SIMD-groups) | 0.28 | 0.36 | latency hiding; FP8 is at the bus already |
+
+The loads were the cost throughout: 32 sixteen-byte loads per tile per thread (four threads of a quad loading the
+same words, the scale words five times over) moved 512 KB per tile per SIMD-group through the L1 for 4 KB of
+weights. The decode and the operand writes are cheap once the indices are constant; the matmul itself runs at
+8 TFLOP/s at TM = 8 (half the accelerator's 16 at TM ≥ 32, the 16-row minimum) and does not overlap the fill within
+a SIMD-group.
+
+**Result (17408 × 5120, ms per matrix, best geometry; `p14` = the staged tile of §P14 in the hardware report):**
+
+| format | TM = 8 | TM = 16 | TM = 32 | p14 8 / 16 / 32 | T = 1 GEMV (M1 sweep best) |
+|---|---|---|---|---|---|
+| NVFP4 | **0.283** (177 GB/s, 58 %) | **0.287** (175) | 0.637 (79) | 0.421 / 0.471 / 0.489 | 0.319 (157 GB/s) |
+| FP8 E4M3 | **0.352** (253, 82 %) | **0.374** (238) | 0.677 (132) | 0.480 / 0.522 / 0.559 | 0.343 (260) |
+| INT4 affine | **0.273** (204, 66 %) | — | — | — | 0.284 (242) |
+| BF16 | 0.652 (274, 89 %) | — | — | 0.857 (half, direct) | — |
+
+At 8 or 16 tokens the cooperative fill beats the staged tile by 34–49 % and costs **0.9–1.1× a T = 1 shader GEMV
+pass** (NVFP4 0.89×: the shader's NVFP4 decode is ALU-bound at 51 % of nominal, the accelerator path streams at
+58 %) — against ×3.6 (FP8) and ×5.3 (NVFP4) for 8 tokens on the shader path. At 32 tokens it is 25–30 % *slower*
+than `p14`: the matmul floor is 0.30 ms there (`EXP_MODE=2`), the activation slice's traffic grows with TM × TK
+(pinning it, `=6`, gives back 8–24 %), and the fill of one SIMD-group never overlaps its own matmul, whereas the
+staged tile spreads one fill over four SIMD-groups and reads the activations once per four. So: **the cooperative
+fill is the T ≤ 16 path** (the verify pass at T = 1 + L ≤ 8, the prompt chunks); a multi-SIMD-group staged variant
+on this pack is the follow-up for T ≥ 32 (prefill). Two side findings: the contiguous lane order runs at half the
+speed (87 GB/s) — the tile wants the interleaved words; and for NVFP4 the accelerator path at TM = 8 is *faster
+than the T = 1 GEMV* (0.283 vs 0.319 ms), a per-op choice for the autotuner to time.
+
+**The M9 sweep** (`apple-m5-pro-20c_gemm.jsonl`, 96 points, every one checked: the four formats × the M9 shapes ×
+TM = 8 / 16 / 32 × one and two threadgroups per core; best of the two geometries, the crew tile per TM):
+
+| format | shape | TM = 8 | TM = 16 | TM = 32 |
+|---|---|---|---|---|
+| NVFP4 | 17408×5120 (gate/up) | 0.283 ms, 177 GB/s (58 %) | 0.287, 175 | 0.640, 78 |
+| NVFP4 | 5120×17408 (down) | 0.460, 109 (36 %) | 0.470, 107 | 0.805, 62 |
+| NVFP4 | 12288×5120 (q + gate) | 0.228, 155 (50 %) | 0.231, 154 | 0.434, 82 |
+| NVFP4 | 248320×5120 (lm_head) | 3.697, 193 (63 %) | 3.744, 191 | 7.116, 100 |
+| FP8 | 17408×5120 | 0.365, 244 (79 %) | 0.374, 238 | 0.681, 131 |
+| FP8 | 5120×17408 | 0.462, 193 (63 %) | 0.475, 188 | 0.701, 127 |
+| FP8 | 12288×5120 | 0.282, 223 (73 %) | 0.295, 213 | 0.455, 138 |
+| FP8 | 248320×5120 | 4.762, 267 (87 %) | 4.835, 263 | 7.994, 159 |
+| INT4 affine | 17408×5120 | 0.277, 201 (66 %) | 0.284, 196 | 0.566, 98 |
+| INT4 affine | 5120×17408 | 0.407, 137 (44 %) | 0.420, 132 | 0.649, 86 |
+| INT4 affine | 12288×5120 | 0.217, 181 (59 %) | 0.222, 177 | 0.377, 104 |
+| INT4 affine | 248320×5120 | 3.653, 218 (71 %) | 3.803, 209 | 6.895, 115 |
+| BF16 | 17408×5120 | 0.649, 274 (89 %) | 0.655, 272 | 0.908, 196 |
+| BF16 | 5120×17408 | 0.702, 254 (83 %) | 0.720, 248 | 0.746, 239 |
+| BF16 | 12288×5120 | 0.490, 256 (84 %) | 0.497, 253 | 0.558, 225 |
+| BF16 | 248320×5120 | 9.046, 281 (92 %) | 9.119, 279 | 11.909, 214 |
+
+Two threadgroups per core win for NVFP4 and BF16 (latency), one for FP8 and INT4 — the autotuner's knob. The
+**down projection** (K = 17408, N = 5120) is the weak shape for the quantized formats: 320 row tiles over 480
+SIMD-groups leave a third of the crew idle, and with 17 words per lane the scale words no longer fit the register
+cache (48 uints), so NVFP4 reloads them per tile. The remedy is a K-split (two SIMD-groups per row tile, partials
+reduced through threadgroup memory) with the scale cache sized to the split — the follow-up alongside the staged
+variant for T ≥ 32. On the lm_head shape every format is within 5 % of its wide-shape number.
+
+Profile rows (`profiles/apple-m5-pro-20c.json`, relative to `p13`'s T = 1 pass as the shader rows are):
+`accelerator_nvfp4` 8: 1.03, 16: 1.04, 32: 2.32; `accelerator_fp8` 8: 1.09, 16: 1.16, 32: 2.10.
+
