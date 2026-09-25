@@ -8,9 +8,10 @@ for speculative decoding (D10, §5.8, [research note](../docs/research/dspark.md
 [`docs/research/apple-inference-systems.md`](../docs/research/apple-inference-systems.md).
 
 First target: `nvidia/Qwen3.8-27B-NVFP4`, **batch-1 decode latency**, M3/M4/M5 families, macOS 26+.
-Bring-up machines: an M3 Pro, 18-core GPU, 36 GB (21 GB of text weights + state fit in its ~28–30 GB working set; the
-only machine on hand that hosts the model) and an M5 Pro, 20-core GPU, **24 GB** (GPU characterization and kernel work
-only: its 19 GB working-set limit cannot host the 27B).
+Bring-up machine: an M5 Pro, 20-core GPU, **24 GB** (GPU characterization, kernels, and models up to ~18 GB resident:
+its 19 GB working-set limit cannot host the 27B). The M3 Pro (18-core GPU, 36 GB, the machine that hosted the 27B)
+and the M4-family measurements were dropped from the roadmap on 2026-09-25; the 27B gates wait for a machine that
+hosts it.
 
 ## 0. Scope
 
@@ -53,31 +54,21 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       value (D8); one threadgroup per core is a default with an autotuned knob (D4); in-dispatch sharing exists but is
       unreliable and command-buffer blocking is the common case (D6); the bus saturates with 6 of 20 cores and the
       ALU-bound sibling must be encoded first (D14); the accelerator path is real from T ≈ 3–8 (§5.6, §5.8).
-* [ ] Run `p12`–`p14` on the M3 Pro (they postdate its run): are "lane order decides bandwidth", "crew geometry =
-      parity" and the T-cost curves Apple10-only?
-* [ ] Baselines on the M3 Pro: `mlx-lm` (NVFP4 mode and affine 4-bit) and `llama.cpp` (Q4_K_M) on Qwen3.8-27B and on a
-      small same-architecture model: tok/s, effective GB/s, CPU utilization, dispatches and command buffers per token.
+* **Dropped 2026-09-25 (no M3 Pro or M4 machine on the roadmap):** `p12`–`p14` on the M3 Pro (#2 — whether the
+      lane-order, parity and T-cost results are Apple10-only stays open), the plain and speculative baselines on the
+      M3 Pro (#3, #5 — the 27B's baselines wait for a machine that hosts it), the M4 measurement (#8 — the hardware
+      report §4 keeps the checklist for any chip not yet measured).
 * [ ] **Drafters.** Fetch the Apache-2.0 DSpark drafters for the target — `DimInfer/Qwen3.8-27B-Dspark-v1` (safetensors
       + GGUF Q8/BF16, trained against the Q4_K_M target) and `gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4` (1.3 GB,
       MLP/o_proj in NVFP4, trained on-policy against an NVFP4 target) — and `Dogacel/Qwen3-8B-DSpark` for model 2.
       Record configs (layers, block size, tapped target layers, Markov rank, dtypes) and licenses in
       `docs/research/dspark.md`; note that `RadixArk/Qwen3.8-27B-DSpark` carries an "other" license and is not used.
-* [ ] **Speculative baseline on the M3 Pro:** llama.cpp `--spec-type draft-dspark` (PR #25173) with the Q8 drafter and
-      the Q4_K_M target: accepted length and tok/s per workload (math, code, chat) at `--spec-draft-n-max` 2–7; DFlash's
-      MLX backend (`dflash generate mlx`) as a second reference. These are the acceptance figures the verify-length rule
-      must beat and the number the M6 gate is measured against.
 * [ ] Reference tooling: exact NVFP4/FP8 → BF16 dequantizer; HF golden scripts (adapt
       `mirage/tests/runtime_python/models/qwen38/hf_golden.py`): full goldens for the small model; per-layer goldens
       for the 27B produced layer-streamed (54 GB of BF16 does not fit in 36 GB) or on a larger machine.
-* [ ] On-screen frame-pacing check: compositor frame times while command buffers of 8 / 16 / 33 / 66 ms run back to
-      back → the default `max_cb_ms`. Moved up: the M5 Pro blocks foreign work for whole command buffers more often
-      than the M3 Pro, so this measurement precedes the host pump (M2).
-* [ ] **Measure M4.** `./probes/remote_run.sh user@host` (or `./probes/run_all.sh` on the machine itself, ~5 min,
-      Command Line Tools only) on a bare-metal M4-family Mac; commit the results files and `profiles/*.json`. M4 / M4 Pro
-      are rentable as AWS EC2 Mac dedicated hosts (`mac-m4.metal` $1.23/h, `mac-m4pro.metal` $1.97/h, 24-hour minimum
-      ≈ $30 / $47). Virtualized macOS runners are useless here (paravirtual GPU). The hypotheses to test and the
-      outcomes that would change the design are in the hardware report §4 (H1–H10, revised after the M5 Pro): chiefly
-      `p12` (which lane order streams, cores to saturate, encode order), `p6`/`p6b` ×4 (sharing), `p10`, `p13`/`p14`.
+* [ ] On-screen frame-pacing check on the M5 Pro: compositor frame times while command buffers of 8 / 16 / 33 / 66 ms
+      run back to back → confirms the default `max_cb_ms` (16 ms from `p6`/`p6b`; the M5 Pro blocks foreign work for
+      whole command buffers in the usual case).
 
 Exit: baseline table (plain and speculative), goldens, drafters on disk with recorded configs, ≥ 1 profile (two
 provisional profiles exist: `profiles/`).
@@ -108,7 +99,7 @@ either way. So the geometry claim is settled at "no worse" and M1's real problem
 
 Exit gate: NVFP4 T = 1 ≥ **1.10×** MLX's kernel throughput on the same machine (M3 Pro, and the M5 Pro where MLX's
 dense 4-bit `qmv` is reported at 266 GB/s), NVFP4 ≥ 80 % of nominal on the M5 Pro, FP8 shapes ≥ **100 GB/s** on the
-M3 Pro; outputs within 2 ULP (BF16) of the oracle.
+M3 Pro; outputs within 2 ULP (BF16) of the oracle. (The M3 Pro rows were dropped with the machine on 2026-09-25.)
 
 **Go/no-go #1, read on the M5 Pro 2026-09-24** (`docs/research/gemv-kernel-study.md` §3c, issues #9–#12):
 FP8 231–291 GB/s (75–95 %) — met. NVFP4 T = 1 with the integer-table decode: 231–274 GB/s (75–89 %) — the 80 %
@@ -479,9 +470,9 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
   drafter 1: ~1.5 h for the module; format 2: ~6 h, four engine-side extensions and a converter-convention hunt),
   with the contracts as they are in the tree, the CI checks, the golden workflow and the checklists.
 
-### M9 — M4/M5 family tuning · 3 ew · hardware-dependent
+### M9 — M5 family tuning · 3 ew · hardware-dependent
 
-Profiles + autotune on M4 Pro/Max, M5, M5 Pro/Max (Ultra if available) — **the autotuner at install time is built
+Profiles + autotune on M5, M5 Pro/Max (Ultra if available; the M4 family was dropped 2026-09-25) — **the autotuner at install time is built
 (#49, `tools/profile_writer.py`)**: it measures the `engine` block from the kernel harnesses (lane order, threadgroups
 per core, `cost_T` per format, the tile's rows and the accelerator decision, the attention kernel) and merges it into
 the chip's profile; the other chips' profiles wait for the machines. MPP TensorOps block for `T > 1` on M5 —

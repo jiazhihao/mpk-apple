@@ -51,8 +51,9 @@ its context cache — fixed, and a `Program` now carries a `context_capacity` th
 1. `docs/design/design.md` — the design. §0 is the decision table (D1–D14); §7 answers "warp specialization?" (no) and
    "static megakernel?" (static yes, one kernel no).
 2. `docs/research/apple-gpu-probes.md` — what was measured on real hardware and what each number implies. §1 is the
-   cross-chip table (M3 Pro and M5 Pro filled, M4 empty); §3 is what the M5 Pro confirmed and changed; **§4 is the
-   checklist for continuing on an M4** (hypotheses H1–H10 and the outcomes that would change the design).
+   cross-chip table (M3 Pro and M5 Pro filled); §3 is what the M5 Pro confirmed and changed; §4 is the checklist for
+   a chip not yet measured (hypotheses H1–H10 and the outcomes that would change the design; written for an M4, whose
+   measurement was dropped from the roadmap on 2026-09-25).
 3. `plans/implementation-plan.md` — milestones M0–M9 with exit gates and go/no-go points.
 4. `docs/research/apple-inference-systems.md` — how MLX, llama.cpp and others work; what to reuse; headroom estimates.
 5. `docs/research/dspark.md` — the speculative-decoding method we target, the public drafters for our models, their
@@ -114,8 +115,9 @@ its context cache — fixed, and a `Program` now carries a `context_capacity` th
 including the MPP tensor ops of `p14`) and saves `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`.
 `./probes/remote_run.sh user@host` does the same over SSH. Geometry is derived from the GPU core count (`GPU_CORES=<n>`
 overrides). Commit every results file. Measured so far: an M3 Pro (2026-09-19, 13 probes) and an M5 Pro (2026-09-22,
-all 16, repeats of `p6`/`p6b`/`p12`); hand-derived profiles are in `profiles/`. `p12`–`p14` have not yet run on the
-M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every kernel variant without dispatching.
+all 16, repeats of `p6`/`p6b`/`p12`); the M5 Pro's profile is the writer's (`tools/profile_writer.py`), the M3 Pro's
+hand-derived. `p12`–`p14` never ran on the M3 Pro (dropped with the machine, 2026-09-25). `./probes/build/p13_decode_gemv
+check` (same for `p14`) compiles every kernel variant without dispatching.
 
 ## Next steps
 
@@ -124,14 +126,16 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
    long-context rows. The autotuner at install time is built (#49, `tools/profile_writer.py`: it measures the
    `engine` block from the kernel harnesses and merges it into `profiles/<chip>-<cores>c.json`; the other chips'
    profiles wait for the machines). Intra-op stealing (#44) is built, measured and off by
-   default (decode-kernels.md §7). The 27B items (#36, #40's M3 Pro rows, #46 — the smallest MoE checkpoint in a
-   format we read, `nvidia/Qwen3-30B-A3B-NVFP4`, is ~18.5 GB resident against this machine's 19.07 GB GPU working
-   set), the M3 Pro / M4 rows of the A/B tables (#2, #3, #5, #7, #8, #49), #42 (a GPU box), #43 (Max-class parts)
-   and #52 (macOS 27) need machines this one is not.
-1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
-   are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
-   H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).
-2. Plan M0 remainder: MLX / llama.cpp baselines for the target model (needs the 36 GB M3 Pro — the 24 GB M5 Pro cannot
-   host it), exact NVFP4/FP8 → BF16 dequantizer, HF goldens, the on-screen frame-pacing check.
+   default (decode-kernels.md §7). The M3 Pro and M4 tasks (#2, #3, #5, #8, #12's M3 Pro rows, #49's M4 chips) were
+   dropped from the roadmap on 2026-09-25 — this M5 Pro is the only machine. Still open and needing a machine this
+   one is not: the 27B items (#31's 27B rows, #36, #40's 27B rows, #46 — the smallest MoE checkpoint in a format we
+   read, `nvidia/Qwen3-30B-A3B-NVFP4`, is ~18.5 GB resident against this machine's ~18–19 GB GPU working set), #42 (a
+   GPU box), #43 (Max-class parts), #49's other M5 chips and #52 (macOS 27). Doable here: #7, the on-screen
+   frame-pacing check.
+1. A new chip, if one arrives: run the suite, commit the results, fill its column in the hardware report §1, walk
+   H1–H10 in §4, run `tools/profile_writer.py`, and update the design where a hypothesis fails (D4, D5, D6, D8, D14
+   are the chip-sensitive decisions).
+2. Plan M0 remainder on this machine: the on-screen frame-pacing check (#7). The 27B's baselines and goldens wait for
+   a machine that hosts it.
 3. Plan M1 (go/no-go): the NVFP4 decode is the problem (ALU-bound at 59 % of nominal on the M5 Pro; FP8 is at 90 %);
    then the comparison against MLX `qmv` on the same machine.

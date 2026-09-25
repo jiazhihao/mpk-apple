@@ -4,6 +4,7 @@
     python3 tools/roadmap_issues.py --preview            # writes plans/roadmap-issues.md for review; no network
     python3 tools/roadmap_issues.py --create             # creates labels, milestones, issues (idempotent by title)
     python3 tools/roadmap_issues.py --create --dry-run   # prints what would be created
+    python3 tools/roadmap_issues.py --update-master      # re-renders the master issue (closed tasks ticked, dropped ones listed)
 
 Authentication (never printed): GITHUB_TOKEN or GH_TOKEN in the environment, else `gh auth token` if the GitHub CLI is
 logged in. The token needs `repo` scope (classic) or Issues: read/write (fine-grained) on the repository.
@@ -35,7 +36,7 @@ LABELS = {
 }
 
 MILESTONES = [
-    ("M0", "M0 — Characterize and baseline", "Probes, plain and speculative baselines, drafters, goldens, frame pacing, M4. 1.5 ew, partly done."),
+    ("M0", "M0 — Characterize and baseline", "Probes, plain and speculative baselines, drafters, goldens, frame pacing. 1.5 ew, partly done."),
     ("M1", "M1 — The GEMV proof (go/no-go #1)", "Prove or kill the kernel-geometry and layout claim; the NVFP4 decode cost is the problem. 2 ew."),
     ("M2", "M2 — Runtime core and weight packer", "Standalone skeleton, formats, pack_weights, device/ICB/host pump/token ring/StepState. 3 ew, parallel with M1."),
     ("M3", "M3 — Kernel library v1", "Block bodies with oracle tests: norm, gemv_T + fusions, gqa_decode, gdn_mixer, lm_head/sampling, drafter ops. 4 ew."),
@@ -44,7 +45,15 @@ MILESTONES = [
     ("M6", "M6 — DSpark speculative decoding", "The drafter as a Drafter module, the round in the dynamic-T program, correctness, measurement. 4 ew."),
     ("M7", "M7 — In-kernel runtime re-evaluation and intra-op stealing", "Time-boxed, off the critical path. 1.5 ew."),
     ("M8", "M8 — Generality proof", "Model 2 with zero engine edits, model 3 with new ops, format 2, porting guide. 3 ew."),
-    ("M9", "M9 — M4/M5 family tuning", "Profiles + autotune, the M5 accelerator paths, MSL 4.1. 3 ew, hardware-dependent."),
+    ("M9", "M9 — M5 family tuning", "Profiles + autotune on the M5 family, the M5 accelerator paths, MSL 4.1. 3 ew, hardware-dependent."),
+]
+
+# Tasks removed from the roadmap (the issues are closed; the master issue lists them so the history stays visible).
+DROPPED = [
+    ("2026-09-25", 2, "M0: run p12–p14 on the M3 Pro", "the M3 Pro is off the roadmap"),
+    ("2026-09-25", 3, "M0: plain-decode baselines on the M3 Pro (mlx-lm, llama.cpp)", "the M3 Pro is off the roadmap; the 27B's baselines wait for a machine that hosts it"),
+    ("2026-09-25", 5, "M0: speculative baseline — llama.cpp draft-dspark on the M3 Pro", "the M3 Pro is off the roadmap; the 27B's speculative baseline waits for a machine that hosts it"),
+    ("2026-09-25", 8, "M0: measure an M4-family Mac", "the M4 family is off the roadmap; the hardware report §4 keeps the checklist for any new chip"),
 ]
 
 def T(ms, title, labels, context, work, done, refs):
@@ -52,20 +61,6 @@ def T(ms, title, labels, context, work, done, refs):
 
 TASKS = [
 # ---------------------------------------------------------------- M0
-T("M0", "M0: run p12–p14 on the M3 Pro", ["area:probes", "hardware:m3-pro"],
-  "The three probes added on the M5 Pro postdate the M3 Pro run. Whether 'lane order decides bandwidth', 'crew geometry = parity' and the T-cost curves are Apple10-only decides how many profile values the packer and the verify-length rule need per family.",
-  ["`./probes/run_all.sh p12_stream_geometry p13_decode_gemv p14_tensor_ops` on the M3 Pro; commit the results files",
-   "Fill the M3 Pro cells of the `p12`/`p13`/`p14` rows in the hardware report §1; update §7 caveats and `profiles/apple-m3-pro-18c.json`",
-   "If the lane orders tie on Apple9 as `p5b` suggested, record it as the Apple9 profile default"],
-  ["Results committed; report §1 has no 'not run' cells for the M3 Pro; profile updated"],
-  [f"{PROBES} §1, §3 (N1–N4), §7", f"{DESIGN} D8"]),
-T("M0", "M0: plain-decode baselines on the M3 Pro (mlx-lm, llama.cpp)", ["area:perf", "hardware:m3-pro"],
-  "Every performance claim is relative, same machine, same day. The 24 GB M5 Pro cannot host the 27B, so the target-model baselines live on the M3 Pro.",
-  ["`mlx-lm` (NVFP4 mode and affine 4-bit) and `llama.cpp` (Q4_K_M) on Qwen3.8-27B and on a small same-architecture model",
-   "Record tok/s, effective GB/s, CPU utilization, dispatches and command buffers per token (Metal capture / `MTL_CAPTURE_ENABLED` or the engines' own counters)",
-   "Write the baseline table into the plan (M0 exit) with versions and dates"],
-  ["Baseline table committed; the numbers the M4/M5 gates are measured against"],
-  [f"{PLAN} M0", f"{BLOB}/docs/research/apple-inference-systems.md §5"]),
 T("M0", "M0: fetch the DSpark drafters and record their configs and licenses", ["area:spec", "area:docs" if False else "area:models"],
   "v1 speculates with a public DSpark drafter (design D10). Three Apache-2.0 drafters exist for our targets; their configs must be read from the actual `config.json` files, not from model cards.",
   ["Download `DimInfer/Qwen3.8-27B-Dspark-v1` (safetensors + GGUF Q8_0/BF16), `gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4`, `Dogacel/Qwen3-8B-DSpark` (model 2)",
@@ -73,13 +68,6 @@ T("M0", "M0: fetch the DSpark drafters and record their configs and licenses", [
    "Check the safetensors tensor names against the llama.cpp GGUF naming (`markov_w1/w2`, `conf_proj`, `dflash.block_size`) for the weight map in M6"],
   ["Drafters on disk on the M3 Pro; `dspark.md` §2 verified against the files; a `tests/spec/` fixture listing the tensors"],
   [f"{SPARK} §2", f"{DESIGN} §5.8"]),
-T("M0", "M0: speculative baseline — llama.cpp draft-dspark on the M3 Pro", ["area:spec", "area:perf", "hardware:m3-pro"],
-  "The M6 gate is measured against llama.cpp's DSpark decode with the same drafter on the same machine, and the acceptance figures it reports are what our verify-length rule must beat.",
-  ["Build llama.cpp with PR #25173 merged; run `llama-server -m Qwen3.8-27B-Q4_K_M.gguf -md Qwen3.8-27B-DSpark-Q8_0.gguf --spec-type draft-dspark --spec-draft-n-max N -ngl 99 -ngld 99` for N = 2…7",
-   "Per workload (math, code, chat prompt sets): accepted length, acceptance rate, tok/s vs plain decode; try `--spec-draft-p-min`",
-   "DFlash's MLX backend (`dflash generate mlx --draft z-lab/Qwen3.8-27B-DFlash2 --block-size 5`) as a second Apple-silicon reference"],
-  ["A table of accepted length and tok/s per workload and N, committed to `dspark.md` §3/§4"],
-  [f"{SPARK}", "https://github.com/ggml-org/llama.cpp/pull/25173"]),
 T("M0", "M0: exact NVFP4/FP8 → BF16 dequantizer and HF goldens", ["area:infra", "area:models", "hardware:m3-pro"],
   "The numerics contract is 'HF model on the dequantized weights' (design D11, §5.9). Goldens are the correctness reference for every layer and the full model.",
   ["Exact dequantizer for NVFP4 (`LUT[q] · scale_e4m3 · scale_2`) and FP8-E4M3 (per-tensor scale); unit tests against the format oracles",
@@ -88,19 +76,12 @@ T("M0", "M0: exact NVFP4/FP8 → BF16 dequantizer and HF goldens", ["area:infra"
   ["Goldens checked in (or stored with a manifest) for the small model; a reproducible script for the 27B"],
   [f"{DESIGN} §5.9", f"{PLAN} M0"]),
 T("M0", "M0: on-screen frame-pacing check → the default max_cb_ms", ["area:probes", "area:runtime"],
-  "Other GPU clients wait for a whole command buffer in the worst case on the M3 Pro and in the usual case on the M5 Pro (hardware report §3, H5). The host pump's `max_cb_ms` default must come from a compositor measurement, before M2 builds the pump.",
+  "Other GPU clients wait for a whole command buffer in the usual case on the M5 Pro (hardware report §3, H5; the worst case on the M3 Pro, no longer on the roadmap). The host pump's `max_cb_ms` default (16 ms from p6/p6b) must be confirmed by a compositor measurement.",
   ["A windowed probe (CADisplayLink frame times) while command buffers of 8 / 16 / 33 / 66 ms run back to back on a second queue",
-   "Run on the M3 Pro and the M5 Pro; report dropped frames and max frame time per buffer length",
+   "Run on the M5 Pro; report dropped frames and max frame time per buffer length",
    "Set `max_cb_ms` per profile"],
   ["Numbers in the hardware report; `profiles/*.json` carry `max_cb_ms`"],
   [f"{PROBES} §3 H5, §6 P6/P6b", f"{DESIGN} D6"]),
-T("M0", "M0: measure an M4-family Mac", ["area:probes", "hardware:m4"],
-  "M4 is Apple9 like the M3, but the M5 Pro showed the per-core streaming rate, the sharing granularity and the encode-order dependence are not family constants.",
-  ["`./probes/remote_run.sh user@host` on a bare-metal M4-family Mac (EC2 `mac-m4.metal` / `mac-m4pro.metal` are options); commit the results files",
-   "Fill the M4 column of the hardware report §1; walk H1–H10 in §4; add `profiles/apple-m4-*.json`",
-   "Update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions)"],
-  ["Results, profile and report committed; design updated or explicitly confirmed"],
-  [f"{PROBES} §4"]),
 # ---------------------------------------------------------------- M1
 T("M1", "M1: GEMV bench harness grown from probes/p13 and p14", ["area:kernels", "area:infra"],
   "The largest single-token claim is a layout-and-geometry claim; it needs a harness that runs every shape of the target model against a torch oracle with the A/B discipline (paired alternating runs, min-of-N).",
@@ -127,7 +108,7 @@ T("M1", "M1: kernel study — lane order, threadgroups per core, R, T variants, 
 T("M1", "M1: MLX and llama.cpp kernel baselines on identical shapes; the go/no-go #1 table", ["area:kernels", "area:perf", "gate"],
   "Go/no-go #1. If the gate is missed, the engine plan stands (fusion, GPU autonomy, speculation), the bandwidth claim is dropped and MLX's GEMV structure is adopted.",
   ["MLX `quantized_matmul` (nvfp4 and affine-4, `qmv_fast`) and llama.cpp `mul_mv` on the same shapes, same machine, same day",
-   "Gate table: NVFP4 T = 1 ≥ 1.10× MLX on the M3 Pro and the M5 Pro; NVFP4 ≥ 80 % of nominal on the M5 Pro; FP8 ≥ 100 GB/s on the M3 Pro; outputs within 2 ULP"],
+   "Gate table: NVFP4 T = 1 ≥ 1.10× MLX on the M5 Pro; NVFP4 ≥ 80 % of nominal on the M5 Pro; outputs within 2 ULP (the M3 Pro rows were dropped 2026-09-25)"],
   ["The table is in the plan with a go / no-go decision recorded"],
   [f"{PLAN} M1 exit gate"]),
 # ---------------------------------------------------------------- M2
@@ -361,10 +342,10 @@ T("M8", "M8: porting guide from the three logs", ["area:docs" if False else "are
   ["A newcomer can add a model from the guide alone"],
   [f"{PLAN} M8"]),
 # ---------------------------------------------------------------- M9
-T("M9", "M9: profiles and autotune on M4 Pro/Max, M5, M5 Pro/Max", ["area:perf", "hardware:m4", "hardware:m5-pro"],
-  "Profiles are measured, never assumed: the probe suite plus an autotuner at install time write `profiles/*.json` (lane order, threadgroups per core, R, block sizes, cost(T) per format, sibling order, max_cb_ms).",
-  ["The autotuner over the M1 harness; a per-chip results table next to each chip's bound"],
-  ["Profiles committed for every chip we can reach"],
+T("M9", "M9: profiles and autotune on M5, M5 Pro/Max", ["area:perf", "hardware:m5-pro"],
+  "Profiles are measured, never assumed: the probe suite plus an autotuner at install time write `profiles/*.json` (lane order, threadgroups per core, R, block sizes, cost(T) per format, sibling order, max_cb_ms). The autotuner is built (`tools/profile_writer.py`, PR #94) and wrote the M5 Pro's profile; the M4 family was dropped from the roadmap on 2026-09-25.",
+  ["`python tools/profile_writer.py` and `./probes/run_all.sh` on each M5-family machine we can reach; commit the profile and the results files"],
+  ["Profiles committed for every M5-family chip we can reach"],
   [f"{DESIGN} §5.7", f"{PLAN} M9"]),
 T("M9", "M9: MPP TensorOps block for T > 1 on M5 — tile tuning, cooperative right-input fill, dequant/matmul overlap", ["area:kernels", "hardware:m5-pro"],
   "Validated by `probes/p14`: dequantize a [64 × 64] tile into threadgroup memory → `tensor_inline` → `matmul2d<…, execution_simdgroups<S>>` → cooperative accumulate, 1.5× a T = 1 pass for 8 tokens. Remaining: tile shapes, filling a cooperative right-input tensor instead of staging, and overlapping tile n+1's dequantization with tile n's matmul (the M5-only pipelining idea).",
@@ -389,7 +370,8 @@ def body_for(t, master):
     if master: b += ["", f"Part of the roadmap: #{master} · milestone {t['milestone']}."]
     return "\n".join(b)
 
-def master_body(numbers):
+def master_body(numbers, closed=()):
+    """``numbers``: task title -> issue number; ``closed``: the numbers of closed issues (rendered ticked)."""
     lines = [
         "**Monolith** (working codename) is a megakernel-style LLM inference engine for Apple silicon (M3 / M4 / M5, macOS 26+): the whole",
         "generation loop compiled into one GPU-resident static program of fused whole-GPU dispatches, replayed from an indirect command buffer with",
@@ -415,10 +397,12 @@ def master_body(numbers):
         "| M6 DSpark speculative decoding | ≥ 1.5× plain and ≥ llama.cpp DSpark, greedy token-identical | 4 ew |",
         "| M7 In-kernel re-evaluation and stealing | time-boxed | 1.5 ew |",
         "| M8 Generality proof | model 2 with zero engine edits; model 3; format 2 | 3 ew ‖ M9 |",
-        "| M9 M4/M5 family tuning | per-chip results next to each chip's bound | 3 ew |",
+        "| M9 M5 family tuning | per-chip results next to each chip's bound | 3 ew |",
         "",
-        "Critical path: M0 → M1 → M3 → M4 → M5 → M6. Machines: an M3 Pro (36 GB, hosts the model) and an M5 Pro (24 GB, characterization and",
-        "kernels only). Conventions: standalone repo (design D15), model-agnostic by construction (D16, §5.14), DSpark not the MTP head (D10).",
+        "Critical path: M0 → M1 → M3 → M4 → M5 → M6. Machine: an M5 Pro (24 GB: characterization, kernels, models up to ~18 GB resident).",
+        "The M3 Pro (36 GB, the machine that hosted the 27B) and the M4 measurements were dropped from the roadmap on 2026-09-25 (the",
+        "tasks under *Dropped* below); the 27B gates (#31, #36, #40's 27B rows) wait for a machine that hosts it. Conventions: standalone",
+        "repo (design D15), model-agnostic by construction (D16, §5.14), DSpark not the MTP head (D10).",
         "",
         "## Tasks",
     ]
@@ -427,8 +411,13 @@ def master_body(numbers):
         for t in TASKS:
             if t["milestone"] == key:
                 n = numbers.get(t["title"])
-                lines.append(f"- [ ] #{n} {t['title']}" if n else f"- [ ] {t['title']}")
-    lines += ["", "_Generated by `tools/roadmap_issues.py` from `plans/implementation-plan.md`; edit the plan first, then re-run with `--create` (idempotent by title)._"]
+                box = "[x]" if n in closed else "[ ]"
+                lines.append(f"- {box} #{n} {t['title']}" if n else f"- [ ] {t['title']}")
+    if DROPPED:
+        lines += ["", "## Dropped", ""]
+        for date, n, title, why in DROPPED:
+            lines.append(f"- ~~#{n} {title}~~ — {date}: {why}")
+    lines += ["", "_Generated by `tools/roadmap_issues.py` from `plans/implementation-plan.md`; edit the plan first, then re-run with `--create` (idempotent by title) or `--update-master` (re-renders this issue's body from the open and closed issues)._"]
     return "\n".join(lines)
 
 # ------------------------------------------------------------------ GitHub REST
@@ -508,6 +497,28 @@ def create(dry):
         gh.call("PATCH", f"/repos/{REPO}/issues/{master}", {"body": master_body(numbers)})
         print(f"master issue #{master} updated with {len(numbers)} tasks: https://github.com/{REPO}/issues/{master}")
 
+def update_master(dry):
+    """Re-render the master issue's body from the current task list and the issues' states (closed ones ticked)."""
+    tok = token_from_env_or_gh()
+    if not tok and not dry:
+        raise SystemExit("No GITHUB_TOKEN / GH_TOKEN in the environment and no logged-in `gh`; see the docstring.")
+    gh = GH(tok or "dry", dry)
+    issues = [i for i in gh.paged(f"/repos/{REPO}/issues", {"state": "all"}) if "pull_request" not in i] if tok else []
+    by_title = {i["title"]: i for i in issues}
+    master_title = "Roadmap: Monolith v1 — a megakernel inference engine for Apple silicon"
+    master = by_title.get(master_title)
+    if master is None:
+        raise SystemExit("the master issue does not exist; run --create first")
+    numbers = {t["title"]: by_title[t["title"]]["number"] for t in TASKS if t["title"] in by_title}
+    missing = [t["title"] for t in TASKS if t["title"] not in by_title]
+    closed = {i["number"] for i in issues if i.get("state") == "closed"}
+    body = master_body(numbers, closed)
+    if missing:
+        print("tasks without an issue (run --create):", *missing, sep="\n  ")
+    gh.call("PATCH", f"/repos/{REPO}/issues/{master['number']}", {"body": body})
+    print(f"master issue #{master['number']} re-rendered: {len(numbers)} tasks, {len([n for n in numbers.values() if n in closed])} closed, {len(DROPPED)} dropped")
+
+
 def preview(path):
     out = ["# Roadmap issues — preview (generated by tools/roadmap_issues.py --preview)", "",
            "## Master issue: Roadmap: Monolith v1 — a megakernel inference engine for Apple silicon", "", master_body({}), ""]
@@ -519,8 +530,10 @@ def preview(path):
     open(path, "w").write("\n".join(out)); print(f"wrote {path}: 1 master + {len(TASKS)} task issues, {len(MILESTONES)} milestones, {len(LABELS)} labels")
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--preview", action="store_true"); ap.add_argument("--create", action="store_true"); ap.add_argument("--dry-run", action="store_true")
+    ap = argparse.ArgumentParser(); ap.add_argument("--preview", action="store_true"); ap.add_argument("--create", action="store_true")
+    ap.add_argument("--update-master", action="store_true"); ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.preview: preview(os.path.join(os.path.dirname(__file__), "..", "plans", "roadmap-issues.md"))
     if a.create: create(a.dry_run)
-    if not (a.preview or a.create): ap.print_help()
+    if a.update_master: update_master(a.dry_run)
+    if not (a.preview or a.create or a.update_master): ap.print_help()
