@@ -110,11 +110,12 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — what is left on this machine: the round's fixed cost (the budget in decode-kernels.md §5:
-   the draft pass's remaining shader ops and the serial tail), the staged multi-SIMD-group tile for T ≥ 32 and the
-   K-split for the down projection (decode-kernels.md §6), the attention core's SIMD-group-matrix scoring for the
-   long-context rows, and the autotuner-at-install profile writer (#49). The 27B items (#36, #40's M3 Pro rows,
-   #46), the M3 Pro / M4 rows of the A/B tables (#2, #3, #5, #7, #8, #49), #42 (a GPU box), #43 (Max-class parts)
+0. **Keep building** — what is left on this machine: the autotuner-at-install profile writer (#49), the staged
+   multi-SIMD-group tile for T ≥ 32 and the K-split for the down projection (decode-kernels.md §6), the attention
+   core's SIMD-group-matrix scoring for the long-context rows. Intra-op stealing (#44) is built, measured and off by
+   default (decode-kernels.md §7). The 27B items (#36, #40's M3 Pro rows, #46 — the smallest MoE checkpoint in a
+   format we read, `nvidia/Qwen3-30B-A3B-NVFP4`, is ~18.5 GB resident against this machine's 19.07 GB GPU working
+   set), the M3 Pro / M4 rows of the A/B tables (#2, #3, #5, #7, #8, #49), #42 (a GPU box), #43 (Max-class parts)
    and #52 (macOS 27) need machines this one is not.
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk

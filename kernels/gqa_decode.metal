@@ -32,6 +32,12 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
                        device const ushort* cos_t [[buffer(3)]], device const ushort* sin_t [[buffer(4)]],
                        device const float* q_norm [[buffer(5)]], device const float* k_norm [[buffer(6)]],
                        device float* part_o [[buffer(7)]], device float* part_md [[buffer(8)]], constant GqaParams& p [[buffer(9)]],
+#if STEAL
+                       device atomic_uint* cursors [[buffer(10)]],
+#if STEAL_HITS
+                       device atomic_uint* hits [[buffer(12)]],
+#endif
+#endif
 #if DRAFT
                        device const ushort* kvp [[buffer(11)]],
 #endif
@@ -61,7 +67,15 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
   const uint ctx = qpos0 + T;                                  // keys: [0, position) cached, [position, qpos0) new, [qpos0, ctx) this step
   const uint n_chunks = (ctx + CH - 1u) / CH;
   const uint n_blocks = p.kv_heads * n_chunks * n_rg;          // block = (kv head, chunk, row group)
+#if STEAL
+  StealScan scan = steal_begin();                              // own slice first, then steal (kernels/common/steal.metal, #44)
+  for (uint b = steal_next(cursors, n_blocks, p.nominal_sg, sg, lane, scan); b != STEAL_NONE; b = steal_next(cursors, n_blocks, p.nominal_sg, sg, lane, scan)) {
+#if STEAL_HITS
+    if (lane == 0) atomic_fetch_add_explicit(&hits[b], 1u, memory_order_relaxed);
+#endif
+#else
   for (uint b = sg; b < n_blocks; b += p.n_sg) {
+#endif
     const uint rg = b % n_rg, c = (b / n_rg) % n_chunks, j = b / (n_rg * n_chunks);
     const uint k0 = c * CH, k1 = min(k0 + CH, ctx);
     const uint r0 = rg * RBMAX;
