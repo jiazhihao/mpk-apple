@@ -33,7 +33,7 @@ is not the long-context win, SIMD-group-matrix scoring is (M9); fast math buys 1
 so safe stays. Format 2 (#47) is built: affine INT4 groups (`formats/int4_affine`, MLX / AWQ / GPTQ) as a plugin —
 the MLX 4-bit 0.8B decodes token-identical to its oracle; the port needed a per-group bias hook, the quantized-embedding
 gather, ragged lane stripes and a package-declared value adapter (mlx_lm folds `1 +` into the zero-centered norms;
-porting-log.md). Next: the porting guide (#48) and M9 (the GEMM path). Speculative decoding targets a **DSpark** drafter, not the MTP head.
+porting-log.md); the porting guide (#48, `docs/porting.md`) closes M8. Next: M9 (the GEMM path). Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order
 
@@ -46,6 +46,8 @@ porting-log.md). Next: the porting guide (#48) and M9 (the GEMM path). Speculati
 4. `docs/research/apple-inference-systems.md` — how MLX, llama.cpp and others work; what to reuse; headroom estimates.
 5. `docs/research/dspark.md` — the speculative-decoding method we target, the public drafters for our models, their
    cost on our hardware.
+6. `docs/porting.md` — adding a model, a format, an op, a drafter or a chip: the contracts as they are in the tree,
+   the CI checks, the golden workflow; `docs/research/porting-log.md` is the evidence it was derived from.
 
 ## The design in six lines
 
@@ -101,7 +103,7 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order: M8's porting guide (#48), then M9 — the
+0. **Keep building** — the roadmap issues in order: M9 — the
    T ≥ 2 GEMM kernel (#50/#51: SIMD-group matrices / MPP tensor ops for the GEMVs at T ≥ 2 and the attention core)
    is what the speculative gate and the long-context rows need on this chip. The 27B items (#36, #40's M3 Pro rows,
    #46) and the M3 Pro / M4 rows of the A/B tables need those machines.

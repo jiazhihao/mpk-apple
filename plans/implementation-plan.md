@@ -469,7 +469,9 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
   `1 +` of the zero-centered norms into the stored tensor). The MLX 4-bit 0.8B decodes token-identical to its oracle
   (`tests/models/qwen3_5/test_mlx_int4.py`); M1-harness numbers in gemv-kernel-study.md §2; the port's account in
   porting-log.md.
-* Porting guide written from the three logs (time-to-port recorded).
+* Porting guide — **written (#48): `docs/porting.md`**, from the three logs (model 2: ~1 h, zero engine edits;
+  drafter 1: ~1.5 h for the module; format 2: ~6 h, four engine-side extensions and a converter-convention hunt),
+  with the contracts as they are in the tree, the CI checks, the golden workflow and the checklists.
 
 ### M9 — M4/M5 family tuning · 3 ew · hardware-dependent
 
