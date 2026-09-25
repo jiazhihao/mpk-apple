@@ -86,8 +86,9 @@ def table_requests(model: Model) -> List[TableRequest]:
 
 
 def pack_model(model: Model, ckpt_dir: str, out_dir: str, layout: PackLayout, *, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Write ``weights.pack`` + ``manifest.json`` for a bound module tree."""
-    pk = Packer(ckpt_dir, out_dir)
+    """Write ``weights.pack`` + ``manifest.json`` for a bound module tree (``model.checkpoint_rename`` maps the
+    checkpoint's tensor names and ``model.checkpoint_adapt`` its stored values when a package sets them)."""
+    pk = Packer(ckpt_dir, out_dir, rename=getattr(model, "checkpoint_rename", None), adapt=getattr(model, "checkpoint_adapt", None))
     for req in slab_requests(model, layout):
         pk.add_slab(req)
     for req in aux_requests(model):
@@ -127,7 +128,7 @@ def load_oracle_weights(model: Module, ckpt_dir: str, *, device: Any = None) -> 
     """Load the tree's parameters as BF16 torch tensors (the reference model's ``dtype=bfloat16`` semantics)."""
     import torch
 
-    ckpt = SafetensorsDir(ckpt_dir)
+    ckpt = SafetensorsDir(ckpt_dir, rename=getattr(model, "checkpoint_rename", None), adapt=getattr(model, "checkpoint_adapt", None))
 
     def stream():
         for name, arr, _fmt in dequantized_tensors(model, ckpt):

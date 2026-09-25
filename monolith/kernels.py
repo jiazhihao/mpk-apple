@@ -3,6 +3,7 @@ decode snippets and the macros that specialize them (design §5.7: block bodies 
 
 from __future__ import annotations
 
+import math
 import struct
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Sequence, Tuple
@@ -26,6 +27,26 @@ def gemv_source(fmt: str) -> str:
 EPILOGUES = {None: "0", "residual": "1", "silu_mul": "2"}
 
 
+def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
+    """The lane-row unit's word layout for the decode kernels (gemv_T, embed): ``PAYLOAD_WORDS`` weight words — the
+    last one partial when a lane's stripe of K/32 columns is not whole words (a *ragged* stripe: K = 3584 with 32
+    weights per word is 3.5 words; the kernel masks its ``K_TAIL`` columns); the scale bytes start ``SCALE_UOFF``
+    uints into word ``SCALE_W0`` (the tail of a partial payload word — the unit is ``[payload | scales | pad16]``, as
+    ``pack_blm`` lays it out) and span ``SCALE_WORDS`` words; ``GROUP_SEG``, the columns per in-word scale segment —
+    the gcd of the word, the stripe and the scale group, so a segment never straddles a group even when a stripe starts
+    inside one (K = 3584: stripes of 112 start 0/48/32/16 columns into a group of 64 — segments of 16)."""
+    f = f or FORMATS.get(info.format)
+    if info.k % 256 or info.payload_bytes % 4:
+        raise ValueError(f"decode kernels: K must be a multiple of 256 ({info.format}, K={info.k})")
+    p, s = info.payload_bytes, info.scale_bytes
+    g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": str(p // 16), "SCALE_UOFF": str((p % 16) // 4),
+         "SCALE_WORDS": str(-(-(p + s) // 16) - p // 16 if s else 0)}
+    group = info.scale_group or getattr(f, "scale_group", 0)
+    if group:
+        g["GROUP_SEG"] = str(math.gcd(math.gcd(int(f.weights_per_word), info.k // 32), int(group)))
+    return g
+
+
 def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool = False, norm: bool = False,
                 epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False) -> Dict[str, str]:
     """The compile-time specialization of gemv_T for one slab geometry, token count and set of fusions
@@ -33,12 +54,7 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
     partial sums of squares of the outputs for the next norm; ``round_before_residual``: the product is rounded to
     BF16 before the residual add — a separate BF16 linear followed by a BF16 add, the Markov head's semantics)."""
     f = FORMATS.get(info.format)
-    if info.k % 32:
-        raise ValueError("gemv_T: K must be a multiple of 32")
-    payload_words = info.payload_bytes // 16
-    if info.payload_bytes % 16 or (info.k // 32) % f.weights_per_word:
-        raise ValueError(f"gemv_T: a lane's stripe must be whole words for {info.format} (K={info.k})")
-    scale_words = -(-info.scale_bytes // 16) if info.scale_bytes else 0
+    geometry = unit_geometry(info, f)
     if rg is None:
         # measured on the M5 Pro (gemv-kernel-study.md §3b, §3d): at T = 1, RG = 2 beats 4/8 for FP8 (-8 % at 8) and
         # ties for NVFP4; at T >= 2, RG = 8 wins by 13 % (NVFP4) to 20-34 % (FP8). With the input norm fused the
@@ -54,8 +70,7 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
         raise ValueError(f"gemv_T: unknown epilogue {epilogue!r}")
     macros = {"K": str(info.k), "R": str(info.rows), "T": str(t), "RG": str(rg),
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
-              "UNIT_WORDS": str(info.unit_bytes // 16), "PAYLOAD_WORDS": str(payload_words),
-              "SCALE_WORDS": str(scale_words), "OUT_BF16": "1" if out_bf16 else "0",
+              "UNIT_WORDS": str(info.unit_bytes // 16), **geometry, "OUT_BF16": "1" if out_bf16 else "0",
               "X_PRECONVERT": "1" if preconvert else "0",
               "NORM": "1" if norm else "0", "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
     if epilogue == "silu_mul":
@@ -78,20 +93,31 @@ def gemv_params(n_rows: int, n_blocks: int, n_sg: int, t_active: int, *, out_sca
 
 # ---- the other decode kernels -------------------------------------------------------------------------------
 
-def embed_source() -> str:
-    return PRELUDE + template("embed.metal")
+def embed_source(fmt: Optional[str] = None) -> str:
+    """The gather kernel; ``fmt`` = the quantized format of a packed table to decode on the fly (its snippet is
+    pasted ahead of the template)."""
+    if fmt is None or fmt == "bf16":
+        return PRELUDE + template("embed.metal")
+    return PRELUDE + FORMATS.get(fmt).msl_decode + "\n" + template("embed.metal")
 
 
 def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None) -> Dict[str, str]:
-    """``info`` = the BF16 slab a tied lm_head streams (gather from the pack), None = a row-major BF16 table.
+    """``info`` = the slab a tied lm_head streams (gather from the pack: a BF16 slab, or a quantized one decoded on
+    the fly — a format with block scales and a per-tensor scale of 1), None = a row-major BF16 table.
     ``ids="block"``: a draft block — row 0 reads the token at ``tokens[0]`` (the anchor), the other rows the mask id."""
     if info is None:
         macros = {"EMBED_PACKED": "0"}
-    else:
-        if info.format != "bf16" or info.k % 256:
-            raise ValueError("embed: a packed table must be a bf16 slab with K % 256 == 0")
+    elif info.format == "bf16":
+        if info.k % 256:
+            raise ValueError("embed: a packed bf16 table needs K % 256 == 0")
         macros = {"EMBED_PACKED": "1", "R": str(info.rows), "UNIT_WORDS": str(info.unit_bytes // 16),
                   "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1"}
+    else:
+        f = FORMATS.get(info.format)
+        if not f.scale_group or abs(info.tensor_scale - 1.0) > 0:
+            raise ValueError(f"embed: a packed {info.format} table needs block scales and no per-tensor scale")
+        macros = {"EMBED_PACKED": "1", "EMBED_DEQUANT": "1", "R": str(info.rows), "UNIT_WORDS": str(info.unit_bytes // 16),
+                  "K": str(info.k), "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1", **unit_geometry(info, f)}
     if ids not in (None, "block"):
         raise ValueError(f"embed: unknown ids mode {ids!r}")
     if ids == "block":

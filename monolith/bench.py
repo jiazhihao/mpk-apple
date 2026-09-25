@@ -29,6 +29,11 @@ def random_spec(fmt: str, n: int, k: int, rng: np.random.Generator) -> DequantSp
         codes = rng.integers(-127, 128, size=(n, k), dtype=np.int8)
         scales = (rng.uniform(0.5, 2.0, size=(n, k // 32)) * 0.02 / 127).astype(np.float16)
         return DequantSpec(fmt, (n, k), {"weight": codes, "weight_scale": scales}, {"group": 32})
+    if fmt == "int4_affine":
+        codes = rng.integers(0, 256, size=(n, k // 2), dtype=np.uint8)
+        scales = (rng.uniform(0.5, 2.0, size=(n, k // 64)) * 0.02 / 7.5).astype(np.float32)
+        biases = (-7.5 * scales * rng.uniform(0.8, 1.2, size=scales.shape)).astype(np.float32)
+        return DequantSpec(fmt, (n, k), {"weight": codes, "scales": scales, "biases": biases}, {"group": 64})
     raise KeyError(fmt)
 
 

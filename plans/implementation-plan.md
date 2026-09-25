@@ -460,7 +460,15 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
 * Model 3, new ops (a Qwen3.5-MoE-class model: router + expert GEMV indexed by GPU-resident expert ids) — exercises the
   new-op path and data-dependent indexing inside a static program. The survey shows this is where an overhead-free
   engine has the most headroom (today's engines reach only 36–55 % of the bound on 3B-active MoE).
-* Format 2 (MXFP4 or affine INT4 groups) — exercises the format-plugin path.
+* Format 2 — **built (#47): affine INT4 groups** (`formats/int4_affine`, the MLX / AWQ / GPTQ family; mlx 0.32's
+  quantizer reproduced bit-exactly). The plugin path held for the decode contract, but the port needed four
+  engine-side extensions the first formats had not exercised — a per-group **bias** hook (`decode_bias`, the GEMV's
+  `bias · Σx` term), the **quantized embedding** gather (mlx_lm quantizes `embed_tokens`, tied to the head), **ragged
+  lane stripes** (K = 3584: 3.5 words per lane, stripes starting mid-group; the unit's scale bytes follow the raw
+  payload, `LANE_OFF` / `GROUP_SEG`), and a package-declared **value adapter** beside the name map (mlx_lm folds the
+  `1 +` of the zero-centered norms into the stored tensor). The MLX 4-bit 0.8B decodes token-identical to its oracle
+  (`tests/models/qwen3_5/test_mlx_int4.py`); M1-harness numbers in gemv-kernel-study.md §2; the port's account in
+  porting-log.md.
 * Porting guide written from the three logs (time-to-port recorded).
 
 ### M9 — M4/M5 family tuning · 3 ew · hardware-dependent

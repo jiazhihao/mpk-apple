@@ -321,8 +321,13 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   depending on whether §5.12's sibling overlap is enabled for the chip. R, stripe order and scale placement are
   autotuned per chip.
 * **Formats** are plugins: `unpack(checkpoint tensors) → pack` plus an MSL `decode` snippet used by the GEMV
-  template. v1: NVFP4 (E2M1 LUT × E4M3 block scale × FP32 tensor scale), FP8-E4M3 per-tensor (256-entry LUT), BF16.
-  Next: MXFP4, affine INT4/INT8 groups (MLX/AWQ/GPTQ), GGUF K-quants.
+  template. v1: NVFP4 (E2M1 LUT × E4M3 block scale × FP32 tensor scale), FP8-E4M3 per-tensor (256-entry LUT), BF16;
+  built since: INT8 groups and **affine INT4 groups** (`int4_affine`, the MLX / AWQ / GPTQ family, `w = scale·code +
+  bias`, mlx 0.32's quantizer reproduced bit-exactly): the decode contract grew a per-group bias hook (`decode_bias`,
+  the GEMV adds `bias · Σx` per group), a quantized table can be gathered as the embedding (`EMBED_DEQUANT`), and a
+  lane stripe may be *ragged* — not whole words, starting inside a scale group (K = 3584): the unit is
+  `[payload | scales | pad]` with the scale bytes in the partial tail word, and the kernels index a stripe's groups
+  from its offset (`LANE_OFF`, `GROUP_SEG`). Next: MXFP4, GGUF K-quants.
 * **State.** KV cache per attention layer (BF16 in v1; FP8/INT8 later — at long context KV traffic overtakes the
   weights); GDN recurrent state FP32 `[48,128,128]` + conv state, each with `γ+1` checkpoint slots for speculative
   rollback; the drafter's injected-context KV (5 layers × 8 KV heads × 128 × K and V ≈ 20 KB per committed token,
@@ -630,7 +635,11 @@ registries and the IR; the runtime consumes only `program.json`, the pack manife
 * *Adding a drafter* = `spec/<name>/` implementing `Drafter`; the verify/accept ops, the dynamic-T program and the
   StepState fields are shared. DSpark is the first; an MTP-head or EAGLE-style drafter would be a second package.
 * *Adding a format* = `formats/<name>/`; the GEMV template is parameterized by the decode snippet and the pack layout,
-  and the pack ↔ checkpoint round-trip test is generic.
+  and the pack ↔ checkpoint round-trip test is generic. A checkpoint written by another tool is a package matter,
+  not an engine one: a package may declare two **checkpoint adapters** — a name map (`checkpoint_rename`) and a
+  value map (`checkpoint_adapt`, stored values → the convention the package declares, e.g. mlx_lm folding the
+  `1 +` of a zero-centered norm into the tensor) — applied by the safetensors reader for the packer and the oracle
+  alike, so the engine never learns a convention.
 * *A layer library, not per-model kernels.* Qwen3.8's attention layers and the DSpark drafter's attention layers are the
   same `GQAAttention` module with different configs and KV sources; the drafter's MLP is the same `GatedMLP`. Kernel
   variants are selected by (op, format, profile), never by model name.
