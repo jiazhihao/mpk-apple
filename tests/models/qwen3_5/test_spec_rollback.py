@@ -36,9 +36,11 @@ def test_speculative_greedy_matches_the_golden(tmp_path):
     c = model.config
     ddir = tmp_path / "drafter"
     ddir.mkdir()
-    write_checkpoint(ddir, seed=9, with_head=False, vocab_size=c.vocab_size, target_hidden_size=c.hidden_size, target_layer_ids=[-1, 5, 11],
-                     num_hidden_layers=1, block_size=3)
-    drafter, _, cfg, _ = build(ddir, target_lm_head=model.lm_head)
+    # the drafter's hidden width is the target's (its block goes through the target's head) and its context caches
+    # hold the whole generation (the program refuses a request past the smaller capacity)
+    write_checkpoint(ddir, seed=9, with_head=False, vocab_size=c.vocab_size, hidden_size=c.hidden_size, target_hidden_size=c.hidden_size,
+                     target_layer_ids=[-1, 5, 11], num_hidden_layers=1, block_size=3)
+    drafter, _, cfg, _ = build(ddir, target_lm_head=model.lm_head, max_context=model.max_context)
     pack_model(drafter, str(ddir), str(ddir / "pack"), PackLayout())
     sess = Session(model, str(tmp_path / "pack"), eos=-1, drafter=drafter, drafter_pack=str(ddir / "pack"), verify="threshold")
     ids = golden["prompt_ids"]

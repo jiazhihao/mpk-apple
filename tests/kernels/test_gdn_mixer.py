@@ -37,14 +37,22 @@ def _module(hidden, hk, hv, dk, dv, seed):
 
 class Harness:
     def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None):
+        """The engine's configuration: two state slots by step parity read from StepState (a single slot races when
+        several value heads share a key head's conv window — the kernel's note)."""
+        from monolith.core import StepStateLayout
+
         self.dev, self.m, self.ab_separate = dev, m, ab_separate
-        macros = kernels.gdn_macros(m.dk, m.dv, conv_width=CW, t=t_max, slice_cols=slice_cols, slices_per_block=slices_per_block,
-                                    tokens_per_pass=tokens_per_pass)
-        lib = nt.Library(dev, kernels.gdn_source(), macros)
+        self.layout = StepStateLayout(t_max=max(8, t_max), gamma_max=7)
+        macros = dict(kernels.gdn_macros(m.dk, m.dv, conv_width=CW, t=t_max, slice_cols=slice_cols, slices_per_block=slices_per_block,
+                                         tokens_per_pass=tokens_per_pass, slots=2), STEP_STATE="1")
+        lib = nt.Library(dev, kernels.gdn_source().replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1), macros)
         self.pso, self.pso_norm = nt.Pipeline(lib, "gdn_mixer"), nt.Pipeline(lib, "gdn_norm")
         self.o_part = nt.Buffer(dev, kernels.gdn_workspace(t_max, m.v_heads, m.dv))
-        self.conv_state = nt.Buffer(dev, m.conv_dim * (CW - 1) * 2); self.conv_state.fill(0)
-        self.rec_state = nt.Buffer(dev, m.v_heads * m.dk * m.dv * 4); self.rec_state.fill(0)
+        self.conv_bytes, self.rec_bytes = m.conv_dim * (CW - 1) * 2, m.v_heads * m.dk * m.dv * 4
+        self.conv_state = nt.Buffer(dev, 2 * self.conv_bytes); self.conv_state.fill(0)
+        self.rec_state = nt.Buffer(dev, 2 * self.rec_bytes); self.rec_state.fill(0)
+        self.step_no = 0                                                     # the pass reads slot step & 1 and writes the other
+        self.st = nt.Buffer(dev, self.layout.size); self.st.fill(0)
         conv_w = m.param("conv_w").reshape(m.conv_dim, CW).float().numpy()
         self.aux = [nt.Buffer(dev, f32_to_bf16(conv_w).tobytes()),
                     nt.Buffer(dev, (-np.exp(m.param("a_log").float().numpy())).astype(np.float32).tobytes()),
@@ -52,14 +60,16 @@ class Harness:
                     nt.Buffer(dev, m.param("norm_w").float().numpy().astype(np.float32).tobytes())]
         self.n_sg = 12 * dev.info().gpu_cores
 
-    def set_state(self, state):
-        self.conv_state.write(f32_to_bf16(state["l.conv_state"].float().numpy()).tobytes(), 0)
-        self.rec_state.write(state["l.rec_state"].float().numpy().astype(np.float32).tobytes(), 0)
+    def set_state(self, state):                                              # into the slot the next pass reads
+        slot = self.step_no & 1
+        self.conv_state.write(f32_to_bf16(state["l.conv_state"].float().numpy()).tobytes(), slot * self.conv_bytes)
+        self.rec_state.write(state["l.rec_state"].float().numpy().astype(np.float32).tobytes(), slot * self.rec_bytes)
 
-    def get_state(self):
+    def get_state(self):                                                     # from the slot the last pass wrote
         m = self.m
-        conv = bf16_to_f32(np.frombuffer(self.conv_state.read(0, m.conv_dim * (CW - 1) * 2), dtype=np.uint16)).reshape(m.conv_dim, CW - 1)
-        rec = np.frombuffer(self.rec_state.read(0, m.v_heads * m.dk * m.dv * 4), dtype=np.float32).reshape(m.v_heads, m.dk, m.dv)
+        slot = self.step_no & 1
+        conv = bf16_to_f32(np.frombuffer(self.conv_state.read(slot * self.conv_bytes, self.conv_bytes), dtype=np.uint16)).reshape(m.conv_dim, CW - 1)
+        rec = np.frombuffer(self.rec_state.read(slot * self.rec_bytes, self.rec_bytes), dtype=np.float32).reshape(m.v_heads, m.dk, m.dv)
         return conv, rec
 
     def step(self, proj, t_active=None):
@@ -81,13 +91,15 @@ class Harness:
         out = nt.Buffer(self.dev, t * vd * 2); out.fill(0)
         mb = nt.Buffer(self.dev, main.tobytes())
         abb = nt.Buffer(self.dev, ab.tobytes()) if self.ab_separate else mb
+        self.st.write(self.layout.pack({"step": self.step_no, "t_this_step": t if t_active is None else t_active}), 0)
         d = (nt.Dispatch().pipeline(self.pso).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state).buffer(3, self.rec_state)
              .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(7, self.o_part)
-             .bytes(9, params).grid(-(-(self.n_sg * 32) // 384)).threadgroup(384).barrier())
+             .bytes(9, params).buffer(15, self.st).grid(-(-(self.n_sg * 32) // 384)).threadgroup(384).barrier())
         d2 = (nt.Dispatch().pipeline(self.pso_norm).buffer(0, self.o_part).buffer(1, mb).buffer(2, self.aux[3]).buffer(3, out)
-              .bytes(4, params).grid(t * hv).threadgroup(32))
+              .bytes(4, params).buffer(15, self.st).grid(t * hv).threadgroup(32))
         r = nt.Queue(self.dev).run([d, d2])
         assert not r.error, r.error
+        self.step_no += 1
         return bf16_to_f32(np.frombuffer(out.read(0, t * vd * 2), dtype=np.uint16).reshape(t, vd))
 
 
@@ -176,6 +188,8 @@ def test_state_slots_and_commit_pass(dev):
     conv, rec = nt.Buffer(dev, 2 * conv_bytes), nt.Buffer(dev, 2 * rec_bytes)
     conv.fill(0); rec.fill(0)
     o_part = nt.Buffer(dev, kernels.gdn_workspace(8, hv, m.dv))
+    sentinel = b"\xa5" * kernels.gdn_workspace(8, hv, m.dv)               # the commit pass binds a placeholder it must never write
+    o_commit = nt.Buffer(dev, len(sentinel)); o_commit.write(sentinel, 0)
     conv_w = m.param("conv_w").reshape(m.conv_dim, CW).float().numpy()
     aux = [nt.Buffer(dev, f32_to_bf16(conv_w).tobytes()), nt.Buffer(dev, (-np.exp(m.param("a_log").float().numpy())).astype(np.float32).tobytes()),
            nt.Buffer(dev, m.param("dt_bias").float().numpy().astype(np.float32).tobytes()),
@@ -191,7 +205,8 @@ def test_state_slots_and_commit_pass(dev):
         st = nt.Buffer(dev, lay.pack(state_fields))
         mb = nt.Buffer(dev, pf.tobytes())
         d = (nt.Dispatch().pipeline(pso_c if commit else pso_m).buffer(0, mb).buffer(1, mb).buffer(2, conv).buffer(3, rec).buffer(4, aux[0])
-             .buffer(5, aux[1]).buffer(6, aux[2]).buffer(7, o_part).bytes(9, params).buffer(15, st).grid(-(-(n_sg * 32) // 384)).threadgroup(384).barrier())
+             .buffer(5, aux[1]).buffer(6, aux[2]).buffer(7, o_commit if commit else o_part).bytes(9, params).buffer(15, st)
+             .grid(-(-(n_sg * 32) // 384)).threadgroup(384).barrier())
         ds = [d]
         out = nt.Buffer(dev, t * vd * 2); out.fill(0)
         if not commit:
@@ -223,6 +238,7 @@ def test_state_slots_and_commit_pass(dev):
     with torch.no_grad():
         m.mix(proj[:2], s_two)
     run(proj, {"step": 1, "n_inject": 2}, commit=True)
+    assert o_commit.read(0, len(sentinel)) == sentinel                  # no read-out: the placeholder is untouched
     c1, r1 = slot(1)
     assert np.array_equal(c1, s_two["l.conv_state"].float().numpy())
     assert np.abs(r1 - s_two["l.rec_state"].numpy()).max() <= 8 * 2.0 ** -23 * float(np.abs(s_two["l.rec_state"].numpy()).max())

@@ -18,7 +18,8 @@
 //                single-token pass, mode 2 = a fixed L = threshold (the measurement's baseline). Then it sets the next
 //                step's tokens pending_tokens = [anchor, d_0 … d_{L-1}] and t_this_step = 1 + L, and logs the block's
 //                confidences at conf_log[step % log_cap][0 … 15] for the calibration. During a prefill chunk the
-//                host feeds the next chunk and only the bookkeeping runs.
+//                host feeds the next chunk and only the bookkeeping runs. ctx_cap > 0 (the target's KV capacity)
+//                clamps L so the verify rows position … position + L stay inside the caches.
 // accept_scan:   one thread; the step's closing SERIAL op when a drafter is wired in (replaces `advance`). A prefill
 //                chunk advances the position and marks its t positions for injection. Otherwise the step fed
 //                pending_tokens = [prompt tail …, anchor, d_0 … d_{L-1}] (L = verify_len; the anchor is at row
@@ -29,7 +30,10 @@
 //                committed token, n_inject = checkpoint_index = base + committed (the rows whose target features
 //                the drafter injects next and the state commit passes replay), t_this_step returns to 1 and `done`
 //                is set at EOS. Each step logs (committed << 16) | (verify_len << 8) | accepted at log[step % log_cap]
-//                (a prefill chunk logs (t << 16) | 0xFFFF) for the acceptance statistics.
+//                (a prefill chunk logs (t << 16) | 0xFFFF) for the acceptance statistics. ctx_cap > 0 is the
+//                program's context capacity (the target's KV rows, and the drafter's less the block it appends
+//                after the context): a step whose first position reaches it sets error = 2 and done — the
+//                pump's over-run past a request stops there instead of writing past a cache.
 #ifndef STEP_STATE
 #define STEP_STATE 0
 #endif
@@ -45,8 +49,8 @@
 
 struct ConcatParams { uint k; uint t_active; uint pad0; uint pad1; };
 struct ConfParams { uint gamma; uint hidden; uint rank; uint pad; float sts[16]; };
-struct SelectParams { uint gamma; float threshold; uint t_max; uint mode; float cost[16]; uint log_cap; uint pad1; uint pad2; uint pad3; };
-struct AcceptParams { uint ring_cap; int eos; uint log_cap; uint pad1; };
+struct SelectParams { uint gamma; float threshold; uint t_max; uint mode; float cost[16]; uint log_cap; uint ctx_cap; uint pad2; uint pad3; };
+struct AcceptParams { uint ring_cap; int eos; uint log_cap; uint ctx_cap; };
 
 kernel void tap_concat(device const uint4* s0 [[buffer(0)]], device const uint4* s1 [[buffer(1)]], device const uint4* s2 [[buffer(2)]],
                        device const uint4* s3 [[buffer(3)]], device const uint4* s4 [[buffer(4)]], device const uint4* s5 [[buffer(5)]],
@@ -107,7 +111,11 @@ kernel void verify_select(device const int* drafts [[buffer(0)]], device const f
     if (p.log_cap) conf_log[(st->step % p.log_cap) * 16u + k] = conf[k];
   }
   uint L = 0u;
-  const uint lmax = min(p.gamma, p.t_max - 1u);
+  uint lmax = min(p.gamma, p.t_max - 1u);
+  if (p.ctx_cap) {                                            // the verify rows must fit the target's caches
+    if (st->position >= p.ctx_cap) { st->error = 2u; st->done = 1u; return; }
+    lmax = min(lmax, p.ctx_cap - st->position - 1u);
+  }
   if (p.mode == 2u) {
     L = min(uint(max(p.threshold, 0.0f)), lmax);
   } else if (p.mode == 1u) {
@@ -140,6 +148,7 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
     st->step = st->step + 1u;
     st->n_inject = t;
     st->checkpoint_index = t;
+    if (p.ctx_cap && st->position >= p.ctx_cap) { st->error = 2u; st->done = 1u; }   // the context is full
     return;
   }
   const uint L = st->verify_len;                              // 0 on the step that samples the first token
@@ -172,4 +181,5 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
   st->n_inject = base + committed;
   st->checkpoint_index = base + committed;
   if (stop) st->done = 1u;
+  if (p.ctx_cap && st->position >= p.ctx_cap) { st->error = 2u; st->done = 1u; }     // the context is full
 }

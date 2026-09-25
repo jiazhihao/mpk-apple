@@ -61,6 +61,36 @@ def test_speculative_equals_plain_greedy(packs, verify):
     assert st["error"] == 0
 
 
+def test_context_capacity_guard(packs):
+    """The program knows how many positions a sequence may occupy (the target's KV rows; with a drafter the smaller of
+    that and its context cache less the block): a request that cannot fit is refused before it starts, one that just
+    fits completes (the pump's over-run past it stops at the guard, error 2, instead of writing past a cache)."""
+    tdir, ddir = packs
+    plain = Session(_model(tdir), str(tdir / "pack"), eos=-1, autotune=False)
+    assert plain.engine(0).program.context_capacity == 64                          # the target's max_context
+    ids = [3, 1, 4, 1, 5]
+    with pytest.raises(ValueError, match="context capacity"):
+        plain.generate(ids, 61)                                                     # 5 + 61 - 1 = 65 positions
+    ref = plain.generate(ids, 60)                                                   # exactly 64 positions
+    assert len(ref.tokens) == 60 and plain.engine(0).state()["error"] in (0, 2)
+    model = _model(tdir)
+    drafter, _, cfg, _ = build(ddir, target_lm_head=model.lm_head)                # context caches of 32: 32 - 3 + 1 = 30 positions
+    pack_model(drafter, str(ddir), str(ddir / "pack"), PackLayout(rows=16))
+    spec = Session(model, str(tdir / "pack"), eos=-1, autotune=False, drafter=drafter, drafter_pack=str(ddir / "pack"), verify="threshold")
+    assert spec.engine(0).program.context_capacity == 30
+    with pytest.raises(ValueError, match="context capacity"):
+        spec.generate(ids, 27)
+    got = spec.generate(ids, 26)
+    assert got.tokens == ref.tokens[:26]
+    st = spec.engine(0).state()
+    assert st["position"] <= 30 and st["drafter_ctx_len"] <= 30 and st["error"] in (0, 2)
+    # a roomier drafter takes the target's capacity
+    wide, _, _, _ = build(ddir, target_lm_head=model.lm_head, max_context=256)
+    wide_s = Session(model, str(tdir / "pack"), eos=-1, autotune=False, drafter=wide, drafter_pack=str(ddir / "pack"), verify="threshold")
+    assert wide_s.engine(0).program.context_capacity == 64
+    assert wide_s.generate(ids, 60).tokens == ref.tokens
+
+
 def _counts(tokens_by_seed, position):
     c = {}
     for toks in tokens_by_seed:

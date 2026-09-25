@@ -64,6 +64,8 @@ class _Ctx:
     shared: Dict[str, str] = field(default_factory=dict)                  # shared scratch name -> buffer (sized to the largest request)
     eos: int = -1
     ring_capacity: int = 4096
+    ctx_cap_target: int = 0                                               # the target's KV rows (0 = no attention: unbounded)
+    ctx_cap: int = 0                                                      # positions a sequence may occupy: the target's rows, and the drafter's less its block
     counter: int = 0
     norm_scratch: Dict[Tuple[str, str, int], str] = field(default_factory=dict)   # (x, stat, rows) -> the normalized scratch
     perm_scratch: Dict[Tuple[Any, ...], str] = field(default_factory=dict)         # (input, stat, tm, wpw, tk, range) -> the permuted scratch
@@ -276,6 +278,8 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
     y = op.outputs[0]
     t_c, t_src = ctx.rows_of(op)
     info = ctx.slab_info(w.name)
+    if ctx.shape(x)[1] != info.k:                                   # the kernels index x by the slab's K: a narrower input reads (and
+        raise ValueError(f"gemv {w.name}: the input {x.name} has {ctx.shape(x)[1]} columns, the slab has K = {info.k}")   # x_permute writes) past it
     # a row range of the slab: whole blocks only (a mixer's gate rows, design §5.12)
     rr = op.attrs.get("row_range")
     if rr is not None:
@@ -582,9 +586,10 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
         ab_stride=ctx.shape(abv)[1], ab_separate=ab_separate, out_stride=hv * dv, n_sg=ctx.n_sg, key_dim=kd, eps=float(a["eps"])))
     st = ctx.program.step_state
     grid, tg = ctx.crew_grid()
+    # the commit pass writes only the states: its output value is a placeholder (lower_round gives it a 4-byte one)
     ctx.add(kmix, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (3, *ctx.buf(rs)), (4, *ctx.windows[conv_w.name]),
                    (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, *ctx.buf(o_part)), (9, prm, 0), (15, st, 0)],
-            grid, tg, op.kind, writes=[2, 3, 7])
+            grid, tg, op.kind, writes=[2, 3] if commit else [2, 3, 7])
 
 
 def _gdn_norm(ctx: _Ctx, op: Op) -> None:
@@ -691,7 +696,8 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
         mode, thr = 1, float(op.attrs.get("threshold", 0.0))
     else:
         mode, thr = 0, (float(op.attrs.get("threshold", 0.0)) if conf is not None else 0.0)
-    prm = ctx.params("verify_select", kernels.select_params(gamma, thr, ctx.layout.t_max, mode=mode, cost=cost, log_cap=kernels.ACCEPT_LOG_CAP))
+    prm = ctx.params("verify_select", kernels.select_params(gamma, thr, ctx.layout.t_max, mode=mode, cost=cost, log_cap=kernels.ACCEPT_LOG_CAP,
+                                                            ctx_cap=ctx.ctx_cap_target))
     ctx.program.buffers.setdefault(CONF_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * kernels.CONF_LOG_WIDTH * 4, None, "arena"))
     cb = ctx.buf(conf) if conf is not None else (ctx.scratch("verify_select.conf", gamma * 4), 0)
     ctx.add(k, [(0, *ctx.buf(drafts)), (1, *cb), (2, ctx.program.step_state, 0), (3, prm, 0), (4, CONF_LOG, 0)], (1, 1, 1), (32, 1, 1), op.kind,
@@ -701,7 +707,7 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
 def _accept_scan(ctx: _Ctx, op: Op) -> None:
     token, = op.inputs
     k = ctx.kernel("spec_ops", _spec_ops(ctx), "accept_scan", {})
-    prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP))
+    prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP, ctx_cap=ctx.ctx_cap))
     ctx.program.buffers.setdefault(ACCEPT_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * 4, None, "arena"))
     ctx.add(k, [(0, *ctx.buf(token)), (1, ctx.program.step_state, 0), (2, ctx.program.ring, 0), (3, prm, 0), (4, ACCEPT_LOG, 0)],
             (1, 1, 1), (32, 1, 1), op.kind, writes=[1, 2, 4])
@@ -739,6 +745,8 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
                speculative=speculative, attention=attention or profile.attention, accelerator=accelerator or profile.accelerator,
                accel_min_t=dict(profile.accelerator_min_t), tuner=tuner, eos=eos, ring_capacity=ring_capacity)
     _pack_windows(ctx)
+    ctx.ctx_cap_target, ctx.ctx_cap = _context_capacity(ctx, g)
+    program.context_capacity = ctx.ctx_cap
     hoisted = {op.attrs["stat_value"]: ctx.slab_info(op.inputs[1].name).n_blocks for op in g.ops if op.kind == "gemv" and op.attrs.get("stat_value")}
     for v in g.values.values():
         if v.is_view:
@@ -768,13 +776,26 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
         if token is None:
             raise ValueError("emit_program: the advance needs the sampled token value")
         adv = ctx.kernel("advance", kernels.advance_source(layout.to_msl()), "advance", {})
-        prm = ctx.params("advance", kernels.advance_params(t, ring_capacity, eos))
+        prm = ctx.params("advance", kernels.advance_params(t, ring_capacity, eos, ctx_cap=ctx.ctx_cap))
         ctx.add(adv, [(0, *ctx.buf(token)), (1, program.step_state, 0), (2, program.ring, 0), (3, prm, 0)], (1, 1, 1), (32, 1, 1), "advance",
                 writes=[1, 2])
     elif tail is not None:
         raise ValueError(f"emit_program: unknown tail {tail!r}")
     place_barriers(program, barriers)
     return program
+
+
+def _context_capacity(ctx: _Ctx, g: Graph) -> Tuple[int, int]:
+    """``(target rows, positions a sequence may occupy)`` from the graph's caches: the smallest KV cache of the target's
+    attention ops, and for a drafter the smallest context cache less the block it appends after the context
+    (γ − 1: the block's last query sits at position + γ − 1). 0 = unbounded (no attention op). The serial ops stop
+    the program (error 2) at a step whose first position reaches the capacity, so no kernel writes past a cache;
+    ``Session.generate`` refuses a request that cannot fit before it starts."""
+    target = [ctx.shape(op.inputs[1])[0] for op in g.ops if op.kind == "gqa_decode"]
+    draft = [ctx.shape(op.inputs[2])[0] - int(op.attrs.get("gamma", 1)) + 1 for op in g.ops if op.kind == "draft_attn"]
+    cap_t = min(target) if target else 0
+    caps = [c for c in (cap_t, min(draft) if draft else 0) if c > 0]
+    return cap_t, (min(caps) if caps else 0)
 
 
 def _bus_first(ops: List[Op]) -> List[Op]:

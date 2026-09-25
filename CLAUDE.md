@@ -41,6 +41,10 @@ every T > 1 GEMV runs on the tile as the predicated variant above T = 1, and the
 35.8 to 19.9 ms per token on the prompt set (1.80× the shader path, 1.36× plain: math 1.89×, code 1.60×, text
 1.24×, chat 0.99×; the step 94 % bus-bound), tokens equal to the golden (dspark.md §3) — the M6 gate is met on
 math and code on this chip. Speculative decoding targets a **DSpark** drafter, not the MTP head.
+An intermittent model-tier failure (wrong tokens / a hang / an empty generation, never reproducible alone) was three
+out-of-bounds stores found with shader validation (#92): the GDN commit pass wrote its read-out through a 16-byte
+placeholder, the tile's permute wrote a slab's K into a scratch sized by a narrower input, a drafter appended past
+its context cache — fixed, and a `Program` now carries a `context_capacity` the serial ops enforce.
 
 ## Read these, in this order
 
@@ -90,6 +94,11 @@ math and code on this chip. Speculative decoding targets a **DSpark** drafter, n
   where ranges do not overlap, use paired alternating A/B runs and min-of-N.
 * **Every GPU loop must be bounded.** A running dispatch cannot be cancelled and cannot be relied on to be preempted
   (never on Apple9, only sometimes on Apple10); an unbounded spin freezes the display and can trip the watchdog. Keep any single dispatch under ~1.5 s in probes, far less in the engine.
+* **Every kernel store must be inside its binding, and shader validation is the test for it.** Buffers are separate
+  Metal allocations, so a store past one lands in a neighbour — StepState, a params record, an activation — and
+  shows up later as a wrong token, a hang or an empty generation that never reproduces alone. After a kernel or
+  emitter change run the GPU tiers under `MTL_SHADER_VALIDATION=1 MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1`
+  (porting.md §0); a `Program` carries its `context_capacity` and the serial ops stop at it (`error = 2`).
 * Correctness may depend only on documented Metal semantics (dispatch ordering, ICB barriers, the MSL memory model).
   Threadgroup→core mapping, in-flight limits and sharing behaviour are per-chip *profile values*, measured by the probes.
 * Only bare-metal Macs give meaningful numbers; virtualized macOS (hosted CI runners) exposes a paravirtual GPU.

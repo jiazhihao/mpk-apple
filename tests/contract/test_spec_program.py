@@ -76,6 +76,11 @@ def test_round_program(pair):
     prm = prog.buffers[[b for b in vs.bindings if b[0] == 3][0][1]].init
     gamma, thr, t_max, mode = struct.unpack_from("<IfII", prm)
     assert (gamma, thr, t_max, mode) == (3, 0.5, 8, 0)
+    # the context capacity: the target's 16 KV rows (the drafter's caches of 32 less its block of 3 allow 30); the
+    # select clamps to the target's rows, the scan and the plain program's advance stop at the capacity
+    assert prog.context_capacity == 16 and struct.unpack_from("<I", prm, 16 + 64 + 4)[0] == 16
+    assert struct.unpack_from("<IiII", prog.buffers[[b for b in acc.bindings if b[0] == 3][0][1]].init)[3] == 16
+    assert Program.from_json(prog.to_json()).context_capacity == 16
     # two mapped packs, distinct entries
     weights = [n for n, b in prog.buffers.items() if b.role == "weights"]
     assert weights == ["pack.0", "pack.1"] and prog.buffers["pack.1"].file.endswith("drafter/pack/weights.pack")
@@ -92,6 +97,25 @@ def test_round_program(pair):
     assert len(blk) == 1 and "T_HI" not in prog.kernels[blk[0].kernel].macros and blk[0].meta["t_range"] is None
     plain = compile_program(model, tp, PROF, dynamic_t=True)
     assert len([o for o in plain.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]) == 1
+    adv = [o for o in plain.ops if o.name == "advance"][0]
+    assert plain.context_capacity == 16 and struct.unpack_from("<IIiI", plain.buffers[[b for b in adv.bindings if b[0] == 3][0][1]].init)[3] == 16
+
+
+def test_context_capacity_and_input_width(pair, tmp_path):
+    """A drafter with the smaller context sets the capacity (its caches less the block); a drafter whose hidden width
+    is not the target's cannot go through the target's head (the kernels index the input by the slab's K)."""
+    from dspark_synth import build as _build
+
+    model, drafter, tp, dp = pair
+    small, _, _, _ = _build(pair_dir(tp), target_lm_head=model.lm_head, max_context=8)
+    prog = compile_program(model, tp, PROF, dynamic_t=True, drafter=small, drafter_pack=dp)
+    assert prog.context_capacity == 8 - 3 + 1
+    ddir = tmp_path / "narrow"; ddir.mkdir()
+    write_checkpoint(ddir, with_head=False, vocab_size=50, hidden_size=512, target_hidden_size=256, target_layer_ids=[-1, 1], block_size=3)
+    narrow, _, _, _ = build(ddir, target_lm_head=model.lm_head)
+    pack_model(narrow, str(ddir), str(ddir / "pack"), PackLayout(rows=16))
+    with pytest.raises(ValueError, match="columns"):
+        compile_program(model, tp, PROF, dynamic_t=True, drafter=narrow, drafter_pack=PackFile(ddir / "pack"))
 
 
 def test_verify_costs_and_cost_mode(pair):

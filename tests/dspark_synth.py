@@ -77,12 +77,14 @@ def write_checkpoint(path: Path, seed: int = 11, *, with_head: bool = True, **ov
     return {k: bf16_to_f32(f32_to_bf16(a)) for k, a in raw.items()}
 
 
-def build(path: Path, *, target_lm_head: Any = None, **drafter_options: Any) -> Tuple[DSparkDrafter, LMHead, DSparkConfig, HeadAndDrafter]:
+def build(path: Path, *, target_lm_head: Any = None, max_context: int = MAX_CONTEXT, **drafter_options: Any) -> Tuple[DSparkDrafter, LMHead, DSparkConfig, HeadAndDrafter]:
     """The drafter (storage formats bound from the synthetic checkpoint) and the target head it lowers through: the
-    given one (a real model's) or the synthetic ``lm_head.weight`` of the checkpoint."""
+    given one (a real model's) or the synthetic ``lm_head.weight`` of the checkpoint. ``max_context`` sizes the
+    drafter's context caches: a generation may occupy at most ``max_context − block_size + 1`` positions (the
+    program stops itself at the capacity), so a long generation passes the target's."""
     cfg = DSparkConfig.from_pretrained(str(path))
     head = target_lm_head or LMHead(cfg.hidden_size, cfg.vocab_size, hf_name="lm_head.weight", prefix="lm_head.")
-    drafter = DSparkDrafter(cfg, target_lm_head=head, max_context=MAX_CONTEXT, **drafter_options)
+    drafter = DSparkDrafter(cfg, target_lm_head=head, max_context=max_context, **drafter_options)
     pair = HeadAndDrafter(head, drafter)
     ckpt = SafetensorsDir(str(path))
     try:

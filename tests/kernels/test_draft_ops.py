@@ -258,14 +258,14 @@ def test_confidence(dev):
 
 # ---- verify_select and accept_scan on StepState ---------------------------------------------------------------
 
-def _select(dev, state, drafts, conf, gamma, threshold, t_max=8, mode=0, cost=None, log=None):
+def _select(dev, state, drafts, conf, gamma, threshold, t_max=8, mode=0, cost=None, log=None, ctx_cap=0):
     pso = nt.Pipeline(_spec_lib(dev), "verify_select")
     st = nt.Buffer(dev, LAYOUT.pack(state))
     lb = log if log is not None else nt.Buffer(dev, 16 * 4)
     d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, np.asarray(drafts, np.int32).tobytes()))
          .buffer(1, nt.Buffer(dev, np.asarray(conf, np.float32).tobytes())).buffer(2, st)
-         .bytes(3, kernels.select_params(gamma, threshold, t_max, mode=mode, cost=cost, log_cap=4 if log is not None else 0)).buffer(4, lb)
-         .grid(1).threadgroup(32))
+         .bytes(3, kernels.select_params(gamma, threshold, t_max, mode=mode, cost=cost, log_cap=4 if log is not None else 0, ctx_cap=ctx_cap))
+         .buffer(4, lb).grid(1).threadgroup(32))
     _run(dev, d)
     return LAYOUT.unpack(st.read(0, LAYOUT.size))
 
@@ -298,9 +298,18 @@ def test_verify_select(dev):
     s = _select(dev, dict(base, step=6), drafts, conf, 5, 2.0, mode=2, log=log)
     assert s["verify_len"] == 2 and np.frombuffer(log.read(0, 4 * 16 * 4), dtype=np.float32).reshape(4, 16)[6 % 4, :5].tolist() == pytest.approx(conf)
     assert _select(dev, base, drafts, conf, 5, 9.0, mode=2)["verify_len"] == 5 and _select(dev, base, drafts, conf, 5, 9.0, t_max=4, mode=2)["verify_len"] == 3
+    # the context capacity clamps L so the verify rows position … position + L stay inside the target's caches
+    at = dict(base, position=10)
+    s = _select(dev, at, drafts, conf, 5, 0.0, ctx_cap=13)
+    assert s["verify_len"] == 2 and s["t_this_step"] == 3 and s["error"] == 0 and s["done"] == 0
+    s = _select(dev, at, drafts, conf, 5, 0.0, ctx_cap=11)
+    assert s["verify_len"] == 0 and s["t_this_step"] == 1 and s["error"] == 0
+    s = _select(dev, at, drafts, conf, 5, 0.0, ctx_cap=10)                       # no room for the anchor's row: stop
+    assert s["error"] == 2 and s["done"] == 1 and s["t_this_step"] == 1
+    assert _select(dev, at, drafts, conf, 5, 0.0, ctx_cap=64)["verify_len"] == 5   # a roomy capacity changes nothing
 
 
-def model_accept(state, tokens, ring_cap, eos):
+def model_accept(state, tokens, ring_cap, eos, ctx_cap=0):
     """The Python model of accept_scan (mirrors kernels/spec_ops.metal); returns (state, ring writes)."""
     s = dict(state)
     writes = []
@@ -309,6 +318,8 @@ def model_accept(state, tokens, ring_cap, eos):
     t = s["t_this_step"]
     if s["prefill_left"] > 0:
         s["position"] += t; s["step"] += 1; s["n_inject"] = t; s["checkpoint_index"] = t
+        if ctx_cap and s["position"] >= ctx_cap:
+            s["error"] = 2; s["done"] = 1
         return s, writes
     L = s["verify_len"]
     base = t - 1 - L
@@ -334,16 +345,18 @@ def model_accept(state, tokens, ring_cap, eos):
     s["n_inject"] = s["checkpoint_index"] = base + committed
     if stop:
         s["done"] = 1
+    if ctx_cap and s["position"] >= ctx_cap:
+        s["error"] = 2; s["done"] = 1
     return s, writes
 
 
-def _accept(dev, state, tokens, ring_cap=16, eos=-1):
+def _accept(dev, state, tokens, ring_cap=16, eos=-1, ctx_cap=0):
     pso = nt.Pipeline(_spec_lib(dev), "accept_scan")
     st = nt.Buffer(dev, LAYOUT.pack(state))
     ring = nt.Buffer(dev, ring_cap * 8); ring.fill(0)
     log = nt.Buffer(dev, 64 * 4); log.fill(0)
     d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, np.asarray(tokens, np.int32).tobytes())).buffer(1, st).buffer(2, ring)
-         .bytes(3, kernels.accept_params(ring_cap, eos, 64)).buffer(4, log).grid(1).threadgroup(32))
+         .bytes(3, kernels.accept_params(ring_cap, eos, 64, ctx_cap=ctx_cap)).buffer(4, log).grid(1).threadgroup(32))
     _run(dev, d)
     got = LAYOUT.unpack(st.read(0, LAYOUT.size))
     slots = np.frombuffer(ring.read(0, ring_cap * 8), dtype=np.uint64)
@@ -355,11 +368,15 @@ def _accept(dev, state, tokens, ring_cap=16, eos=-1):
     return got, {i: int(v) for i, v in enumerate(slots) if v}
 
 
-@pytest.mark.parametrize("case", ["all", "partial", "none", "eos_draft", "eos_bonus", "first_token", "overflow", "wrap"])
+@pytest.mark.parametrize("case", ["all", "partial", "none", "eos_draft", "eos_bonus", "first_token", "overflow", "wrap", "context_full", "context_room"])
 def test_accept_scan(dev, case):
     st = LAYOUT.unpack(LAYOUT.pack({}))
     st.update(position=40, step=5, ring_head=3, ring_tail=1, anchor=9, t_this_step=4, verify_len=3, pending_tokens=[9, 21, 22, 23, 0, 0, 0, 0])
-    tokens, eos, cap = [21, 22, 23, 24], -1, 16
+    tokens, eos, cap, ctx_cap = [21, 22, 23, 24], -1, 16, 0
+    if case == "context_full":                                   # all accepted: the next step would start at 44 = the capacity
+        ctx_cap = 44
+    elif case == "context_room":
+        ctx_cap = 45
     if case == "partial":
         tokens = [21, 50, 23, 24]
     elif case == "none":
@@ -375,10 +392,14 @@ def test_accept_scan(dev, case):
         st.update(ring_head=17, ring_tail=0)
     elif case == "wrap":
         st.update(ring_head=15, ring_tail=13)
-    got, ring = _accept(dev, st, tokens, cap, eos)
-    exp, writes = model_accept(st, tokens, cap, eos)
+    got, ring = _accept(dev, st, tokens, cap, eos, ctx_cap)
+    exp, writes = model_accept(st, tokens, cap, eos, ctx_cap)
     assert got == exp, case
     assert ring == {slot: val for slot, val in writes}, case
+    if case == "context_full":                                   # the committed tokens are in the ring; the program stops
+        assert got["error"] == 2 and got["done"] == 1 and got["position"] == 44 and got["ring_head"] == 7 and len(ring) == 4
+    if case == "context_room":
+        assert got["error"] == 0 and got["done"] == 0 and got["position"] == 44
     if case == "all":
         assert got["accepted"] == 3 and got["position"] == 44 and got["anchor"] == 24 and got["n_inject"] == 4 and got["ring_head"] == 7
     if case == "partial":
@@ -390,9 +411,10 @@ def test_accept_scan(dev, case):
     if case == "overflow":
         assert got["error"] == 1 and got["done"] == 1 and not ring
     # a prefill chunk only advances and marks its rows for injection
-    got, ring = _accept(dev, dict(st, prefill_left=2, t_this_step=4), tokens, cap, eos)
-    exp, _ = model_accept(dict(st, prefill_left=2, t_this_step=4), tokens, cap, eos)
+    got, ring = _accept(dev, dict(st, prefill_left=2, t_this_step=4), tokens, cap, eos, ctx_cap)
+    exp, _ = model_accept(dict(st, prefill_left=2, t_this_step=4), tokens, cap, eos, ctx_cap)
     assert got == exp and got["n_inject"] == 4 and got["position"] == 44 and not ring
+    assert got["error"] == (2 if case == "context_full" else 0)
 
 
 # ---- tap_concat, the block-ids embed, the row sources of the shared kernels ---------------------------------------
