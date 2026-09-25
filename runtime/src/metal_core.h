@@ -75,7 +75,7 @@ struct Dispatch {
   std::vector<std::pair<uint32_t, uint32_t>> threadgroup_memory;   // (index, length)
   uint32_t grid[3] = {1, 1, 1};        // threadgroups
   uint32_t threadgroup[3] = {1, 1, 1}; // threads per threadgroup
-  bool barrier_after = false;          // concurrent encoders only
+  bool barrier_before = false;         // this dispatch waits for every dispatch before it (ICBs, concurrent encoders)
 };
 
 struct RunResult { double gpu_ms; double wall_ms; std::string error; };
@@ -105,8 +105,10 @@ struct RunnerImpl;
 
 class Icb {
  public:
-  // `ops` in program order; a barrier after an op orders everything after it behind it (ICB commands are concurrent
-  // otherwise). Buffer offsets must fit 32 bits (Metal's ICB limit) — slabs are mapped so that they do.
+  // `ops` in program order; an op's barrier makes it wait for every command before it in the buffer — measured
+  // (tools/bench, 2026-09-24): `setBarrier` on an ICB command orders that command behind all preceding ones, and
+  // commands without it may start while their predecessors run. Buffer offsets must fit 32 bits (Metal's ICB limit)
+  // — slabs are mapped so that they do.
   Icb(const Device& d, const std::vector<Dispatch>& ops);
   ~Icb();
   size_t count() const;

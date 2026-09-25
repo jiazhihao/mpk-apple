@@ -68,14 +68,15 @@ class Harness:
         t = proj.shape[0]
         pf = f32_to_bf16(proj.float().numpy())
         kd, vd, hv = m.key_dim, m.value_dim, m.v_heads
-        if self.ab_separate:                                   # the 27B layout: qkv|z in one slab, a|b in another
-            main, ab = pf[:, : m.conv_dim + vd], np.ascontiguousarray(pf[:, m.conv_dim + vd:])
+        # the projection's part order: z | qkv | a | b (the z rows lead so the gate GEMV is a block-aligned range)
+        if self.ab_separate:                                   # the 27B layout: z|qkv in one slab, a|b in another
+            main, ab = pf[:, : vd + m.conv_dim], np.ascontiguousarray(pf[:, vd + m.conv_dim:])
             a_off, b_off, ab_stride = 0, hv, 2 * hv
         else:
             main, ab = pf, pf
-            a_off, b_off, ab_stride = m.conv_dim + vd, m.conv_dim + vd + hv, pf.shape[1]
-        params = kernels.gdn_params(hv=hv, hk=m.k_heads, t_active=t if t_active is None else t_active, q_off=0, k_off=kd, v_off=2 * kd,
-                                    z_off=m.conv_dim, a_off=a_off, b_off=b_off, in_stride=main.shape[1], ab_stride=ab_stride,
+            a_off, b_off, ab_stride = vd + m.conv_dim, vd + m.conv_dim + hv, pf.shape[1]
+        params = kernels.gdn_params(hv=hv, hk=m.k_heads, t_active=t if t_active is None else t_active, q_off=vd, k_off=vd + kd, v_off=vd + 2 * kd,
+                                    z_off=0, a_off=a_off, b_off=b_off, in_stride=main.shape[1], ab_stride=ab_stride,
                                     ab_separate=self.ab_separate, out_stride=vd, n_sg=self.n_sg, key_dim=kd, eps=EPS)
         out = nt.Buffer(self.dev, t * vd * 2); out.fill(0)
         mb = nt.Buffer(self.dev, main.tobytes())
@@ -184,8 +185,8 @@ def test_state_slots_and_commit_pass(dev):
     def run(proj, state_fields, commit=False):
         t = proj.shape[0]
         pf = f32_to_bf16(proj.float().numpy())
-        params = kernels.gdn_params(hv=hv, hk=m.k_heads, t_active=t, q_off=0, k_off=kd, v_off=2 * kd, z_off=m.conv_dim, a_off=m.conv_dim + vd,
-                                    b_off=m.conv_dim + vd + hv, in_stride=pf.shape[1], ab_stride=pf.shape[1], ab_separate=False, out_stride=vd,
+        params = kernels.gdn_params(hv=hv, hk=m.k_heads, t_active=t, q_off=vd, k_off=vd + kd, v_off=vd + 2 * kd, z_off=0, a_off=vd + m.conv_dim,
+                                    b_off=vd + m.conv_dim + hv, in_stride=pf.shape[1], ab_stride=pf.shape[1], ab_separate=False, out_stride=vd,
                                     n_sg=n_sg, key_dim=kd, eps=EPS)
         st = nt.Buffer(dev, lay.pack(state_fields))
         mb = nt.Buffer(dev, pf.tobytes())

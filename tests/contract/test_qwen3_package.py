@@ -56,7 +56,7 @@ def test_package_registers_lowers_and_packs(tmp_path):
     m.lower(g)
     g.check()
     kinds = Counter(op.kind for op in g.ops)
-    assert kinds == {"gemv": 8, "gqa_decode": 2, "rmsnorm_stat": 5, "embed": 1, "lm_head": 1, "argmax": 1}
+    assert kinds == {"gemv": 8, "gqa_decode": 2, "gqa_merge": 2, "rmsnorm_stat": 5, "embed": 1, "lm_head": 1, "argmax": 1}
     prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
     check_coverage(g, prof)
     pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))

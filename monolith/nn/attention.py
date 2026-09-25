@@ -17,6 +17,8 @@ import numpy as np
 from ..core.dtypes import DType
 from ..core.ir import BlockDomain, Graph, OpClass, Value
 from ..packs.transforms import rope_head_perm
+
+ATTN_CHUNK = 64          # keys per chunk of the attention core (the partial workspace is sized by it)
 from .linear import Linear, Part
 from .module import LowerContext, Module, StateEntry, WeightSpec
 
@@ -46,7 +48,8 @@ class GQAAttention(Module):
 
     # ---- layout ---------------------------------------------------------------------------------------------------
     def _row_perm(self) -> np.ndarray:
-        """Stacked rows ``[q_proj | k_proj | v_proj]`` → ``[q (head-permuted) | gate | k (head-permuted) | v]``."""
+        """Stacked rows ``[q_proj | k_proj | v_proj]`` → ``[q (head-permuted) | k (head-permuted) | v | gate]``: the
+        gate rows last, so the mixer core's rows and the gate rows are two block-aligned ranges of one slab."""
         d, hp = self.head_dim, rope_head_perm(self.head_dim, self.rotary_dim)
         stride = 2 * d if self.gate else d
         q = np.concatenate([h * stride + hp for h in range(self.heads)])
@@ -55,19 +58,21 @@ class GQAAttention(Module):
         v = base + self.kv_heads * d + np.arange(self.kv_heads * d)
         if self.gate:
             gate = np.concatenate([h * stride + d + np.arange(d) for h in range(self.heads)])
-            return np.concatenate([q, gate, k, v])
+            return np.concatenate([q, k, v, gate])
         return np.concatenate([q, k, v])
 
     def kernel_segments(self) -> List[tuple]:
-        """Row ranges of the packed ``qkv`` slab: ``(name, offset, rows)`` for q, gate, k, v."""
+        """Row ranges of the packed ``qkv`` slab: ``(name, offset, rows)`` for q, k, v (and the gate)."""
         hd, kd = self.heads * self.head_dim, self.kv_heads * self.head_dim
-        segs = [("q", 0, hd)]
-        off = hd
+        segs = [("q", 0, hd), ("k", hd, kd), ("v", hd + kd, kd)]
         if self.gate:
-            segs.append(("gate", off, hd))
-            off += hd
-        segs += [("k", off, kd), ("v", off + kd, kd)]
+            segs.append(("gate", hd + 2 * kd, hd))
         return segs
+
+    @property
+    def core_rows(self) -> int:
+        """Rows of the projection the attention core reads: q | k | v (the gate follows)."""
+        return (self.heads + 2 * self.kv_heads) * self.head_dim
 
     def weight_map(self) -> Dict[str, WeightSpec]:
         perm = rope_head_perm(self.head_dim, self.rotary_dim)
@@ -114,14 +119,26 @@ class GQAAttention(Module):
 
     # ---- IR ---------------------------------------------------------------------------------------------------
     def lower(self, g: Graph, h: Value, norm, ctx: LowerContext) -> Value:
-        proj = self.qkv.lower(g, h, norm=norm)
+        """q|k|v rows → the attention core (partials per KV chunk) ‖ the gate rows as an un-barriered sibling → the
+        merge (design §5.12: the ALU-bound core is encoded first, the bus-bound gate GEMV hides under it)."""
+        hd, kd, chunk = self.heads * self.head_dim, self.kv_heads * self.head_dim, ATTN_CHUNK
+        proj = self.qkv.lower(g, h, norm=norm, rows=(0, self.core_rows)).value
         kc, vc = ctx.states[f"{self.prefix}k_cache"], ctx.states[f"{self.prefix}v_cache"]
         cos, sin = ctx.consts["rope_cos"], ctx.consts["rope_sin"]
         qn = self.const_value(g, f"{self.prefix}q_norm", (self.head_dim,), DType.F32)
         kn = self.const_value(g, f"{self.prefix}k_norm", (self.head_dim,), DType.F32)
-        o = g.value(f"{self.prefix}attn", (h.shape[0], self.heads * self.head_dim), DType.BF16)
-        g.op("gqa_decode", [proj.value, kc, vc, cos, sin, qn, kn], [o], domain=BlockDomain("heads", self.heads),
+        rep, n_chunks_max = self.heads // self.kv_heads, -(-self.max_context // chunk)
+        t = h.shape[0]
+        part_o = g.value(f"{self.prefix}part_o", (t, self.kv_heads * n_chunks_max * rep * self.head_dim), DType.F32)
+        part_md = g.value(f"{self.prefix}part_md", (t, self.kv_heads * n_chunks_max * rep * 2), DType.F32)
+        g.op("gqa_decode", [proj, kc, vc, cos, sin, qn, kn], [part_o, part_md], domain=BlockDomain("heads", self.heads),
              klass=OpClass.MAP, updates=[kc.name, vc.name], heads=self.heads, kv_heads=self.kv_heads,
              head_dim=self.head_dim, rotary_dim=self.rotary_dim, eps=self.eps, scaling=self.head_dim ** -0.5,
-             gate=self.gate, segments=self.kernel_segments(), rope="permuted")
+             segments=[s for s in self.kernel_segments() if s[0] != "gate"], rope="permuted", chunk=chunk)
+        ins = [part_o, part_md]
+        if self.gate:
+            ins.append(self.qkv.lower(g, h, norm=norm, rows=(self.core_rows, hd), sibling=True).value)
+        o = g.value(f"{self.prefix}attn", (t, hd), DType.BF16)
+        g.op("gqa_merge", ins, [o], domain=BlockDomain("heads", self.heads), klass=OpClass.MAP, heads=self.heads,
+             kv_heads=self.kv_heads, head_dim=self.head_dim, gate=self.gate, chunk=chunk)
         return self.o_proj.lower(g, o, residual=h, name=f"{self.prefix}h").value

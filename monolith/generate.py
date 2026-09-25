@@ -72,7 +72,8 @@ class Session:
     def __init__(self, model: Model, pack_dir: str, profile: Optional[Profile] = None, *, layout: Optional[StepStateLayout] = None,
                  eos: int = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
                  min_p: float = 0.0, seed: int = 0, autotune: bool = True, drafter: Any = None, drafter_pack: Optional[str] = None,
-                 verify: str = "cost", verify_threshold: Optional[float] = None, verify_length: Optional[int] = None) -> None:
+                 verify: str = "cost", verify_threshold: Optional[float] = None, verify_length: Optional[int] = None,
+                 barriers: str = "minimal") -> None:
         """``drafter`` (a ``Drafter`` built with the model's head) and its pack turn the session speculative: one
         dynamic-T program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
         from .bench import profile_for_device
@@ -91,6 +92,7 @@ class Session:
             layout = StepStateLayout(t_max=max(8, drafter.gamma + 1), gamma_max=max(7, drafter.gamma))
         self.layout = layout or StepStateLayout()
         self.verify, self.verify_threshold, self.verify_length = verify, verify_threshold, verify_length
+        self.barriers = barriers
         self.eos, self.ring_capacity = eos, ring_capacity
         self.seed = seed
         # temperature 0 = greedy (the argmax path); otherwise the Gumbel-max sampler with the thresholds
@@ -115,7 +117,7 @@ class Session:
             prog = compile_program(self.model, self.pack, self.profile, t=None if t == 0 else t, dynamic_t=(t == 0), eos=self.eos,
                                    ring_capacity=self.ring_capacity, layout=self.layout, tuner=self.tuner, drafter=self.drafter,
                                    drafter_pack=self.drafter_pack, verify=self.verify, verify_threshold=self.verify_threshold,
-                                   verify_length=self.verify_length)
+                                   verify_length=self.verify_length, barriers=self.barriers)
             if self.tuner is not None:
                 self.tuner.save(self.dev.info().name)
             eng = Engine(prog, self.dev, buffers=self.buffers)
@@ -281,6 +283,7 @@ def main(argv=None) -> int:
     ap.add_argument("--verify-threshold", type=float, default=None, help="the confident-prefix threshold (<= 0: verify the whole block)")
     ap.add_argument("--verify-length", type=int, default=None, help="with --verify fixed: the drafts verified every step")
     ap.add_argument("--sts", default=None, help="STS temperatures JSON for the confidence chain (tools/bench/sts_calibrate.py)")
+    ap.add_argument("--barriers", default="minimal", choices=["minimal", "all"], help="ICB barriers: only where a dependency needs one, or after every op")
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
 
@@ -290,7 +293,7 @@ def main(argv=None) -> int:
     sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1 if a.no_eos else None,
                         temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed, autotune=not a.no_autotune,
                         drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind, verify=a.verify,
-                        verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts)
+                        verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts, barriers=a.barriers)
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0
     print(tok.decode(gen.tokens))

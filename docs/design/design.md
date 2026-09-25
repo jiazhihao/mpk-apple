@@ -511,6 +511,13 @@ Expected value **[H]**: the mixer core is a few percent of a layer, so ~2–4 % 
 rule (do not stack a projection whose only consumer sits behind an ALU-bound op), costs +64 un-barriered dispatches, and
 is enabled per chip by measurement.
 
+*Built and measured (2026-09-24, #29/#35).* The layer library emits every mixer as core → gate GEMV → merge / gated
+norm with the gate rows a block-aligned range of the stacked slab, and the compiler's barrier pass keeps an ICB
+barrier only where an op touches what the ops before it wrote (the flag orders the flagged command behind all
+preceding ones — measured, `decode-kernels.md` §3). On the 0.8B / M5 Pro the pass frees the 24 gate GEMVs and the
+step drops from 6.85 to 6.58 ms per token (−3.9 %) with the core encoded first, 6.63 with the gate first — the
+`sibling_order` rule holds by ~1 % within noise. The M3 Pro row is unmeasured.
+
 **M5 Pro — measured; M4 — projected.** What matters is how over-provisioned the cores are relative to the bus. The
 projection below assumed that a core streams ~18 GB/s on every chip; the M5 Pro's cores stream 29 GB/s with the M3
 Pro's lane order and **71 GB/s** with the interleaved one, so the ratio moved the other way:

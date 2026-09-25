@@ -114,8 +114,8 @@ RunResult Queue::run(const std::vector<Dispatch>& dispatches, bool concurrent) {
       for (auto& b : d.buffers) [en setBuffer:b.buffer->impl->buf offset:b.offset atIndex:b.index];
       for (auto& b : d.bytes) [en setBytes:b.bytes.data() length:b.bytes.size() atIndex:b.index];
       for (auto& t : d.threadgroup_memory) [en setThreadgroupMemoryLength:t.second atIndex:t.first];
+      if (concurrent && d.barrier_before) [en memoryBarrierWithScope:MTLBarrierScopeBuffers];   // the same semantics as the ICB flag
       [en dispatchThreadgroups:MTLSizeMake(d.grid[0], d.grid[1], d.grid[2]) threadsPerThreadgroup:MTLSizeMake(d.threadgroup[0], d.threadgroup[1], d.threadgroup[2])];
-      if (concurrent && d.barrier_after) [en memoryBarrierWithScope:MTLBarrierScopeBuffers];
     }
     [en endEncoding];
     [cb commit];
@@ -209,7 +209,7 @@ static void encode_icb_command(id<MTLIndirectComputeCommand> c, const Dispatch& 
   for (auto& t : d.threadgroup_memory) [c setThreadgroupMemoryLength:t.second atIndex:t.first];
   [c concurrentDispatchThreadgroups:MTLSizeMake(d.grid[0], d.grid[1], d.grid[2])
               threadsPerThreadgroup:MTLSizeMake(d.threadgroup[0], d.threadgroup[1], d.threadgroup[2])];
-  if (d.barrier_after) [c setBarrier];
+  if (d.barrier_before) [c setBarrier];                                  // the command waits for all commands before it
 }
 
 Icb::Icb(const Device& d, const std::vector<Dispatch>& ops) : impl(std::make_shared<IcbImpl>()) {

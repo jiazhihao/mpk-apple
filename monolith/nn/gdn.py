@@ -28,8 +28,10 @@ class GatedDeltaNet(Module):
         self.conv_width, self.eps, self.hf_prefix = conv_width, eps, hf_prefix
         self.key_dim, self.value_dim = k_heads * dk, v_heads * dv
         self.conv_dim = 2 * self.key_dim + self.value_dim
-        self.in_proj = Linear(hidden, [Part("in_proj_qkv", f"{hf_prefix}in_proj_qkv.weight", self.conv_dim),
-                                       Part("in_proj_z", f"{hf_prefix}in_proj_z.weight", self.value_dim),
+        # z first: the gate projection is a block-aligned row range at the head of the slab, emitted as the mixer
+        # core's un-barriered sibling (design §5.12); the core reads the rows after it
+        self.in_proj = Linear(hidden, [Part("in_proj_z", f"{hf_prefix}in_proj_z.weight", self.value_dim),
+                                       Part("in_proj_qkv", f"{hf_prefix}in_proj_qkv.weight", self.conv_dim),
                                        Part("in_proj_a", f"{hf_prefix}in_proj_a.weight", v_heads),
                                        Part("in_proj_b", f"{hf_prefix}in_proj_b.weight", v_heads)],
                               prefix=f"{prefix}in_proj.")
@@ -44,10 +46,10 @@ class GatedDeltaNet(Module):
                 "norm_w": WeightSpec(f"{p}norm.weight", (self.dv,), "f32", transform="bf16_f32", aux=True)}
 
     def kernel_segments(self) -> List[tuple]:
-        """Column ranges of the (stacked) projection: ``(name, offset, cols)`` for q, k, v, z, a, b."""
+        """Column ranges of the (stacked) projection in part order: ``(name, offset, cols)`` for z, q, k, v, a, b."""
         kd, vd, hv = self.key_dim, self.value_dim, self.v_heads
-        return [("q", 0, kd), ("k", kd, kd), ("v", 2 * kd, vd), ("z", self.conv_dim, vd),
-                ("a", self.conv_dim + vd, hv), ("b", self.conv_dim + vd + hv, hv)]
+        return [("z", 0, vd), ("q", vd, kd), ("k", vd + kd, kd), ("v", vd + 2 * kd, vd),
+                ("a", vd + self.conv_dim, hv), ("b", vd + self.conv_dim + hv, hv)]
 
     def state_entries(self, checkpoints: int = 2) -> List[StateEntry]:
         """Two slots by step parity (the step's pass reads one and writes the other; the speculative commit pass
@@ -60,8 +62,9 @@ class GatedDeltaNet(Module):
         return self.out_proj.forward(self.mix(self.in_proj.forward(x), state), residual)
 
     def mix(self, proj: Any, state: Dict[str, Any]) -> Any:
-        """The mixer alone (what ``gdn_mixer`` computes): ``proj [T, N1]`` in checkpoint column order → the gated,
-        normalized output ``[T, v_heads·dv]`` BF16; conv and recurrent states advanced in place."""
+        """The mixer alone (what ``gdn_mixer`` + ``gdn_norm`` compute): ``proj [T, N1]`` in the projection's part
+        order ``z | qkv | a | b`` → the gated, normalized output ``[T, v_heads·dv]`` BF16; conv and recurrent states
+        advanced in place."""
         import torch
         import torch.nn.functional as F
 
@@ -69,8 +72,8 @@ class GatedDeltaNet(Module):
 
         t = proj.shape[0]
         kd, vd, hv = self.key_dim, self.value_dim, self.v_heads
-        qkv, z = proj[:, :self.conv_dim], proj[:, self.conv_dim: self.conv_dim + vd]
-        a, b = proj[:, self.conv_dim + vd: self.conv_dim + vd + hv], proj[:, self.conv_dim + vd + hv:]
+        z, qkv = proj[:, :vd], proj[:, vd: vd + self.conv_dim]
+        a, b = proj[:, vd + self.conv_dim: vd + self.conv_dim + hv], proj[:, vd + self.conv_dim + hv:]
         conv_name, rec_name = f"{self.prefix}conv_state", f"{self.prefix}rec_state"
         qkv, new_conv = oracle.causal_conv1d(qkv, state[conv_name], self.param("conv_w").reshape(self.conv_dim, self.conv_width))
         q = qkv[:, :kd].reshape(t, self.k_heads, self.dk)
@@ -91,15 +94,24 @@ class GatedDeltaNet(Module):
 
     # ---- IR ---------------------------------------------------------------------------------------------------
     def lower(self, g: Graph, h: Value, norm, ctx: LowerContext) -> Value:
-        proj = self.in_proj.lower(g, h, norm=norm)
+        """qkv|a|b rows → the mixer core (the FP32 read-out) ‖ the z rows as an un-barriered sibling → the gated norm
+        (design §5.12: the ALU-bound core is encoded first, the bus-bound gate GEMV hides under it)."""
+        vd = self.value_dim
+        n0 = self.in_proj.slab_groups()[0].rows                          # z | qkv (| a | b when one format)
+        main = self.in_proj.lower(g, h, norm=norm, rows=(vd, n0 - vd))
         cs, rs = ctx.states[f"{self.prefix}conv_state"], ctx.states[f"{self.prefix}rec_state"]
         conv_w = self.const_value(g, f"{self.prefix}conv_w", (self.conv_dim, self.conv_width), DType.BF16)
         nea = self.const_value(g, f"{self.prefix}a_log", (self.v_heads,), DType.F32)      # holds −exp(A_log)
         dtb = self.const_value(g, f"{self.prefix}dt_bias", (self.v_heads,), DType.F32)
-        nw = self.const_value(g, f"{self.prefix}norm_w", (self.dv,), DType.F32)
-        o = g.value(f"{self.prefix}mix", (h.shape[0], self.value_dim), DType.BF16)
-        g.op("gdn_mixer", [*proj.values, cs, rs, conv_w, nea, dtb, nw], [o], domain=BlockDomain("heads", self.v_heads),
+        t = h.shape[0]
+        o_part = g.value(f"{self.prefix}o_part", (t, vd), DType.F32)
+        g.op("gdn_mixer", [*main.values, cs, rs, conv_w, nea, dtb], [o_part], domain=BlockDomain("heads", self.v_heads),
              klass=OpClass.MAP, updates=[cs.name, rs.name], k_heads=self.k_heads, v_heads=self.v_heads, dk=self.dk,
              dv=self.dv, conv_width=self.conv_width, eps=self.eps, segments=self.kernel_segments(),
-             proj_segments=proj.segments, commit_kind="gdn_commit")
+             proj_segments=main.segments, commit_kind="gdn_commit")
+        z = self.in_proj.lower(g, h, norm=norm, rows=(0, vd), groups=[0], sibling=True).value
+        nw = self.const_value(g, f"{self.prefix}norm_w", (self.dv,), DType.F32)
+        o = g.value(f"{self.prefix}mix", (t, vd), DType.BF16)
+        g.op("gdn_norm", [o_part, z, nw], [o], domain=BlockDomain("heads", self.v_heads), klass=OpClass.MAP,
+             v_heads=self.v_heads, dv=self.dv, eps=self.eps)
         return self.out_proj.lower(g, o, residual=h, name=f"{self.prefix}h").value

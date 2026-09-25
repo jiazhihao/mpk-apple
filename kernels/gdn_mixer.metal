@@ -143,6 +143,9 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
   device float* rec_out = rec_state;
 #endif
   const uint n_blocks = p.hv * NSG;
+  // conv channels are indexed relative to the q|k|v columns (q at q_off, k at q_off + key_dim, v at q_off + 2·key_dim):
+  // the projection may carry other rows ahead of them
+  device const ushort* pq = proj + p.q_off;
   for (uint b = sg; b < n_blocks; b += p.n_sg) {
     const uint h = b / NSG, grp = b % NSG;
     const uint kh = h / rep;
@@ -152,14 +155,14 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
       float qv[TP][KR], kv[TP][KR], vv[TP][VR];
       for (uint i = 0; i < KR; i++) {
         float y[TP];
-        conv_channel(proj, p.in_stride, conv_in, conv_w, p.q_off + kh * DK + lane + 32u * i, t0, n, y);
+        conv_channel(pq, p.in_stride, conv_in, conv_w, kh * DK + lane + 32u * i, t0, n, y);
         for (uint t = 0; t < TP; t++) qv[t][i] = y[t];
-        conv_channel(proj, p.in_stride, conv_in, conv_w, p.k_off + kh * DK + lane + 32u * i, t0, n, y);
+        conv_channel(pq, p.in_stride, conv_in, conv_w, p.key_dim + kh * DK + lane + 32u * i, t0, n, y);
         for (uint t = 0; t < TP; t++) kv[t][i] = y[t];
       }
       for (uint i = 0; i < VR; i++) {
         float y[TP];
-        conv_channel(proj, p.in_stride, conv_in, conv_w, p.v_off + h * DV + lane + 32u * i, t0, n, y);
+        conv_channel(pq, p.in_stride, conv_in, conv_w, 2u * p.key_dim + h * DV + lane + 32u * i, t0, n, y);
         for (uint t = 0; t < TP; t++) vv[t][i] = y[t];
       }
       // 2. per-token scalars and the q/k L2 norms
@@ -221,11 +224,11 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
     if (grp == 0u) {
       if (h % rep == 0u) {
         for (uint i = 0; i < KR; i++) {
-          conv_state_update(proj, p.in_stride, conv_in, conv_out, p.q_off + kh * DK + lane + 32u * i, T);
-          conv_state_update(proj, p.in_stride, conv_in, conv_out, p.k_off + kh * DK + lane + 32u * i, T);
+          conv_state_update(pq, p.in_stride, conv_in, conv_out, kh * DK + lane + 32u * i, T);
+          conv_state_update(pq, p.in_stride, conv_in, conv_out, p.key_dim + kh * DK + lane + 32u * i, T);
         }
       }
-      for (uint i = 0; i < VR; i++) conv_state_update(proj, p.in_stride, conv_in, conv_out, p.v_off + h * DV + lane + 32u * i, T);
+      for (uint i = 0; i < VR; i++) conv_state_update(pq, p.in_stride, conv_in, conv_out, 2u * p.key_dim + h * DV + lane + 32u * i, T);
     }
   }
 }

@@ -179,3 +179,35 @@ def test_autotuner_picks_and_caches(dev, tmp_path):
     tuner.save("test-chip")
     again = Autotuner(dev, dev.info().gpu_cores, str(cache))
     assert again.tune_gemv(info, 1, "residual", False).macros == c.macros and len(again.choices) == 3
+
+
+def test_row_range_equals_the_slice_of_the_whole(dev):
+    """A dispatch over blocks [block0, block0 + n) of a slab writes the same outputs as the whole-slab dispatch's slice,
+    with the residual epilogue, the input norm and the STAT_OUT partials relative to the range (design §5.12: a
+    mixer's gate rows as their own dispatch)."""
+    rng = np.random.default_rng(17)
+    fmt, n, rows, t = "nvfp4", 512, 16, 2
+    gm = Gemv(dev, fmt, n, rows, t, seed=17)
+    x = f32_to_bf16(rng.standard_normal((t, K)).astype(np.float32))
+    residual = f32_to_bf16(rng.standard_normal((t, n)).astype(np.float32))
+    stat = np.array([float((bf16_to_f32(x[i]).astype(np.float64) ** 2).sum()) for i in range(t)], np.float32)
+    nw = rbf(1.0 + rng.standard_normal(K) * 0.1)
+    full, full_stat = gm.run(x, norm=(stat, 1, nw), epilogue="residual", residual=residual, stat_out=True)
+    start, count = 128, 256                                                    # blocks 8 .. 24 of 32
+    b0, nb = start // rows, count // rows
+    macros = kernels.gemv_macros(gm.info, t=t, norm=True, epilogue="residual", stat_out=True, out_bf16=True)
+    pso = nt.Pipeline(nt.Library(dev, kernels.gemv_source(fmt), macros), "gemv_T")
+    y = nt.Buffer(dev, t * count * 2); y.fill(0)
+    so = nt.Buffer(dev, t * nb * 4); so.fill(0)
+    d = (nt.Dispatch().pipeline(pso).buffer(0, gm.wbuf).buffer(1, gm.rsbuf).buffer(2, nt.Buffer(dev, x.tobytes())).buffer(3, y)
+         .bytes(4, kernels.gemv_params(count, nb, gm.n_sg, t, eps=EPS, stat_parts=1, block0=b0))
+         .buffer(5, nt.Buffer(dev, stat.tobytes())).buffer(6, nt.Buffer(dev, nw.astype(np.float32).tobytes()))
+         .buffer(7, nt.Buffer(dev, np.ascontiguousarray(residual[:, start: start + count]).tobytes())).buffer(8, so)
+         .grid(-(-(gm.n_sg * 32) // 384)).threadgroup(384))
+    r = nt.Queue(dev).run([d])
+    assert not r.error, r.error
+    got = bf16_to_f32(np.frombuffer(y.read(0, t * count * 2), dtype=np.uint16)).reshape(t, count)
+    assert np.array_equal(got, full[:, start: start + count])
+    parts = np.frombuffer(so.read(0, t * nb * 4), dtype=np.float32).reshape(t, nb)
+    assert np.array_equal(parts, full_stat[:, b0: b0 + nb])
+

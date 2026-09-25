@@ -30,10 +30,9 @@ class Cfg:
         self.chunk, self.rb, self.gate = chunk, rb, gate
         self.rep = heads // kv
         hd, kd = heads * d, kv * d
-        self.q_off, self.gate_off = 0, hd
-        self.k_off = 2 * hd if gate else hd
-        self.v_off = self.k_off + kd
-        self.n1 = self.v_off + kd
+        self.q_off, self.k_off, self.v_off = 0, hd, hd + kd                    # the pack's order: q | k | v | gate
+        self.gate_off = hd + 2 * kd
+        self.n1 = hd + 2 * kd + (hd if gate else 0)
         self.rows_max = self.rep * t_max
         self.n_chunks_max = -(-ctx_max // chunk)
         self.scaling = d ** -0.5

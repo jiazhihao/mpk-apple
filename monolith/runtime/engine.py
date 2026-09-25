@@ -58,7 +58,7 @@ class Engine:
             self.pipelines[key] = nt.Pipeline(lib, k.function, True)
         self.ops = []
         for o in program.ops:
-            d = nt.Dispatch().pipeline(self.pipelines[o.kernel]).grid(*o.grid).threadgroup(*o.threadgroup).barrier(o.barrier_after)
+            d = nt.Dispatch().pipeline(self.pipelines[o.kernel]).grid(*o.grid).threadgroup(*o.threadgroup).barrier(o.barrier_before)
             for index, bname, off in o.bindings:
                 d.buffer(index, self.buffers[bname], off)
             for index, length in o.threadgroup_memory:

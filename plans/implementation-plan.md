@@ -203,7 +203,7 @@ a|b, continuation. Cost on the M5 Pro for the 27B's 16/48 heads: 26 µs per laye
 lowers to now has a kernel**; the coverage guard passes on both families.
 
 *Status (2026-09-24, compiler v0 and the first end-to-end decode, #29 / #31 (a) / #25).* `monolith.compiler.compile_program`
-turns the lowered graph into a runtime `Program`: one buffer per value, a barrier after every op, the norm as
+turns the lowered graph into a runtime `Program`: one buffer per value, a barrier on every op (until the barrier pass, below), the norm as
 `rmsnorm_stat` → `norm_apply` → plain GEMV, kernels specialized to a static `T`, the pack mapped from the file in
 page-aligned windows, the `advance` op closing the step (ring, pending token, position, EOS). `monolith.generate`
 runs a prefill program (T = P ≤ 8) and a decode program (T = 1) over shared buffers, replayed from one encode.
@@ -263,6 +263,18 @@ tree (`tools/pack_weights.py --model`, 97 slabs + 135 aux tensors + RoPE tables 
 **oracle path**: the model oracle reproduces the HF golden's 48 greedy tokens and every layer's hidden state at
 cos ≥ 0.9997 (`tests/models/qwen3_5/`); the GPU path needs the M3 kernels and the compiler passes (#29–#32).
 
+*Status (2026-09-24, #29).* The barrier pass (`compiler/barriers.py`) sets the ICB flag only where an op reads what
+the ops before it wrote (or writes what they touched), at buffer granularity, with the per-T variants of one GEMV
+joining as one unit and a one-op look-back so a sibling encoded before its core still overlaps it; `barriers="all"`
+keeps v0 for A/Bs. Measured first: the flag on an ICB command orders *that command* behind everything before it
+(the reader's flag is the one that matters), so the field is now `barrier_before` and the concurrent-encoder path
+emits its memory barrier before the dispatch. The predicated per-T variants landed with the round (#38); `program.json`
+and the coverage guard were there from M4's start. Dispatch count: 175 for the 0.8B (24 layers), ≈ 7.3 per layer —
+the design's ~330 for the 27B assumed the norm scaling fused into the GEMV (measured cheaper as its own dispatch,
+gemv-kernel-study.md §3d) and one dispatch per mixer (now core + gate GEMV + merge, measured worth 3.9 %), so the 27B
+extrapolates to ≈ 470 + the round's ~50. Not done: the liveness-based activation arena (one buffer per value costs
+memory only, which is not the constraint on the machines at hand).
+
 ### M5 — Performance pass · 3 ew · **go/no-go #2**
 
 Per-op GPU timestamps → a per-token budget (GB streamed, ms, % of bound) → close the gap: fusion completeness,
@@ -292,6 +304,12 @@ one block per SIMD-group with RG 4–8 for the small-K GEMVs (−15…−35 % ea
 GEMVs (where it lost on the ALU-bound NVFP4 shapes, it wins on these small BF16 ones), SL 4 / SPB 4 for the 16-head
 GDN (−14 %); the `lm_head` keeps its default. **Decode: 6.45 vs 6.91 ms per token (−6.6 %)**, golden tokens unchanged
 — 0.96× `mlx-lm`'s 6.2 ms. Remaining in #34: attention v2 (long context), per-op math modes, barrier minimization.
+*Status (2026-09-24, #35).* The sibling overlap is in: `GQAAttention` and `GatedDeltaNet` emit their gate projection
+as a block-aligned row range of the stacked slab (`[q | k | v | gate]`, `[z | qkv | a | b]`) after the mixer core,
+un-barriered, followed by the merge / gated norm; the profile's `sibling_order` (`bus_first`) swaps the pair. A/B on
+the 0.8B / M5 Pro (paired, 4 rounds, min ms per token): every op barriered 6.848, core first 6.584 (−3.9 %), gate
+first 6.630 — the Apple10 rule holds by ~1 % within noise (decode-kernels.md §3). The M3 Pro row needs that machine.
+
 ### M6 — DSpark speculative decoding · 4 ew
 
 *Model 2 numbers (2026-09-24).* `nvidia/Qwen3-8B-NVFP4` decodes at 26.7 ms per token (37 tok/s; 6.3 GiB streamed
