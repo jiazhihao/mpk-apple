@@ -478,11 +478,16 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
 Profiles + autotune on M4 Pro/Max, M5, M5 Pro/Max (Ultra if available); MPP TensorOps block for `T > 1` on M5 —
 validated on the M5 Pro by `probes/p14_tensor_ops` (dequantize a [64 × 64] tile into threadgroup memory →
 `tensor_inline` → `matmul2d<…, execution_simdgroups<S>>` → cooperative-tensor accumulate; 8 tokens for 1.5× a T = 1
-pass in FP8 and NVFP4, 32 tokens for 1.7–1.8×; compiles from the Command Line Tools at MSL 4.0). Remaining: tile
-tuning, the cooperative right-input fill (no threadgroup staging; reference: MLX `steel/gemm/nax.h`, `quantized_nax.h`),
-and the one pipelining experiment that is M5-only — dequantize tile n+1 on the shader ALUs while the neural
-accelerator multiplies tile n (design §5.12); the accelerator **verify path** for T = 1 + L ≥ 5 wired into the
-dynamic-T program as the predicated variant; MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1). Exit: per-chip
+pass in FP8 and NVFP4, 32 tokens for 1.7–1.8×; compiles from the Command Line Tools at MSL 4.0). **#50 built
+(`kernels/gemm_tile.metal`, decode-kernels.md §6):** the cooperative right-input fill from the pack words (one
+SIMD-group per 16 × 256 tile, the reduction index permuted so a thread decodes consecutive pack columns, block
+scales cached), measured over tile shapes, loop orders and geometries on the M1 harness with the CPU reference:
+NVFP4 177 GB/s, FP8 253, INT4 204 at 8 or 16 tokens — 0.9–1.1× a T = 1 shader pass, 34–49 % above `p14` — and
+below `p14` at 32 tokens (the un-overlapped fill and the activation traffic; a multi-SIMD-group staged variant is
+the T ≥ 32 follow-up). The M5-only pipelining experiment (dequantize tile n+1 while the accelerator multiplies
+tile n) is answered by the measurement: within a SIMD-group the fill and the matmul serialize, and the operand
+registers cannot hold a second tile. Next: the accelerator **verify path** for T = 1 + L wired into the dynamic-T
+program as the predicated variant (#51); MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1). Exit: per-chip
 results table next to each chip's bound, including tokens/s with DSpark.
 
 ### Backlog (post-v1)

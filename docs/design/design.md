@@ -352,16 +352,19 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
 | `verify_select` | SERIAL | L = argmax over l ≤ γ of E[accepted ∣ c₁…c_l] / cost(1 + l) from the chip profile's T-cost table (§5.8); writes `T_this_step` |
 | `accept_scan` | SERIAL | chain verify (greedy match or rejection sampling), GDN checkpoint choice, KV advance, anchor — MPK's `mtp_verify_strict` semantics |
 
-M5 path **[M]** (`p14`): for T > 1 (verify, prompt chunks) the GEMM block dequantizes a [64 × 64] weight tile into
-threadgroup memory with ordinary loads, wraps it in a `tensor_inline` and calls `matmul2d<desc,
-execution_simdgroups<S>>`, accumulating in a cooperative tensor that is stored once — all from the Command Line
-Tools' runtime compiler at MSL 4.0. On the M5 Pro it verifies 8 tokens for 1.5× a T = 1 pass (FP8 186 GB/s, NVFP4
-119 GB/s useful) and 32 tokens for 1.7–1.8×, beating the shader kernels from T ≈ 5–8 (FP8) and T ≈ 3 (NVFP4) and
-losing below, so the autotuner picks the path per op and T. Its own streaming ceiling is 65–68 % of nominal (half
-weights read directly), which is why it is not a T = 1 path. Untested refinements: filling a cooperative right-input
-tensor instead of staging through threadgroup memory, and overlapping the next tile's dequantization with the
-current `matmul2d` (§5.12). Apple's native quantized tensor types (macOS 27: FP4/FP8 with E8M0 block-32 scales) do not match NVFP4's
-E4M3 block-16 + tensor scale, so NVFP4 stays on our decode path.
+M5 path **[M]** (`p14`, then `gemm_tile` — #50, decode-kernels.md §6): for T > 1 (verify, prompt chunks) the GEMM
+block multiplies weight tiles through `matmul2d` from the Command Line Tools' runtime compiler at MSL 4.0. `p14`
+staged a dequantized [64 × 64] tile in threadgroup memory (8 tokens for 1.5× a T = 1 pass). The built kernel fills a
+**cooperative right-input tensor straight from the pack words** — one SIMD-group per [16 × 256] tile (input
+cooperative tensors take the single-SIMD-group scope only), the reduction index permuted so each thread decodes
+TK/4 consecutive pack columns of its rows with the format snippet, a row piece one cache line, the block-scale
+words cached across a lane group's words — and streams NVFP4 at 177 GB/s, FP8 at 253, INT4 at 204 for 8 *or* 16
+tokens (the accelerator's 16-row minimum): **0.9–1.1× a T = 1 shader pass**, 34–49 % above the staged tile. At 32
+tokens the un-overlapped fill and the activation traffic leave it below the staged tile (a multi-SIMD-group staged
+variant is the T ≥ 32 follow-up). The autotuner picks the path per op and T; for NVFP4 the accelerator path even
+beats the ALU-bound shader GEMV at T = 1 (0.283 vs 0.319 ms). Apple's native quantized tensor types (macOS 27:
+FP4/FP8 with E8M0 block-32 scales) do not match NVFP4's E4M3 block-16 + tensor scale, so NVFP4 stays on our decode
+path.
 
 ### 5.7 Compiler
 
