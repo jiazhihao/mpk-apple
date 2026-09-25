@@ -56,7 +56,14 @@ class Format(ABC):
     * ``static inline void decode_word(uint4 q, thread float* out)`` — the raw codes of one word as floats; block
       and tensor scales are applied by the template, not here;
     * ``static inline float decode_scale(thread const uint* scale_words, uint g)`` — block scale ``g`` of a
-      lane-row from its scale region held in registers (``1.0f`` for formats without block scales).
+      lane-row from its scale region held in registers (``1.0f`` for formats without block scales);
+    * optionally ``#define SCALE_BIAS 1`` with ``static inline float decode_bias(thread const uint* scale_words,
+      uint g)`` — an affine format (``w = scale · code + bias``): the template adds ``bias · Σx`` per group.
+
+    ``g`` is the lane-local group index; the template computes it from the stripe's offset inside its first
+    group, so a stripe need not start on a group boundary nor be whole words (a *ragged* stripe, ``kernels.py``
+    ``unit_geometry``). The pack side: ``pack_blm(payload, scales, …)`` with the lane-row unit ``[payload | scales |
+    pad16]`` — the scale region of a lane holds the scales of every group its stripe touches.
     """
 
     name: str = ""
