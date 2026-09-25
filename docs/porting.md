@@ -298,8 +298,8 @@ Profiles are measured, never hard-coded. Two tools write `profiles/<chip>-<cores
 
 `family` is the kernel-binding key (an op bound to `"*"` runs on every family, one bound to `"apple10"` only there);
 the verify-length rule refuses to extrapolate outside the measured T range of `cost_T`. The engine picks the profile
-by GPU family and core count (`monolith.bench.profile_for_device`). On an M4, walk the hypotheses H1–H10 of
-`docs/research/apple-gpu-probes.md §4`: they say which design decisions a differing measurement would change.
+by GPU family and core count (`monolith.bench.profile_for_device`). On a chip not yet measured, walk the hypotheses
+H1–H10 of `docs/research/apple-gpu-probes.md §4`: they say which design decisions a differing measurement would change.
 
 ## 6. Checklists
 

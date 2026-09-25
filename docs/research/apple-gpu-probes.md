@@ -152,6 +152,9 @@ What the three new probes add:
 
 ## 4. Continuing on M4
 
+*Roadmap note (2026-09-25): the M4 measurement was dropped from the roadmap with the M3 Pro tasks; this section stays as
+the checklist for any chip not yet measured — the hypotheses and the design decisions each one would change.*
+
 **Do this first:** `./probes/run_all.sh` on the M4, commit the results files, fill the M4 column of §1, then walk the
 table below. M4 is the same GPU family as the M3 (Apple9, dynamic caching), so most mechanisms should carry over; the
 M5 Pro showed that *the same family label does not guarantee the same memory-system behaviour*, so the layout and

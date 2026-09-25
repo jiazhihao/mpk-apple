@@ -20,12 +20,12 @@ weights from a block-lane-major pack — not one never-returning kernel with spe
 | [`docs/research/dspark.md`](docs/research/dspark.md) | DSpark speculative decoding: the method, the public drafters for our targets, what a round costs on our hardware |
 | [`docs/porting.md`](docs/porting.md) | The porting guide: adding a model, a format, an op, a drafter or a chip — the contracts, the registries, the CI checks, the golden workflow, with the time each port took ([`porting-log.md`](docs/research/porting-log.md)) |
 | [`probes/`](probes) | The 16 probe programs. `./probes/run_all.sh` runs them on this machine (Command Line Tools only, ~5 min) and saves `probes/results/<chip>….txt`; `./probes/remote_run.sh user@host` does the same on another bare-metal Mac. Measured: M3 Pro (2026-09-19), M5 Pro (2026-09-22) |
-| [`profiles/`](profiles) | Provisional per-chip profiles derived by hand from the probe results (M3 Pro, M5 Pro) |
+| [`profiles/`](profiles) | Per-chip profiles: the M5 Pro's written by `tools/profile_writer.py` from the kernel harnesses, the M3 Pro's derived by hand from the probe results |
 
-Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); the M4 checklist is §4 of the hardware report.
+Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); §4 of the hardware report is the checklist for a chip not yet measured.
 
 Status: design and plan drafted 2026-09-19, revised 2026-09-22 (M5 Pro measurements) and 2026-09-23 (build phase,
 DSpark). The hardware-characterization half of M0 is done for the M3 Pro (13 probes) and the M5 Pro (16 probes,
 including the first real FP8/NVFP4 decode kernels and an M5 `matmul2d` path). Engine code starts with the PRs listed
-in the plan's §6; M4 measurements, baselines and goldens are open. The M5 Pro on hand has 24 GB and cannot host the
-27B target.
+in the plan's §6. The M3 Pro and M4 tasks were dropped from the roadmap on 2026-09-25: the M5 Pro on hand (24 GB) is
+the only machine, and the 27B target's baselines and goldens wait for a machine that hosts it.
