@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from .. import kernels
 from ..core.dtypes import DType
 from ..core.ir import BlockDomain, Graph, Op, OpClass, Value
-from ..core.profile import Profile
+from ..core.profile import COST_FORMAT, Profile
 from ..core.shapes import N_INJ, Sym, T, bind, numel, step_bindings
 from ..core.step_state import StepStateLayout
 from ..formats import FORMATS
@@ -39,7 +39,6 @@ ROW_SOURCE = {T: 0, N_INJ: 1}   # the StepState field a symbolic row count reads
 STATIC_ROWS = 2
 ACCEPT_LOG = "accept_log"       # the speculative program's per-step (committed << 16 | verify_len << 8 | accepted) log buffer
 CONF_LOG = "conf_log"           # … and its per-step confidences (16 floats per step)
-COST_FORMAT = {"fp8_e4m3": "fp8"}   # pack format -> the profile's cost_T key
 FALLBACK_THRESHOLD = 0.5            # the confident-prefix threshold when no cost table exists (verifying the whole block costs ×5 at T = 8)
 
 
