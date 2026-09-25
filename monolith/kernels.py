@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 from .formats import FORMATS
 from .formats.blm import PackInfo
@@ -168,14 +168,22 @@ def gdn_source() -> str:
 
 
 def gdn_macros(dk: int, dv: int, *, conv_width: int, t: int, slice_cols: int = 8, slices_per_block: int = 4,
-               tokens_per_pass: Optional[int] = None) -> Dict[str, str]:
+               tokens_per_pass: Optional[int] = None, slots: int = 1, commit: bool = False) -> Dict[str, str]:
     """Measured defaults (docs/research/decode-kernels.md §2): 8-column state slices (the register budget: 16 spills)
     and 4 slices per block (fewer, longer blocks amortize the per-block conv/norm prologue; the Hv·DV/32 blocks
-    still fill the crew for Hv ≥ 16)."""
+    still fill the crew for Hv ≥ 16). ``slots=2``: the states double-buffered by step parity (needs STEP_STATE);
+    ``commit``: the commit pass of a speculative program (T = n_inject, rewrites the slot the step's pass wrote)."""
     if dk % 32 or dv % 32 or dv % (slice_cols * slices_per_block) or conv_width < 2:
         raise ValueError("gdn_mixer: dk, dv must be multiples of 32, slice_cols·slices_per_block must divide dv, conv_width >= 2")
+    if slots not in (1, 2) or (commit and slots != 2):
+        raise ValueError("gdn_mixer: slots must be 1 or 2; the commit pass needs 2 slots")
     tp = min(t, 4) if tokens_per_pass is None else tokens_per_pass
-    return {"DK": str(dk), "DV": str(dv), "CW": f"{conv_width}u", "SL": f"{slice_cols}u", "SPB": f"{slices_per_block}u", "TP": f"{tp}u"}
+    m = {"DK": str(dk), "DV": str(dv), "CW": f"{conv_width}u", "SL": f"{slice_cols}u", "SPB": f"{slices_per_block}u", "TP": f"{tp}u"}
+    if slots == 2:
+        m["SLOTS"] = "2u"
+    if commit:
+        m["COMMIT"] = "1"
+    return m
 
 
 def gdn_workspace(t_max: int, hv: int, dv: int) -> int:
@@ -249,12 +257,21 @@ def conf_params(gamma: int, hidden: int, rank: int) -> bytes:
     return struct.pack("<IIII", gamma, hidden, rank, 0)
 
 
-def select_params(gamma: int, threshold: float, t_max: int, mode: int = 0) -> bytes:
-    return struct.pack("<IfII", gamma, threshold, t_max, mode)
+def select_params(gamma: int, threshold: float, t_max: int, mode: int = 0, cost: Optional[Sequence[float]] = None) -> bytes:
+    """The ``SelectParams`` record: mode 0 = the confident-prefix rule (``threshold``), 1 = the cost-aware rule with
+    ``cost[l]`` = the relative cost of a (1 + l)-token target pass for l = 0 … γ (≤ 16 entries; cost[0] = 1)."""
+    c = list(cost or [])
+    if mode == 1 and (len(c) < 1 or len(c) > 16 or abs(c[0] - 1.0) > 1e-6 or any(x <= 0 for x in c)):
+        raise ValueError("select_params: the cost rule needs 1..16 positive costs relative to cost[0] = 1")
+    c = c + [1.0] * (16 - len(c))
+    return struct.pack("<IfII16f", gamma, threshold, t_max, mode, *c)
 
 
-def accept_params(ring_cap: int, eos: int) -> bytes:
-    return struct.pack("<IiII", ring_cap, eos, 0, 0)
+ACCEPT_LOG_CAP = 65536
+
+
+def accept_params(ring_cap: int, eos: int, log_cap: int = 0) -> bytes:
+    return struct.pack("<IiII", ring_cap, eos, log_cap, 0)
 
 
 def draft_attn_params(*, heads: int, kv_heads: int, gamma: int, ctx_len: int, n_new: int, n_sg: int, q_off: int, k_off: int, v_off: int,

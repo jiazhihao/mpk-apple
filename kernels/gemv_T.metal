@@ -58,6 +58,9 @@
 #ifndef T_SRC
 #define T_SRC 0                      // with STEP_STATE: 0 = t_this_step (the target's T), 1 = n_inject (the drafter's context rows), 2 = the T macro (a draft block)
 #endif
+#ifndef T_LO
+#define T_LO 0                       // with T_HI: a predicated per-T variant (design §5.7) — it runs only when T_LO < T_act <= T_HI and
+#endif                               // returns at once otherwise, so a step's ALU work follows its actual T, not the program's T_max
 #define KL (K / 32u)                                   // columns per lane
 #define WPW WEIGHTS_PER_WORD
 #define XW (WPW / 8u)                                  // uint4 words of bf16 activations per weight word
@@ -114,6 +117,9 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if STEP_STATE
   if (st->done) return;
   const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T : st->t_this_step);   // dynamic T (≤ the compiled T), design §5.7
+#ifdef T_HI
+  if (T_act > T_HI || T_act <= T_LO) return;
+#endif
 #elif T_STATIC
   const uint T_act = T;                        // compile-time T (plain decode programs, benches)
 #else

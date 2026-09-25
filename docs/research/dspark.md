@@ -69,10 +69,15 @@ Per speculative round with γ = 7, relative to a T = 1 target pass (17.6 GB):
 Memory: target 21 GB + drafter 1.3–3.7 GB + injected-context KV (≈ 20 KB per committed token: 5 layers × 8 KV heads ×
 128 × K and V in BF16) + state. On the 36 GB M3 Pro the NVFP4 or INT8 drafter fits comfortably; the BF16 one is tight.
 
-*Measured so far (M5 Pro, #24; decode-kernels.md §4) [M]:* the drafter's block attention at the 8B drafter's
+*Measured so far (M5 Pro, #24/#38; decode-kernels.md §4–5) [M]:* the drafter's block attention at the 8B drafter's
 geometry costs 20 µs per layer over an empty context, 0.2 ms at 1 K and 0.8 ms at 4 K (the v1 row groups re-stream
-the context); the serial ops (`tap_concat`, `confidence`, `verify_select`, `accept_scan`) 2–27 µs each. The round's
-cost is its GEMVs — the estimate above stands.
+the context); the serial ops (`tap_concat`, `confidence`, `verify_select`, `accept_scan`) 2–27 µs each. The whole
+round on Qwen3-8B NVFP4 with `Dogacel/Qwen3-8B-DSpark` (BF16): the draft pass costs 33 ms on the shader GEMV path
+(the 5 BF16 layers at T = 7 ≈ 19 ms at ~110 GB/s, the target's `lm_head` at T = 7 11 ms, the Markov chain 3 ms) —
+the estimate above assumed the T = γ pass streams at bandwidth; the verify pass follows the cost table. With the
+cost-aware rule the step costs 60–70 ms for 1.6–2.0 tokens: 37.5 ms per token on a story prompt without the chat
+template (1.05 accepted), 27.1 ms per token = parity with plain decode (26.8) on a chat-template code prompt (2.14
+accepted). Greedy output token-identical to plain decode in every run.
 
 Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify(1 + L))`. With the llama.cpp accepted lengths above
 (2.7–4.1 at n-max 4) and the M5 Pro cost table, the break-even is comfortable on FP8 layers and marginal for the NVFP4
@@ -83,7 +88,10 @@ path are all in the plan.
 
 * Acceptance of drafters trained against Q4_K_M / NVFP4-W4A4 targets when the verifier is our W4A16 engine (same
   weights, different activation semantics): measure with llama.cpp `draft-dspark` on the M3 Pro first, then in our
-  engine.
+  engine. *(First data point, 8B on the M5 Pro: 2.1 accepted of a 7-block on a chat-template code prompt, 1.05 on a
+  plain story prompt — the prompt format the drafter was trained on matters as much as the quantization.)*
+* The T ≥ 2 GEMM path (M9, #51): the round's cost is the drafter's block pass at T = γ and the verify pass at
+  T = 1 + L, both ALU-bound on the shader path; with MLX-class GEMMs at T = 2–8 the same acceptance pays off.
 * The best `L` per chip: `verify_select` vs fixed L = 2 … 7, greedy and sampled.
 * Whether `W₂` survives INT8 re-quantization without moving acceptance, and whether top-M bias pruning can be made exact.
 * Whether the STS temperatures shipped with (or fitted for) a drafter transfer to Apple-sized contexts.

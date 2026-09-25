@@ -283,7 +283,7 @@ def model_accept(state, tokens, ring_cap, eos):
         return s, writes
     t = s["t_this_step"]
     if s["prefill_left"] > 0:
-        s["position"] += t; s["step"] += 1; s["n_inject"] = t
+        s["position"] += t; s["step"] += 1; s["n_inject"] = t; s["checkpoint_index"] = t
         return s, writes
     L = s["verify_len"]
     base = t - 1 - L
@@ -305,7 +305,8 @@ def model_accept(state, tokens, ring_cap, eos):
             break
     s["ring_head"] = head; s["accepted"] = acc; s["anchor"] = last
     s["pending_tokens"] = [last] + list(s["pending_tokens"][1:])
-    s["position"] += base + committed; s["step"] += 1; s["verify_len"] = 0; s["t_this_step"] = 1; s["n_inject"] = base + committed
+    s["position"] += base + committed; s["step"] += 1; s["verify_len"] = 0; s["t_this_step"] = 1
+    s["n_inject"] = s["checkpoint_index"] = base + committed
     if stop:
         s["done"] = 1
     return s, writes
@@ -315,11 +316,16 @@ def _accept(dev, state, tokens, ring_cap=16, eos=-1):
     pso = nt.Pipeline(_spec_lib(dev), "accept_scan")
     st = nt.Buffer(dev, LAYOUT.pack(state))
     ring = nt.Buffer(dev, ring_cap * 8); ring.fill(0)
+    log = nt.Buffer(dev, 64 * 4); log.fill(0)
     d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, np.asarray(tokens, np.int32).tobytes())).buffer(1, st).buffer(2, ring)
-         .bytes(3, kernels.accept_params(ring_cap, eos)).grid(1).threadgroup(32))
+         .bytes(3, kernels.accept_params(ring_cap, eos, 64)).buffer(4, log).grid(1).threadgroup(32))
     _run(dev, d)
     got = LAYOUT.unpack(st.read(0, LAYOUT.size))
     slots = np.frombuffer(ring.read(0, ring_cap * 8), dtype=np.uint64)
+    entry = int(np.frombuffer(log.read(0, 64 * 4), dtype=np.uint32)[state["step"] % 64])
+    if not state.get("done"):
+        exp_entry = ((state["t_this_step"] << 16) | 0xFFFF) if state.get("prefill_left") else ((got["position"] - state["position"] - (state["t_this_step"] - 1 - state["verify_len"])) << 16 | got["accepted"])
+        assert entry == exp_entry or got["error"], (entry, exp_entry)      # the step's log: (committed << 16) | accepted
     return got, {i: int(v) for i, v in enumerate(slots) if v}
 
 

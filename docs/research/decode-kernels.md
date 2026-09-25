@@ -167,3 +167,43 @@ layers, below one W₂ pass of the Markov chain (the 78 MB BF16 W₂ streamed γ
 drafter's weights (1.9 GB BF16 for the 8B drafter ≈ 13 ms) — the round's cost is the drafter's GEMVs and the target's
 `lm_head` at T = γ, exactly the bytes the dspark.md §3 estimate counts; the serial ops are dispatch-cost only.
 
+## 5. The speculative step on the M5 Pro (#38) — Qwen3-8B NVFP4 with its public DSpark drafter
+
+**What runs.** One dynamic-T program holds the whole round (design §5.8): the target's verify pass over the
+pending tokens `[anchor, d_1 … d_L]`, `accept_scan`, the recurrent-state commit passes (none for this dense model),
+the drafter's injection of the committed positions' tapped features, its block pass at T = γ = 7 through the target's
+`lm_head`, the Markov chain, the confidence head and `verify_select`; replayed from one encode for prefill chunks and
+decode alike, tokens drained from the ring — the host is idle (`host busy 0.0 %`). The target's GEMVs come as
+predicated per-T variants (T = 1, 2, 4, 8): each variant is compiled for its own T and returns at once unless the
+step's T falls in its range, so the ALU-bound NVFP4 work follows the verify length rather than `t_max` (without the
+variants every step paid the T = 8 cost: 190 ms). The variants add 450 early-returning dispatches (~1 ms) to the 378.
+
+**Measured** (`python -m monolith.generate … --drafter … --verify …`, 128 greedy tokens, the tokens identical to the
+plain decode's in every run; `python -m monolith.trace … --drafter …` for the budget) [M]:
+
+| decode | ms / token (GPU) | tok/s | tokens / step | mean accepted (of 7) |
+|---|---|---|---|---|
+| plain | 26.8 | 37.3 | 1 | – |
+| speculative, cost-aware rule, story prompt (no chat template) | 37.5 | 26.7 | 1.59 | 1.05 |
+| speculative, confident-prefix 0.5, story prompt | 41.2 | 24.3 | 1.59 | 1.21 |
+| speculative, whole block verified (L = 7), story prompt | 76.1 | 13.1 | 1.76 | 1.74 |
+| speculative, L = 0 (the round's fixed cost) | 60.0 | 16.7 | 1.00 | 0 |
+| speculative, cost-aware rule, chat-template code prompt | 27.1 | 36.9 | 1.98 | 2.14 |
+
+The step's budget with the cost-aware rule (sum of per-op minima over 5 profiled steps, story prompt): 70.4 ms —
+GEMVs 52.6 ms (the target's 36 layers at T ≤ 4 ≈ 33 ms, the drafter's 5 BF16 layers at T = 7 ≈ 19 ms: its
+`gate_up` alone 1.85 ms per layer = 109 GB/s), `lm_head` 15.3 ms (the drafter's block at T = 7: 11.1 ms = 112 GB/s;
+the target's at T ≤ 4: 4.2 ms), attention 1.3 ms, `norm_apply` 0.9 ms, the draft attention 0.18 ms, the serial ops
+< 0.05 ms. The L = 0 run measures the round's fixed cost directly: 60 ms = the plain step (27) + the draft pass (33).
+
+What it says: (1) correctness holds — greedy speculative decode is token-identical to plain greedy decode on the
+8B (and on the hybrid 0.8B with a random drafter that forces a rollback every step: the GDN commit pass); (2) on the
+shader-FMA GEMV path the round does not pay for itself here: the draft pass costs 33 ms because BF16 at T = 7 runs
+at ~110 GB/s (ALU-bound) and each verified draft costs the NVFP4 cost table's ×1.28 … ×1.79, so the cost-aware rule
+caps L at 3 and the best case is parity (the chat-template prompt, 2.1 accepted); (3) acceptance is the drafter's,
+not ours — the GPU's drafts equal the oracle's on the golden's real target features — and it depends on the prompt
+format the drafter was trained on (2.14 with the chat template vs 1.05 without). The levers are the ones the design
+names: a SIMD-group-matrix / MPP GEMM for T ≥ 2 (M9, #51) for both the verify pass and the drafter's block pass
+(MLX's `qmm_t` streams NVFP4 at 85–91 % of nominal at T = 2–4 on this chip), the drafter's weights in FP8/NVFP4, and
+the acceptance measurement on the prompt set (#40).
+

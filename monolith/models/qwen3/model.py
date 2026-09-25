@@ -12,7 +12,7 @@ from ...core.dtypes import DType
 from ...core.ir import Graph, Value
 from ...core.shapes import T
 from ...formats.fp import f32_to_bf16
-from ...nn import DecoderLayer, Embedding, GatedMLP, GQAAttention, GreedySampler, LMHead, LowerContext, Model, Module, RMSNorm, StateEntry, StateSpec
+from ...nn import DecoderLayer, Embedding, GatedMLP, GQAAttention, GreedySampler, LMHead, LowerContext, Model, Module, RMSNorm, StateEntry, StateSpec, state_shape
 from ...nn.rope import rope_tables_permuted
 from ..registry import register_model
 from .config import Qwen3Config
@@ -21,11 +21,11 @@ from .weights import PREFIX, bind_checkpoint_formats
 
 @register_model("Qwen3ForCausalLM")
 class Qwen3Model(Model):
-    def __init__(self, config: Qwen3Config, *, max_context: int = 4096, gamma_max: int = 0, pack_rows: int = 16,
+    def __init__(self, config: Qwen3Config, *, max_context: int = 4096, pack_rows: int = 16,
                  num_layers_override: int | None = None) -> None:
         super().__init__(prefix="")
         self.config = config
-        self.max_context, self.gamma_max = max_context, gamma_max
+        self.max_context = max_context
         c = config
         h, eps, d = c.hidden_size, c.rms_norm_eps, c.head_dim
         self.n_layers = c.num_hidden_layers if num_layers_override is None else num_layers_override
@@ -61,7 +61,7 @@ class Qwen3Model(Model):
     def state_spec(self) -> StateSpec:
         entries: List[StateEntry] = []
         for blk in self.blocks:
-            entries += blk.mixer.state_entries(checkpoints=self.gamma_max + 1)
+            entries += blk.mixer.state_entries()
         return StateSpec(tuple(entries))
 
     def feature_taps(self) -> List[int]:
@@ -84,11 +84,11 @@ class Qwen3Model(Model):
         tokens = xs[0] if xs else g.input("tokens", (T,), DType.I32)
         ctx = LowerContext(t=tokens.shape[0])
         for e in self.state_spec().entries:
-            ctx.states[e.name] = g.state(e.name, e.shape, e.dtype)
+            ctx.states[e.name] = g.state(e.name, state_shape(e), e.dtype)
         for name, (dtype, arr) in self.tables().items():
             ctx.consts[name] = g.const(name, tuple(int(x) for x in np.asarray(arr).shape), DType.parse(dtype.lower()))
         h = self.embed_tokens.lower(g, tokens, ctx)
-        self.tap_values = {}
+        self.tap_values = {-1: h}
         for blk in self.blocks:
             h = blk.lower(g, h, ctx)
             self.tap_values[blk.index] = h

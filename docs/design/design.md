@@ -429,6 +429,13 @@ own engine, then the HF golden); sampling verification must preserve the target 
 distribution tests). The drafter's block is checked against the DeepSpec reference implementation on the same anchor and
 context (draft tokens identical in greedy mode, confidences within 1e-3).
 
+**Measured (M5 Pro, 2026-09-24; decode-kernels.md §5) [M].** The round as built: with the cost-aware rule and the
+shader-FMA GEMVs, Qwen3-8B NVFP4 + its public drafter decodes at 37.5 ms per token on a plain story prompt (1.05
+drafts accepted of 7) and at 27.1 ms — parity with plain decode (26.8) — on a chat-template prompt (2.14 accepted);
+the draft pass costs 33 ms because BF16 at T = 7 runs ALU-bound at ~110 GB/s, and each verified draft costs the
+cost table's ×1.28–×1.79, so L is capped at 3. The token-identity gate holds; the speed gate waits for the T ≥ 2
+GEMM path (§5.6, M9) — the prediction two paragraphs up, now with numbers.
+
 **Drafter provenance.** Public drafters were trained against a *particular* target quantization (Q4_K_M or NVFP4 W4A4)
 by capturing that target's hidden states; our W4A16 target is close but not identical, so acceptance is measured, not
 assumed. If it disappoints, the NeMo AutoModel / SpecForge / DeepSpec recipes retrain a drafter on-policy against our

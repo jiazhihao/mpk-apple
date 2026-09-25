@@ -154,3 +154,81 @@ def test_t_active_and_slice_width(dev):
     assert np.all(got[2:] == 0)
     conv, rec = h.get_state()
     _check(got[:2], ref, rec, state["l.rec_state"].numpy(), conv, state["l.conv_state"].float().numpy())
+
+
+def test_state_slots_and_commit_pass(dev):
+    """SLOTS=2: a step reads slot (step & 1) and writes the other; the COMMIT variant, after the accept scan advanced
+    ``step``, recomputes the recurrence for n_inject tokens from the slot the step read and overwrites the slot it
+    wrote — the state of a rejected draft never survives; the next step continues from the committed state."""
+    torch = pytest.importorskip("torch")
+    from monolith.core.step_state import StepStateLayout
+
+    m, rng = _module(64, 16, 16, 128, 128, seed=8)
+    lay = StepStateLayout()
+    src = kernels.PRELUDE + lay.to_msl() + "\n" + kernels.template("gdn_mixer.metal")
+    main = dict(kernels.gdn_macros(128, 128, conv_width=CW, t=8, slots=2), STEP_STATE="1")
+    com = dict(kernels.gdn_macros(128, 128, conv_width=CW, t=8, slots=2, commit=True), STEP_STATE="1")
+    lib_m, lib_c = nt.Library(dev, src, main), nt.Library(dev, src, com)
+    pso_m, pso_n, pso_c = nt.Pipeline(lib_m, "gdn_mixer"), nt.Pipeline(lib_m, "gdn_norm"), nt.Pipeline(lib_c, "gdn_mixer")
+    hv, kd, vd = m.v_heads, m.key_dim, m.value_dim
+    conv_bytes, rec_bytes = m.conv_dim * (CW - 1) * 2, hv * 128 * 128 * 4
+    conv, rec = nt.Buffer(dev, 2 * conv_bytes), nt.Buffer(dev, 2 * rec_bytes)
+    conv.fill(0); rec.fill(0)
+    o_part = nt.Buffer(dev, kernels.gdn_workspace(8, hv, m.dv))
+    conv_w = m.param("conv_w").reshape(m.conv_dim, CW).float().numpy()
+    aux = [nt.Buffer(dev, f32_to_bf16(conv_w).tobytes()), nt.Buffer(dev, (-np.exp(m.param("a_log").float().numpy())).astype(np.float32).tobytes()),
+           nt.Buffer(dev, m.param("dt_bias").float().numpy().astype(np.float32).tobytes()),
+           nt.Buffer(dev, m.param("norm_w").float().numpy().astype(np.float32).tobytes())]
+    n_sg = 12 * dev.info().gpu_cores
+
+    def run(proj, state_fields, commit=False):
+        t = proj.shape[0]
+        pf = f32_to_bf16(proj.float().numpy())
+        params = kernels.gdn_params(hv=hv, hk=m.k_heads, t_active=t, q_off=0, k_off=kd, v_off=2 * kd, z_off=m.conv_dim, a_off=m.conv_dim + vd,
+                                    b_off=m.conv_dim + vd + hv, in_stride=pf.shape[1], ab_stride=pf.shape[1], ab_separate=False, out_stride=vd,
+                                    n_sg=n_sg, key_dim=kd, eps=EPS)
+        st = nt.Buffer(dev, lay.pack(state_fields))
+        mb = nt.Buffer(dev, pf.tobytes())
+        d = (nt.Dispatch().pipeline(pso_c if commit else pso_m).buffer(0, mb).buffer(1, mb).buffer(2, conv).buffer(3, rec).buffer(4, aux[0])
+             .buffer(5, aux[1]).buffer(6, aux[2]).buffer(7, o_part).bytes(9, params).buffer(15, st).grid(-(-(n_sg * 32) // 384)).threadgroup(384).barrier())
+        ds = [d]
+        out = nt.Buffer(dev, t * vd * 2); out.fill(0)
+        if not commit:
+            ds.append(nt.Dispatch().pipeline(pso_n).buffer(0, o_part).buffer(1, mb).buffer(2, aux[3]).buffer(3, out).bytes(4, params).buffer(15, st)
+                      .grid(t * hv).threadgroup(32))
+        r = nt.Queue(dev).run(ds)
+        assert not r.error, r.error
+        return bf16_to_f32(np.frombuffer(out.read(0, t * vd * 2), dtype=np.uint16).reshape(t, vd))
+
+    def slot(i):
+        c = bf16_to_f32(np.frombuffer(conv.read(i * conv_bytes, conv_bytes), dtype=np.uint16)).reshape(m.conv_dim, CW - 1)
+        r = np.frombuffer(rec.read(i * rec_bytes, rec_bytes), dtype=np.float32).reshape(hv, 128, 128)
+        return c, r
+
+    def fresh():
+        return {"l.conv_state": torch.zeros(m.conv_dim, CW - 1, dtype=torch.bfloat16), "l.rec_state": torch.zeros(hv, 128, 128)}
+
+    proj = _proj(rng, torch, 3, m.in_proj.n)
+    # step 0: three tokens (two drafts follow the anchor) from slot 0 into slot 1
+    s_all = fresh()
+    with torch.no_grad():
+        ref = m.mix(proj, s_all).float().numpy()
+    got = run(proj, {"step": 0, "t_this_step": 3})
+    c1, r1 = slot(1)
+    _check(got, ref, r1, s_all["l.rec_state"].numpy(), c1, s_all["l.conv_state"].float().numpy())
+    assert np.all(slot(0)[1] == 0)                                    # the read slot is untouched
+    # the accept scan committed two tokens (step → 1, n_inject = 2): the commit pass rewrites slot 1 from slot 0
+    s_two = fresh()
+    with torch.no_grad():
+        m.mix(proj[:2], s_two)
+    run(proj, {"step": 1, "n_inject": 2}, commit=True)
+    c1, r1 = slot(1)
+    assert np.array_equal(c1, s_two["l.conv_state"].float().numpy())
+    assert np.abs(r1 - s_two["l.rec_state"].numpy()).max() <= 8 * 2.0 ** -23 * float(np.abs(s_two["l.rec_state"].numpy()).max())
+    # step 1: one token from slot 1 into slot 0 — the continuation of the committed state
+    proj2 = _proj(rng, torch, 1, m.in_proj.n)
+    with torch.no_grad():
+        ref2 = m.mix(proj2, s_two).float().numpy()
+    got2 = run(proj2, {"step": 1, "t_this_step": 1})
+    c0, r0 = slot(0)
+    _check(got2, ref2, r0, s_two["l.rec_state"].numpy(), c0, s_two["l.conv_state"].float().numpy())

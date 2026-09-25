@@ -10,10 +10,13 @@
 //                sigmoid runs in FP32. One SIMD-group per position.
 // verify_select: one thread. Advances the drafter's context length by the positions the draft pass injected, copies
 //                the block's drafts and confidences into StepState and, outside a prefill chunk, chooses the verify
-//                length L (the reference's confident-prefix rule: the leading positions with confidence ≥ threshold;
-//                threshold ≤ 0 verifies the whole block; L ≤ t_max − 1), then sets the next step's tokens
-//                pending_tokens = [anchor, d_0 … d_{L-1}] and t_this_step = 1 + L. During a prefill chunk the host
-//                feeds the next chunk and only the bookkeeping runs.
+//                length L ≤ min(γ, t_max − 1): mode 0 = the reference's confident-prefix rule (the leading positions
+//                with confidence ≥ threshold; threshold ≤ 0 verifies the whole block), mode 1 = the cost-aware rule
+//                of design §5.8, L = argmax_l (1 + Σ_{i≤l} a_i) / cost[l] with a_i = Π_{j≤i} c_j the survival
+//                probability of draft i and cost[l] the profile's cost of a (1 + l)-token target pass relative to a
+//                single-token pass. Then it sets the next step's tokens pending_tokens = [anchor, d_0 … d_{L-1}] and
+//                t_this_step = 1 + L. During a prefill chunk the host feeds the next chunk and only the bookkeeping
+//                runs.
 // accept_scan:   one thread; the step's closing SERIAL op when a drafter is wired in (replaces `advance`). A prefill
 //                chunk advances the position and marks its t positions for injection. Otherwise the step fed
 //                pending_tokens = [prompt tail …, anchor, d_0 … d_{L-1}] (L = verify_len; the anchor is at row
@@ -21,8 +24,10 @@
 //                = the matching prefix, bonus = the target's token after it; the accepted drafts and the bonus go to
 //                the ring (sequence-tagged, stopping at the first EOS), position advances by the committed count
 //                (the KV entries of rejected positions are overwritten by later steps), the anchor becomes the last
-//                committed token, n_inject = base + committed (the rows whose target features the drafter injects
-//                next), t_this_step returns to 1 and `done` is set at EOS.
+//                committed token, n_inject = checkpoint_index = base + committed (the rows whose target features
+//                the drafter injects next and the state commit passes replay), t_this_step returns to 1 and `done`
+//                is set at EOS. Each step logs (committed << 16) | accepted at log[step % log_cap] (a prefill chunk
+//                logs (t << 16) | 0xFFFF) for the acceptance statistics.
 #ifndef STEP_STATE
 #define STEP_STATE 0
 #endif
@@ -38,8 +43,8 @@
 
 struct ConcatParams { uint k; uint t_active; uint pad0; uint pad1; };
 struct ConfParams { uint gamma; uint hidden; uint rank; uint pad; };
-struct SelectParams { uint gamma; float threshold; uint t_max; uint pad; };
-struct AcceptParams { uint ring_cap; int eos; uint pad0; uint pad1; };
+struct SelectParams { uint gamma; float threshold; uint t_max; uint mode; float cost[16]; };
+struct AcceptParams { uint ring_cap; int eos; uint log_cap; uint pad1; };
 
 kernel void tap_concat(device const uint4* s0 [[buffer(0)]], device const uint4* s1 [[buffer(1)]], device const uint4* s2 [[buffer(2)]],
                        device const uint4* s3 [[buffer(3)]], device const uint4* s4 [[buffer(4)]], device const uint4* s5 [[buffer(5)]],
@@ -99,9 +104,20 @@ kernel void verify_select(device const int* drafts [[buffer(0)]], device const f
     st->confidence[k] = conf[k];
   }
   uint L = 0u;
-  if (p.threshold <= 0.0f) L = p.gamma;
-  else while (L < p.gamma && conf[L] >= p.threshold) L++;
-  if (L > p.t_max - 1u) L = p.t_max - 1u;
+  const uint lmax = min(p.gamma, p.t_max - 1u);
+  if (p.mode == 1u) {
+    float a = 1.0f, expect = 1.0f, best = 1.0f / p.cost[0];
+    for (uint l = 1; l <= lmax; l++) {
+      a *= conf[l - 1u];
+      expect += a;
+      const float score = expect / p.cost[l];
+      if (score > best) { best = score; L = l; }
+    }
+  } else if (p.threshold <= 0.0f) {
+    L = lmax;
+  } else {
+    while (L < lmax && conf[L] >= p.threshold) L++;
+  }
   st->gamma = p.gamma;
   st->verify_len = L;
   st->pending_tokens[0] = st->anchor;
@@ -110,13 +126,15 @@ kernel void verify_select(device const int* drafts [[buffer(0)]], device const f
 }
 
 kernel void accept_scan(device const int* token [[buffer(0)]], device StepState* st [[buffer(1)]], device ulong* ring [[buffer(2)]],
-                        constant AcceptParams& p [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+                        constant AcceptParams& p [[buffer(3)]], device uint* log [[buffer(4)]], uint i [[thread_position_in_grid]]) {
   if (i != 0 || st->done) return;
   const uint t = st->t_this_step;
   if (st->prefill_left > 0u) {                                // a prefill chunk: nothing to verify, inject its positions
+    if (p.log_cap) log[st->step % p.log_cap] = (t << 16) | 0xFFFFu;
     st->position = st->position + t;
     st->step = st->step + 1u;
     st->n_inject = t;
+    st->checkpoint_index = t;
     return;
   }
   const uint L = st->verify_len;                              // 0 on the step that samples the first token
@@ -137,6 +155,7 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
     last = tok;
     if (p.eos >= 0 && tok == p.eos) { stop = true; break; }   // nothing after the first EOS is committed
   }
+  if (p.log_cap) log[st->step % p.log_cap] = (committed << 16) | acc;
   st->ring_head = head;
   st->accepted = acc;
   st->anchor = last;
@@ -146,5 +165,6 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
   st->verify_len = 0u;
   st->t_this_step = 1u;
   st->n_inject = base + committed;
+  st->checkpoint_index = base + committed;
   if (stop) st->done = 1u;
 }
