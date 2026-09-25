@@ -409,9 +409,11 @@ acceptance probability so the verifier can choose how many draft tokens to verif
    scheduler reduced to batch 1: the confidence chain supplies the expected acceptance, the chip profile the cost.
    Write `T_this_step = 1 + L`.
 5. *Target verify pass* at T = 1 + L (the ordinary step program with dynamic T), tapping features for the next round.
-6. *Accept scan* (`SERIAL`): greedy match, or rejection sampling with `min(1, pₜ(xₖ)/p_d(xₖ))`; commit the accepted
-   prefix plus the target's bonus/corrected token; keep GDN checkpoint `accepted`, advance the KV by `accepted + 1`,
-   set the next anchor, append tokens to the ring, check stop conditions.
+6. *Accept scan* (`SERIAL`): greedy match, or rejection sampling with `min(1, pₜ(xₖ)/p_d(xₖ))` — with greedy
+   drafts (a point-mass `p_d`) this is exactly "sample `yₖ ~ pₜ` at every position with the ordinary sampler and
+   accept `xₖ` iff `yₖ = xₖ`", so the scan compares the sampled tokens with the drafts and needs no mode of its own;
+   commit the accepted prefix plus the target's bonus/corrected token; commit the recurrent states of the accepted
+   prefix, advance the KV by `accepted + 1`, set the next anchor, append tokens to the ring, check stop conditions.
 
 **Cost model.** Per round: drafter weights once (1.3–3.7 GB), `lm_head` at T = γ (0.72 GB), γ × W₂ (0.9 GB in BF16,
 0.45 in INT8), plus the verify pass at `cost(1 + L)`. The `cost(T)` table measured so far is for shader-FMA kernels;

@@ -58,7 +58,14 @@ class Generation:
 
 
 class Session:
-    """A model + pack on a device: compiles a program per static T on demand and keeps the device buffers."""
+    """A model + pack on a device: compiles a program per static T on demand and keeps the device buffers.
+
+    Sampling with a drafter is exact speculative sampling (design §5.8): the drafts are greedy, so the verifier that
+    preserves the target's distribution draws ``y_k ~ p_t(· | prefix, d_1 … d_k)`` at every position with the
+    ordinary sampler and accepts draft ``d_{k+1}`` exactly when ``y_k`` equals it — the first mismatch's ``y_k`` is
+    the correction, ``y_L`` the bonus. Every committed token is then a sample of the target's conditional (a
+    rejection rule with ``min(1, p_t/q)`` reduces to this when ``q`` is a point mass), so the accept scan needs no
+    sampling mode of its own."""
 
     def __init__(self, model: Model, pack_dir: str, profile: Optional[Profile] = None, *, layout: Optional[StepStateLayout] = None,
                  eos: int = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
@@ -78,8 +85,6 @@ class Session:
         self.drafter, self.drafter_pack = drafter, (PackFile(drafter_pack) if drafter is not None else None)
         if drafter is not None and drafter_pack is None:
             raise ValueError("Session: a drafter needs its pack (drafter_pack)")
-        if temperature > 0 and drafter is not None:
-            raise NotImplementedError("Session: sampling with a drafter (rejection sampling, #39) is not implemented; use greedy")
         if layout is None and drafter is not None:
             layout = StepStateLayout(t_max=max(8, drafter.gamma + 1), gamma_max=max(7, drafter.gamma))
         self.layout = layout or StepStateLayout()
