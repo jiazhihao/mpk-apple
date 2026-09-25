@@ -79,7 +79,7 @@ def _norm_inputs(rng, t, scale=1.0):
     return h, nw, stat, x_ref
 
 
-@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8"])
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
 @pytest.mark.parametrize("t", [1, 4])
 def test_norm_input_matches_reference_norm(dev, fmt, t):
     g = Gemv(dev, fmt, 100, 16, t)
@@ -92,7 +92,7 @@ def test_norm_input_matches_reference_norm(dev, fmt, t):
     # T*WPW > 64 takes the word path (NVFP4 T=4 above already does); the preconvert path is BF16/FP8 T ≤ 8
 
 
-@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3"])
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
 def test_residual_epilogue(dev, fmt):
     t, n = 3, 96
     g = Gemv(dev, fmt, n, 16, t)
@@ -105,7 +105,7 @@ def test_residual_epilogue(dev, fmt):
     assert chk.ok() and chk.max_ulp_elementwise <= 1, chk
 
 
-@pytest.mark.parametrize("fmt,rows", [("nvfp4", 16), ("fp8_e4m3", 16), ("bf16", 8), ("int8", 16)])
+@pytest.mark.parametrize("fmt,rows", [("nvfp4", 16), ("fp8_e4m3", 16), ("bf16", 8), ("int8", 16), ("int4_affine", 16)])
 @pytest.mark.parametrize("t", [1, 2])
 def test_silu_mul_epilogue(dev, fmt, rows, t):
     n = 8 * rows                                                          # 8 blocks, chunk = rows/2 outputs each

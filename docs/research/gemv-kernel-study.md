@@ -14,7 +14,7 @@ Knobs: rows per block `R`, tokens `T`, row group `RG`, lane order, and the geome
 core, `×n` = n threadgroups of 384 per core) or one block per SIMD-group in small threadgroups (the MLX/llama.cpp
 shape, "1blk/SG tg64").
 
-## 2. M1 sweep (reference NVFP4 decode, R = 16, RG = 2) — `apple-m5-pro-20c_gemv_m1.jsonl`, 252 points
+## 2. M1 sweep (reference NVFP4 decode, R = 16, RG = 2) — `apple-m5-pro-20c_gemv_m1.jsonl`, 378 points
 
 Best geometry per shape and T; the crew ×1 number in the last column:
 
@@ -30,8 +30,23 @@ Best geometry per shape and T; the crew ×1 number in the last column:
 | NVFP4 | 17408×5120 | 157 (51 %) | 110 (36 %) | 78 (26 %) | 118 |
 | NVFP4 | 5120×17408 | 143 (47 %) | 110 (36 %) | 80 (26 %) | 88 |
 | NVFP4 | 248320×5120 | 184 (60 %) | 127 (41 %) | 89 (29 %) | 131 |
+| INT4 affine | 17408×5120 | 242 (79 %) | 136 (44 %) | 88 (29 %) | 201 |
+| INT4 affine | 5120×17408 | 255 (83 %) | 151 (49 %) | 96 (31 %) | 158 |
+| INT4 affine | 10240×5120 | 231 (75 %) | 144 (47 %) | 93 (30 %) | 196 |
+| INT4 affine | 12288×5120 | 243 (79 %) | 131 (43 %) | 85 (28 %) | 180 |
+| INT4 affine | 6144×5120 | 247 (80 %) | 114 (37 %) | 71 (23 %) | 179 |
+| INT4 affine | 5120×6144 | 254 (83 %) | 153 (50 %) | 99 (32 %) | 159 |
+| INT4 affine | 248320×5120 | 261 (85 %) | 158 (51 %) | 97 (32 %) | 220 |
 
 Also at the crew geometry, T = 1, 17408×5120: BF16 284 GB/s (93 %), INT8 266 GB/s (87 %).
+
+The INT4 affine rows (format 2, #47, 2026-09-24, the same sweep: 126 points, every point ≤ 1 ULP of the oracle) are
+the plugin's own decode — nibble → float, one FP32 (scale, bias) pair per group of 64, the bias folded in as
+`bias · Σx` per group — at 0.625 bytes per weight. At T = 1 it streams at 75–85 % of nominal, a third above NVFP4's
+LUT decode (47–60 %) and within 10 % of FP8; the best geometry at T = 1 was one block per SIMD-group on every shape
+(the crew ×1 column is 158–220). At T = 2 and 4 it falls to the ALU bound like the other formats (37–51 %, 23–32 %).
+MLX's `quantized_matmul` in affine-4 (§3c's baseline file, `affine4_g64`) streams the same shapes at 247–285 GB/s
+(82–93 %) at T = 1: ours is 0.85–0.98× MLX — the same gap as NVFP4, the same T ≥ 2 remedy (M9).
 
 ## 3. NVFP4 decode study — `apple-m5-pro-20c_nvfp4_decode.jsonl`
 

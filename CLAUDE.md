@@ -30,7 +30,10 @@ path (M9). The barrier pass and the sibling overlap (#29, #35: the gate GEMV bes
 from 6.85 to 6.58 ms per token; the ICB barrier flag orders the flagged command behind all before it (measured;
 the field is `barrier_before`). #34 closed with a measured no: the attention v2 (kept as a per-profile option)
 is not the long-context win, SIMD-group-matrix scoring is (M9); fast math buys 1–2 % and breaks bit-identity,
-so safe stays. Next: M8 (format 2, the porting guide) and M9 (the GEMM path). Speculative decoding targets a **DSpark** drafter, not the MTP head.
+so safe stays. Format 2 (#47) is built: affine INT4 groups (`formats/int4_affine`, MLX / AWQ / GPTQ) as a plugin —
+the MLX 4-bit 0.8B decodes token-identical to its oracle; the port needed a per-group bias hook, the quantized-embedding
+gather, ragged lane stripes and a package-declared value adapter (mlx_lm folds `1 +` into the zero-centered norms;
+porting-log.md). Next: the porting guide (#48) and M9 (the GEMM path). Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order
 
@@ -98,7 +101,7 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order: M8's format 2 (#47) and the porting guide (#48), then M9 — the
+0. **Keep building** — the roadmap issues in order: M8's porting guide (#48), then M9 — the
    T ≥ 2 GEMM kernel (#50/#51: SIMD-group matrices / MPP tensor ops for the GEMVs at T ≥ 2 and the attention core)
    is what the speculative gate and the long-context rows need on this chip. The 27B items (#36, #40's M3 Pro rows,
    #46) and the M3 Pro / M4 rows of the A/B tables need those machines.

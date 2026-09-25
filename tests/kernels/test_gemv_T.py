@@ -18,7 +18,7 @@ def dev():
     return nt.Device()
 
 
-def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None):
+def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None, K=K):
     rng = np.random.default_rng(3)
     spec = random_spec(fmt, n, K, rng)
     data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order))
@@ -42,11 +42,21 @@ def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False
     return out, ref, t_act
 
 
-@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8"])
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
 @pytest.mark.parametrize("lane_order", ["contiguous", "interleaved16"])
 @pytest.mark.parametrize("rows,t", [(16, 1), (4, 1), (16, 2), (8, 4), (8, 8)])
 def test_gemv_matches_oracle(dev, fmt, lane_order, rows, t):
     out, ref, _ = _run(dev, fmt, 100, rows, t, lane_order)        # 100 rows: partial last block
+    chk = check_against_oracle(out, ref)
+    assert chk.ok(), chk
+
+
+@pytest.mark.parametrize("fmt", ["int4_affine", "nvfp4"])
+@pytest.mark.parametrize("t", [1, 4])                                  # both activation paths (X_PRECONVERT at T = 1)
+def test_gemv_ragged_stripe(dev, fmt, t):
+    """K = 3584: a lane's stripe is 112 columns — 3.5 words of 32 nibbles (the last one partial, its tail masked),
+    the scale bytes in the tail word, and (int4_affine) stripes starting 0/48/32/16 columns into a group of 64."""
+    out, ref, _ = _run(dev, fmt, 40, 8, t, "interleaved16", K=3584)
     chk = check_against_oracle(out, ref)
     assert chk.ok(), chk
 

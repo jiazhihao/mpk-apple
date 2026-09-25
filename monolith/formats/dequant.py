@@ -3,7 +3,7 @@
 
     python -m monolith.formats.dequant --model <dir> --out <dir> [--keep-vision] [--shard-gb 4]
 
-NVFP4 and FP8 groups are dequantized with the format oracles; BF16/F32 tensors are copied; ``input_scale`` tensors
+Quantized groups (NVFP4, FP8, affine INT4 …) are dequantized with the format oracles; BF16/F32 tensors are copied; ``input_scale`` tensors
 (activation quantization) are dropped; ``config.json`` is copied without its ``quantization_config``.
 """
 
@@ -52,7 +52,7 @@ def dequantize_dir(model: Path, out: Path, *, keep_vision: bool = False, shard_b
             continue
         base = name[: -len(".weight")] if name.endswith(".weight") else None
         g = groups.get(base) if base else None
-        if g is not None and g.format in ("nvfp4", "fp8_e4m3"):
+        if g is not None and g.format not in ("", "bf16", "f32"):          # every quantized format with a plugin
             fmt = FORMATS.get(g.format)
             shape = logical_shape(g, shapes)
             tensors = {"weight": st.get(g.weight)}

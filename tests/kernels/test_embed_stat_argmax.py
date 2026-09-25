@@ -109,3 +109,26 @@ def test_argmax(dev, vocab):
     ref = lf.argmax(-1)
     assert tok[:3].tolist() == ref[:3].tolist() and tok[1] == 5 and tok[0] == vocab - 1
     assert tok[3] == -1                                                   # untouched beyond t_active
+
+
+@pytest.mark.parametrize("fmt,K", [("int4_affine", K), ("int8", K), ("int4_affine", 3584)])   # 3584: ragged stripes
+def test_embed_dequantizes_a_quantized_table(dev, fmt, K):
+    """A gather from a quantized packed slab (an MLX 4-bit embedding tied to the head): every row equals the
+    format's dequantization rounded to BF16."""
+    from monolith.bench import random_spec
+    from monolith.formats.fp import f32_to_bf16 as to_bf16
+
+    rng = np.random.default_rng(3)
+    vocab, t = 70, 4
+    spec = random_spec(fmt, vocab, K, rng)
+    data, info, _ = pack_spec(spec, PackLayout(rows=16))
+    ref = to_bf16(FORMATS.get(fmt).dequantize(spec))
+    tokens = np.array([0, 69, 17, 42], dtype=np.int32)
+    pso = nt.Pipeline(nt.Library(dev, kernels.embed_source(fmt), kernels.embed_macros(info)), "embed")
+    h = nt.Buffer(dev, t * K * 2); h.fill(0)
+    d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, tokens.tobytes())).buffer(1, nt.Buffer(dev, data)).buffer(2, h)
+         .bytes(3, kernels.embed_params(K, t, vocab)).grid(t).threadgroup(32))
+    _run(dev, d)
+    out = np.frombuffer(h.read(0, t * K * 2), dtype=np.uint16).reshape(t, K)
+    assert np.array_equal(out, ref[tokens])
+

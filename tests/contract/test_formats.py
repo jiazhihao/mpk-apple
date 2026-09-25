@@ -13,15 +13,20 @@ def _w(n=40, k=K):
     return (rng.standard_normal((n, k)) * 0.02).astype(np.float32)
 
 
-@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8"])
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
 def test_quantize_dequantize_is_close_and_exact_on_requantize(fmt):
     f = FORMATS.get(fmt)
     w = _w()
     spec = f.quantize(w)
     wq = f.dequantize(spec)
-    tol = {"nvfp4": 0.35, "fp8_e4m3": 0.07, "bf16": 0.004, "int8": 0.01}[fmt]           # relative RMS error bounds
+    tol = {"nvfp4": 0.35, "fp8_e4m3": 0.07, "bf16": 0.004, "int8": 0.01, "int4_affine": 0.12}[fmt]   # relative RMS error bounds
     assert np.sqrt(np.mean((wq - w) ** 2)) / np.sqrt(np.mean(w ** 2)) < tol
-    assert np.array_equal(f.dequantize(f.quantize(wq)), wq)                                # idempotent on its own grid
+    wqq = f.dequantize(f.quantize(wq))
+    if fmt == "int4_affine":                                                              # MLX's snapped scale re-snaps in some groups
+        step = np.repeat(np.abs(f.quantize(wq).tensors["scales"]), 64, axis=1)
+        assert np.all(np.abs(wqq - wq) <= step + 1e-7) and np.mean(wqq == wq) > 0.8      # drift ≤ one code step, most values fixed
+    else:
+        assert np.array_equal(wqq, wq)                                                    # idempotent on its own grid
 
 
 def test_nvfp4_dequant_matches_reference_formula():
@@ -38,7 +43,7 @@ def test_nvfp4_dequant_matches_reference_formula():
     assert np.array_equal(f.dequantize(got), ref)
 
 
-@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8"])
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
 @pytest.mark.parametrize("lane_order", ["contiguous", "interleaved16"])
 @pytest.mark.parametrize("rows", [4, 16])
 def test_pack_roundtrip_and_geometry(fmt, lane_order, rows):
@@ -47,7 +52,7 @@ def test_pack_roundtrip_and_geometry(fmt, lane_order, rows):
     layout = PackLayout(rows=rows, lane_order=lane_order)
     data, info = f.pack(spec, layout)
     assert info.n_blocks == -(-37 // rows) and len(data) == info.nbytes and info.unit_bytes % 16 == 0
-    expected_unit = {"nvfp4": 16 + 2, "fp8_e4m3": 32, "bf16": 64, "int8": 32 + 2}[fmt]  # K/32 = 32 columns per lane
+    expected_unit = {"nvfp4": 16 + 2, "fp8_e4m3": 32, "bf16": 64, "int8": 32 + 2, "int4_affine": 16 + 8}[fmt]  # K/32 = 32 columns per lane
     assert info.unit_bytes == (expected_unit + 15) // 16 * 16
     back = f.unpack_pack(data, info)
     assert np.array_equal(f.dequantize(back), f.dequantize(spec))                        # bit-exact round trip
@@ -70,3 +75,35 @@ def test_unit_sizes_for_the_target_shapes():
     _, i4 = f4.pack(f4.quantize(np.zeros((16, 5120), np.float32)), PackLayout(rows=16))
     _, i8 = f8.pack(f8.quantize(np.zeros((16, 5120), np.float32)), PackLayout(rows=16))
     assert (i4.payload_bytes, i4.scale_bytes, i4.unit_bytes) == (80, 10, 96) and i8.unit_bytes == 160   # p13's units
+
+
+def test_int4_affine_matches_mlx_and_the_checkpoint_layout():
+    """The affine 4-bit plugin against ``mlx.core.quantize`` / ``dequantize`` (skipped without mlx): the same codes
+    and, within the fp16 arithmetic of MLX's dequantization, the same weights; the checkpoint grouping detects the
+    ``weight`` / ``scales`` / ``biases`` triple; K = 2048 (whole groups per lane) and K = 1024 (half a group) pack."""
+    from monolith.formats.checkpoint import group_tensors, logical_shape
+
+    f = FORMATS.get("int4_affine")
+    for k, (scale_bytes, unit) in {1024: (8, 32), 2048: (8, 48), 3584: (24, 80)}.items():   # 3584: ragged stripes of 112
+        w = _w(n=13, k=k)
+        spec = f.quantize(w)
+        assert spec.tensors["scales"].shape == (13, k // 64) and f.dequantize(spec).shape == (13, k)
+        data, info = f.pack(spec, PackLayout(rows=4))
+        assert np.array_equal(f.dequantize(f.unpack_pack(data, info)), f.dequantize(spec))
+        assert (info.payload_bytes, info.scale_bytes, info.unit_bytes) == (k // 64, scale_bytes, unit)
+    mx = pytest.importorskip("mlx.core")
+    w = _w(n=8, k=1024)
+    q, sc, bi = mx.quantize(mx.array(w), group_size=64, bits=4)
+    q, sc, bi = np.array(q), np.array(sc.astype(mx.float32)), np.array(bi.astype(mx.float32))
+    ours = f.unpack({"weight": q, "scales": sc, "biases": bi}, shape=(8, 1024))
+    codes = unpack_nibbles(ours.tensors["weight"])
+    mine = f.quantize(w)
+    assert np.array_equal(codes, unpack_nibbles(mine.tensors["weight"]))                      # the same nibble order and rule
+    ref = np.array(mx.dequantize(mx.array(q), mx.array(sc), mx.array(bi), group_size=64, bits=4).astype(mx.float32))
+    assert np.allclose(f.dequantize(ours), ref, rtol=1e-3, atol=1e-5)
+    groups = group_tensors(["a.weight", "a.scales", "a.biases", "b.weight"], {"a.weight": "U32", "a.scales": "BF16", "a.biases": "BF16", "b.weight": "BF16"})
+    assert groups["a"].format == "int4_affine" and groups["b"].format == "bf16"
+    assert logical_shape(groups["a"], {"a.weight": (8, 128)}) == (8, 1024)
+    with pytest.raises(ValueError):
+        f.pack(f.quantize(_w(n=4, k=256), group=32), PackLayout(rows=4))                     # the kernel decode is compiled for 64
+
