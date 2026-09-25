@@ -136,8 +136,10 @@ def macro_key(macros: Mapping[str, str]) -> str:
 
 # ---- attention ----------------------------------------------------------------------------------------------------
 
-def gqa_source() -> str:
-    return PRELUDE + template("gqa_decode.metal")
+def gqa_source(v2: bool = False) -> str:
+    """The attention kernels: the shared helpers + v1 (``gqa_decode`` / ``gqa_merge``, with the DRAFT variant) or v2
+    (``gqa_decode_v2`` / ``gqa_merge_v2``: the long-context structure of design §5.6, #34)."""
+    return PRELUDE + template("gqa_common.metal") + "\n" + template("gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
 
 
 def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4) -> Dict[str, str]:
@@ -146,6 +148,17 @@ def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4) -> Dict[str, 
     if head_dim % 32 or chunk % 32 or rb_max < 1:
         raise ValueError("gqa_decode: head_dim and chunk must be multiples of 32")
     return {"D": str(head_dim), "CH": f"{chunk}u", "RBMAX": f"{rb_max}u"}
+
+
+GQA_V2_CHUNK_MIN = 32
+
+
+def gqa_v2_macros(head_dim: int, *, rmax: int, rg: int = 4) -> Dict[str, str]:
+    """v2: ``rmax`` = the query rows per block (rep · T_max, ≤ 32: the threadgroup-memory query cache), ``rg`` =
+    rows per pass of the scoring / P·V loop."""
+    if head_dim % 32 or not 1 <= rmax <= 32 or not 1 <= rg <= rmax or rmax * head_dim * 2 > 32768:
+        raise ValueError("gqa_decode_v2: head_dim a multiple of 32, 1 <= rg <= rmax <= 32, and rmax·D·2 bytes within threadgroup memory")
+    return {"D": str(head_dim), "RMAX": f"{rmax}u", "RG": f"{rg}u"}
 
 
 def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg: int, q_off: int, gate_off: int, k_off: int,

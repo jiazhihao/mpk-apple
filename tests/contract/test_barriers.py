@@ -81,3 +81,40 @@ def test_sibling_order_follows_the_profile(tmp_path):
     ja, jb = ka.index("gqa_decode"), kb.index("gqa_decode")
     assert ka[ja + 1] == "gemv" and kb[jb - 1] == "gemv" and kb[jb + 1] == "gqa_merge"
     assert sorted(ka) == sorted(kb)
+
+
+def test_attention_kernel_follows_the_profile(tmp_path):
+    """``engine.attention = "v2"`` (or the override) emits gqa_decode_v2 / gqa_merge_v2 with the v2 workspace
+    (32-key chunks, the threadgroup count in ``n_sg``); v1 stays the default; the partial workspaces are shared."""
+    from monolith.compiler.emit import _gqa_v2  # noqa: F401  (the switch exists)
+
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    base = {"gpu_cores": 20, "nominal_gbps": 307.0}
+    p1 = Profile.from_dict("a", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
+    p2 = Profile.from_dict("b", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "v2"}})
+    assert p1.attention == "v1" and p2.attention == "v2"
+    with pytest.raises(ValueError):
+        Profile.from_dict("c", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "v3"}})
+    prog1 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2)
+    prog2 = compile_program(m, PackFile(tmp_path / "pack"), p2, t=2)
+    prog3 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2, attention="v2")
+    for prog, fn in ((prog1, "gqa_decode"), (prog2, "gqa_decode_v2"), (prog3, "gqa_decode_v2")):
+        core = [o for o in prog.ops if o.name == "gqa_decode"][0]
+        assert prog.kernels[core.kernel].function == fn and core.meta["attention"] == ("v2" if fn.endswith("v2") else "v1")
+        merge = [o for o in prog.ops if o.name == "gqa_merge"][0]
+        assert prog.kernels[merge.kernel].function == fn.replace("decode", "merge")
+    k2 = prog2.kernels[[o for o in prog2.ops if o.name == "gqa_decode"][0].kernel]
+    assert k2.macros["RMAX"] == f"{4 * 2}u" and k2.macros["RG"] == "4u" and "CH" not in k2.macros
+    import struct
+
+    prm = prog2.buffers[[b for b in [o for o in prog2.ops if o.name == "gqa_decode"][0].bindings if b[0] == 9][0][1]].init
+    heads, kv, t_active, position, n_sg = struct.unpack_from("<IIIII", prm)
+    assert (heads, kv, t_active, n_sg) == (8, 2, 2, 20)                     # v2: n_sg carries the threadgroup count
+    n_chunks_max = struct.unpack_from("<I", prm, 60)[0]
+    assert n_chunks_max == 16 // 32 + 1 or n_chunks_max == 1
+    # the argmax partials share one workspace across programs' ops (one name → one buffer)
+    ws = [n for n in prog1.buffers if n.startswith("ws.") and n.endswith(".shared")]
+    assert any("argmax.val" in n for n in ws)
+

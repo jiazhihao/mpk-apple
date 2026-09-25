@@ -26,6 +26,7 @@ class Profile:
     threadgroups_per_core: int = 1
     sibling_order: str = "either"     # "alu_first" | "bus_first" | "either"
     max_cb_ms: float = 16.0
+    attention: str = "v1"             # the attention kernel: "v1" (block = kv head × chunk × row group) or "v2" (§5.6 v2, #34)
     cost_t: Dict[str, Dict[int, float]] = field(default_factory=dict)   # format -> {T: cost relative to T = 1}
     raw: Dict[str, Any] = field(default_factory=dict)
 
@@ -70,6 +71,8 @@ class Profile:
                 raise ValueError(f"profile {name}: engine.{k} is required")
         if eng["lane_order"] not in ("contiguous", "interleaved16"):
             raise ValueError(f"profile {name}: engine.lane_order must be 'contiguous' or 'interleaved16'")
+        if eng.get("attention", "v1") not in ("v1", "v2"):
+            raise ValueError(f"profile {name}: engine.attention must be 'v1' or 'v2'")
         cost_t = {f: {int(t): float(c) for t, c in tbl.items()} for f, tbl in (eng.get("cost_T") or {}).items()}
         for f, tbl in cost_t.items():
             if tbl.get(1, 1.0) != 1.0:
@@ -84,6 +87,7 @@ class Profile:
             threadgroups_per_core=int(eng.get("threadgroups_per_core", 1)),
             sibling_order=str(eng.get("sibling_order", "either")),
             max_cb_ms=float(eng.get("max_cb_ms", 16.0)),
+            attention=str(eng.get("attention", "v1")),
             cost_t=cost_t,
             raw=dict(d),
         )

@@ -59,7 +59,7 @@ class DraftHarness:
         src = kernels.gqa_source()
         if step_state:
             macros["STEP_STATE"] = "1"
-            src = kernels.PRELUDE + LAYOUT.to_msl() + "\n" + kernels.template("gqa_decode.metal")
+            src = src.replace(kernels.PRELUDE, kernels.PRELUDE + LAYOUT.to_msl() + "\n", 1)
         lib = nt.Library(dev, src, macros)
         self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode"), nt.Pipeline(lib, "gqa_merge")
         cos, sin = rope_tables_permuted(THETA, cfg.d, cfg.d, cfg.ctx_max)

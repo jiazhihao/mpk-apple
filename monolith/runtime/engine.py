@@ -29,8 +29,11 @@ class Engine:
     """``buffers`` lets several programs share device buffers by name (a prefill program at T = P and a decode
     program at T = 1 over the same weights, states and StepState)."""
 
-    def __init__(self, program: Program, device: Optional[nt.Device] = None, buffers: Optional[Dict[str, nt.Buffer]] = None) -> None:
+    def __init__(self, program: Program, device: Optional[nt.Device] = None, buffers: Optional[Dict[str, nt.Buffer]] = None,
+                 fast_math: bool = False) -> None:
+        """``fast_math``: compile the kernels with Metal's fast math mode (the default is the safe mode)."""
         self.program = program
+        self.fast_math = fast_math
         self.dev = device or nt.Device()
         self.buffers: Dict[str, nt.Buffer] = {}
         for name, spec in program.buffers.items():
@@ -54,7 +57,7 @@ class Engine:
             self.buffers[name] = buf
         self.pipelines: Dict[str, nt.Pipeline] = {}
         for key, k in program.kernels.items():
-            lib = nt.Library(self.dev, k.source, k.macros)
+            lib = nt.Library(self.dev, k.source, k.macros, 0, fast_math)
             self.pipelines[key] = nt.Pipeline(lib, k.function, True)
         self.ops = []
         for o in program.ops:

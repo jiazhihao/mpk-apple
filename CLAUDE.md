@@ -28,7 +28,9 @@ the T ≥ 2 GEMM path (M9). Sampling with a drafter is exact speculative samplin
 the cost-aware rule at 36 ms per token vs 27 plain — a no-go on the shader path, a projected go on the T ≥ 2 GEMM
 path (M9). The barrier pass and the sibling overlap (#29, #35: the gate GEMV beside the mixer core) take the 0.8B
 from 6.85 to 6.58 ms per token; the ICB barrier flag orders the flagged command behind all before it (measured;
-the field is `barrier_before`). Next: #34 (attention v2 for long context, math modes) and M8–M9. Speculative decoding targets a **DSpark** drafter, not the MTP head.
+the field is `barrier_before`). #34 closed with a measured no: the attention v2 (kept as a per-profile option)
+is not the long-context win, SIMD-group-matrix scoring is (M9); fast math buys 1–2 % and breaks bit-identity,
+so safe stays. Next: M8 (format 2, the porting guide) and M9 (the GEMM path). Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order
 
@@ -96,10 +98,10 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order: #34 (attention v2 for long context, the math modes), then M8's
-   format 2 (#47) and the porting guide (#48), then M9 — the T ≥ 2 GEMM verify kernel (#50/#51) is what the
-   speculative gate needs on this chip. The 27B items (#36, #40's M3 Pro rows, #46) and the M3 Pro / M4 rows of the
-   A/B tables need those machines.
+0. **Keep building** — the roadmap issues in order: M8's format 2 (#47) and the porting guide (#48), then M9 — the
+   T ≥ 2 GEMM kernel (#50/#51: SIMD-group matrices / MPP tensor ops for the GEMVs at T ≥ 2 and the attention core)
+   is what the speculative gate and the long-context rows need on this chip. The 27B items (#36, #40's M3 Pro rows,
+   #46) and the M3 Pro / M4 rows of the A/B tables need those machines.
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
    H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).
