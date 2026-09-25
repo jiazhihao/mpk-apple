@@ -46,7 +46,7 @@ def draft_attn(dev, heads, kv, d, ctx, n_new, gamma, reps, chunk=64, rb=4):
     n1, kvp_stride = hd + 2 * kd, 2 * kd
     ctx_max = ctx + n_new + gamma
     n_chunks_max = -(-ctx_max // chunk)
-    src = kernels.PRELUDE + LAYOUT.to_msl() + "\n" + kernels.template("gqa_decode.metal")
+    src = kernels.gqa_source().replace(kernels.PRELUDE, kernels.PRELUDE + LAYOUT.to_msl() + "\n", 1)
     lib = nt.Library(dev, src, dict(kernels.gqa_macros(d, chunk=chunk, rb_max=rb), DRAFT="1", STEP_STATE="1"))
     p_dec, p_merge = nt.Pipeline(lib, "gqa_decode"), nt.Pipeline(lib, "gqa_merge")
     cos, sin = rope_tables_permuted(1e6, d, d, ctx_max)

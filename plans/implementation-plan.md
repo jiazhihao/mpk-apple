@@ -310,6 +310,17 @@ un-barriered, followed by the merge / gated norm; the profile's `sibling_order` 
 the 0.8B / M5 Pro (paired, 4 rounds, min ms per token): every op barriered 6.848, core first 6.584 (−3.9 %), gate
 first 6.630 — the Apple10 rule holds by ~1 % within noise (decode-kernels.md §3). The M3 Pro row needs that machine.
 
+*Status (2026-09-24, #34).* The attention v2 of §5.6 was built, tested against the same numpy contract (chunk 32 folded
+hierarchically) and the layer oracle, and measured (decode-kernels.md §1): 6–18 % faster at T = 1, 9–24 % *slower* at
+T = 4 below 32 K (a win only at 32 K) — the per-(key, row) cost is the BF16 conversions and loads, not v1's
+reduction, so the order-of-magnitude step is SIMD-group-matrix scoring, the same path as the T ≥ 2 GEMMs (M9); v1
+stays the default, v2 a per-profile option (`engine.attention`). Math modes: the kernels compile in Metal's safe
+mode; fast math buys 1–2 % and breaks bit-identity with the safe run on the 0.8B after 48 tokens — safe stays the
+default, `--math fast` exists. Barrier count: #29. The gate: the 0.8B at 74 % of nominal (6.58 ms vs the 4.90 ms
+bound), the 8B at 76 % — below the 85–90 % ceiling; the account of the remainder (the small-K GEMVs at 78 %, the
+dispatch boundaries, the NVFP4 decode) is in decode-kernels.md §3. Not measured: attention at 8 K / 32 K inside a
+real model on this machine (the 27B is the M3 Pro's; the kernel rows are measured), the M3 Pro rows of every A/B.
+
 ### M6 — DSpark speculative decoding · 4 ew
 
 *Model 2 numbers (2026-09-24).* `nvidia/Qwen3-8B-NVFP4` decodes at 26.7 ms per token (37 tok/s; 6.3 GiB streamed

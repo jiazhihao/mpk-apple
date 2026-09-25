@@ -49,12 +49,38 @@ GB/s counts the K and V bytes of the context once; at T = 4 the kernel re-stream
    Speculative verification (T = 1 + γ) therefore needs the v2 structure below before M6 measures its cost.
 4. The 0.8B's 8/2 layers cost 82–182 µs at 1–8 K (6 layers: 0.5–1.1 ms per token) [M].
 
-**v2 [H]** (M5, #34): one threadgroup per (kv head, batch of chunks) with the query rows of *all* tokens in
-threadgroup memory as BF16 (32 rows × 512 B = 16 KB, shared by the 12 SIMD-groups), lane-per-key scoring (each lane
-reads its own key's 512 B, no cross-lane reductions) and lane-per-dim P·V with `simd_shuffle` broadcast of p̃. That
-removes the `simd_sum` per (key, row), reads K/V once per step regardless of T, and keeps the crew geometry; the
-cost is a chunk-batch decomposition (parallelism at short context comes from smaller chunks). Expected: bus-bound
-at long context (~4× the v1 rate) and T = 4 at ~1.2× T = 1.
+**v2 — built and measured (#34) [M].** `gqa_decode_v2` + `gqa_merge_v2` (`kernels/gqa_decode_v2.metal`; the
+profile's `engine.attention = "v2"` or `--attention v2` selects it): one threadgroup per (kv head, batch of 12
+chunks) with the block's rep·T query rows normed + RoPE'd once into threadgroup memory (BF16, ≤ 32 rows), the
+step's new keys appended by their batch behind a threadgroup barrier, lane-per-key scoring against the rows in
+passes of `RG` rows (q broadcast from threadgroup memory, one `simd_max` / `simd_sum` per row per 32 keys instead
+of a `simd_sum` per (key, row)), lane-per-dim P·V with p̃ broadcast by `simd_shuffle`, the 32-key partials folded
+online in registers (exact FP32 rescaling, so the numbers equal v1's at chunk 32 folded hierarchically — the same
+numpy contract, `test_gqa_decode.py`), and a chunk of 32 · {1, 2, 4} keys per SIMD-group chosen from the context so
+every threadgroup keeps a block. Same table, same method (min of 8), v1 re-measured alongside:
+
+| heads/kv | context | T | v1 µs/layer | v2 µs/layer | v2 / v1 |
+|---|---|---|---|---|---|
+| 32/4 | 1024 | 1 | 81.5 | 70.6 | 0.87 |
+| 32/4 | 4096 | 1 | 244 | 229 | 0.94 |
+| 32/4 | 8192 | 1 | 453 | 489 | 1.08 |
+| 32/4 | 32768 | 1 | 1745 | 1433 | 0.82 |
+| 32/4 | 1024 | 4 | 202 | 220 | 1.09 |
+| 32/4 | 4096 | 4 | 684 | 820 | 1.20 |
+| 32/4 | 8192 | 4 | 1431 | 1777 | 1.24 |
+| 32/4 | 32768 | 4 | 5490 | 4992 | 0.91 |
+
+`RG = 8` rows per pass is 5–30 % slower than 4 everywhere (registers), and rep·T > 32 rows (T = 8 at 32/4 heads) does
+not fit the query cache (the emitter falls back to v1). What it says: the hypothesis above was wrong about the
+cost. Removing the per-(key, row) reduction buys 6–18 % at T = 1 and loses at T = 4 below 32 K, so the per-pair cost
+is not the `simd_sum` but the BF16 → FP32 conversions and the loads around each 8-dim word (v2 pays them for q per
+(row, word) per key, v1 pays them for k per row group); K/V once per step does not matter while the kernel is
+issue-bound at 20–90 GB/s. The structure that changes the per-pair cost by an order of magnitude is the
+SIMD-group matrix unit — Q·Kᵀ and P·V as 8 × 8 BF16 tiles (`simdgroup_multiply_accumulate`, or MPP tensor ops on
+Apple10) — which is the same path the T ≥ 2 GEMMs need (M9, #50/#51); the attention core joins that work. Until
+then v1 stays the default (its T = 4 is 2.5–3× T = 1, 24 GB/s of KV); v2 is kept as the per-profile option it is
+(a win at 32 K and at T = 1). The long-context rows of the 27B (16 layers, 32/4 heads): 28 ms per token at 32 K on
+v1, 23 ms on v2.
 
 ## 2. `gdn_mixer` + `gdn_norm` (#22) — `apple-m5-pro-20c_gdn.jsonl`
 
@@ -151,6 +177,23 @@ gate GEMVs un-barriered); paired runs of 128 tokens, 4 rounds, min | median ms p
 The ranges of the two orders touch (6.649 vs 6.630), so the Apple10 rule is the better one by ~1 % within noise —
 kept as the profile says. The 8B (no gate: a pure chain) keeps all 223 barriers and its 26.9 ms; the drafter's
 context projections and the per-T variants are the other un-barriered groups of a speculative program.
+
+**Math modes (#34) [M].** The kernels compile in Metal's *safe* math mode (the runtime's default; the numerics
+contract was met under it). Fast math (`--math fast`, `Session(fast_math=True)`), paired 4 rounds of 128 tokens:
+0.8B 6.72 → 6.60 ms per token (−1.9 %, ranges overlapping at the edge), 8B 27.55 → 27.30 (−0.9 %). The 0.8B's 48
+golden tokens hold under fast math (`test_fast_math_keeps_the_golden`) but its 128-token story diverges from the
+safe run after the golden's length (a near-tie flipped), and the 8B's does not. 1–2 % is not worth a mode that
+breaks bit-identity with the reference: safe stays the default, fast stays an option.
+
+**The M5 gate, accounted (#34).** The 0.8B decodes at 6.58 ms per token against the 4.90 ms bound of its streamed
+bytes at 307 GB/s: 74 % of nominal, below the survey's 85–90 % practical ceiling. Where the remainder is
+(`monolith.trace`, per-op minima): the 96 small-K layer GEMVs at 240 GB/s (78 %; K = 1024 rows pay per-row
+overhead, the autotuner's block geometry took 5–17 % off but not the rest — a GEMM-style tile over several rows
+would), the `lm_head` already at 97 %, the mixers 0.6 ms (GDN latency-bound at 16 heads, attention as above), and
+~0.4 ms of dispatch boundaries for 175 dispatches (1.4 µs each) that neither fusion nor barriers can remove without
+multi-op kernels (D5 says no). The 8B (NVFP4) decodes at 26.9 ms against a 20.5 ms bound: 76 %, the ALU-bound
+NVFP4 decode of the M1 study (59 % of nominal at T = 1 in isolation, better in the mix) — its remainder is the
+NVFP4 decode itself, which the M9 GEMM path addresses for T ≥ 2 and a wider-word decode would for T = 1.
 
 ## 4. The DSpark round's kernels (#24) — `apple-m5-pro-20c_draft.jsonl`
 

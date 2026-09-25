@@ -112,3 +112,19 @@ def test_sampling_is_reproducible_and_seed_dependent(session):
     assert ta == tb and len(ta) == 24 and ta != tc
     sess.model.sampler = __import__("monolith.nn", fromlist=["GreedySampler"]).GreedySampler(prefix="sampler.")
     print(f"\nsampled (seed 11): {ta[:10]}…  (seed 12): {tc[:10]}…")
+
+
+def test_fast_math_keeps_the_golden(session):
+    """Metal's fast math mode (the kernels default to the safe mode) under the numerics gates: the 48 greedy tokens
+    still equal the golden (#34, math modes)."""
+    sess, ckpt = session
+    from monolith.generate import Session
+    from monolith.models.qwen3_5 import Qwen3_5Model
+
+    with open(str(GOLDEN) + ".json") as f:
+        golden = json.load(f)
+    fast = Session(Qwen3_5Model.from_checkpoint(str(ckpt), max_context=512), str(sess.pack.dir), eos=-1, fast_math=True)
+    gen = fast.generate(golden["prompt_ids"], len(golden["gen_ids"]))
+    assert gen.tokens == golden["gen_ids"], (gen.tokens[:8], golden["gen_ids"][:8])
+    print(f"\nfast math: {len(gen.tokens)} greedy tokens equal the golden; {gen.ms_per_token:.2f} ms/token")
+

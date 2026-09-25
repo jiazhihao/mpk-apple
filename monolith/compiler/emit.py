@@ -56,7 +56,9 @@ class _Ctx:
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
+    attention: str = "v1"                                                 # the attention kernel (profile / override)
     tuner: Any = None                                                     # compiler.autotune.Autotuner or None
+    shared: Dict[str, str] = field(default_factory=dict)                  # shared scratch name -> buffer (sized to the largest request)
     eos: int = -1
     ring_capacity: int = 4096
     counter: int = 0
@@ -86,7 +88,18 @@ class _Ctx:
         self.program.buffers[bname] = BufferSpec(len(data), data, "params")
         return bname
 
-    def scratch(self, name: str, nbytes: int) -> str:
+    def scratch(self, name: str, nbytes: int, shared: bool = False) -> str:
+        """A workspace buffer; ``shared`` = one buffer per name for the whole program (the partials an op hands to
+        its follow-up dispatch: every layer's attention or GDN core reuses it, the barrier pass orders the reuse)."""
+        if shared:
+            bname = self.shared.get(name)
+            if bname is None:
+                bname = f"ws.T{self.t}.{name}.shared"
+                self.shared[name] = bname
+                self.program.buffers[bname] = BufferSpec(max(nbytes, 16), None, "arena")
+            elif self.program.buffers[bname].nbytes < nbytes:
+                self.program.buffers[bname].nbytes = nbytes
+            return bname
         bname = f"ws.T{self.t}.{name}.{self.counter}"
         self.counter += 1
         self.program.buffers[bname] = BufferSpec(max(nbytes, 16), None, "arena")
@@ -315,34 +328,52 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
         lo = tv
 
 
-def _gqa_src(ctx: _Ctx) -> str:
-    return kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_decode.metal")
+def _gqa_src(ctx: _Ctx, v2: bool = False) -> str:
+    return kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_common.metal") + "\n" + kernels.template(
+        "gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
+
+
+def _gqa_v2(ctx: _Ctx, heads: int, kv: int) -> bool:
+    """v2 when the profile (or the override) asks and the block's rows fit its query cache."""
+    return ctx.attention == "v2" and (heads // kv) * ctx.t <= 32
+
+
+def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
+    """(macros, n_sg field, chunk for the workspace)."""
+    d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
+    rep = heads // kv
+    if v2:
+        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=4), STEP_STATE="1"), ctx.n_sg // 12, kernels.GQA_V2_CHUNK_MIN
+    chunk = int(a.get("chunk", 64))
+    return dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1"), ctx.n_sg, chunk
 
 
 def _gqa(ctx: _Ctx, op: Op) -> None:
-    """The attention core: partials per (kv head, chunk, row) into the op's two output values."""
+    """The attention core: partials per (kv head, chunk, row) into the op's two output values (a shared workspace
+    across the layers; the barrier pass orders its reuse)."""
     proj, kc, vc, cos, sin, qn, kn = op.inputs
     part_o, part_md = op.outputs
     a = op.attrs
-    d, heads, kv, chunk = a["head_dim"], a["heads"], a["kv_heads"], int(a.get("chunk", 64))
+    d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
-    macros = dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1")     # position always comes from StepState
-    kd = ctx.kernel("gqa", _gqa_src(ctx), "gqa_decode", macros)
+    v2 = _gqa_v2(ctx, heads, kv)
+    macros, n_sg, chunk = _gqa_geometry(ctx, a, ctx_max, v2)
+    kd = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_decode_v2" if v2 else "gqa_decode", macros)
     rep = heads // kv
     n_chunks_max, rows_max = -(-ctx_max // chunk), rep * ctx.t
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
     if _value_bytes(part_o, ctx.t) < po or _value_bytes(part_md, ctx.t) < pm:
         raise ValueError(f"gqa_decode: the partial values are too small for {kv} kv heads × {n_chunks_max} chunks × {rows_max} rows")
     prm = ctx.params("gqa", kernels.gqa_params(
-        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=ctx.n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
+        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
         v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
         scaling=float(a["scaling"]), has_gate=False, n_chunks_max=n_chunks_max, rows_max=rows_max))
     st = ctx.program.step_state
     grid, tg = ctx.crew_grid()
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *ctx.buf(part_o)), (8, *ctx.buf(part_md)), (9, prm, 0), (15, st, 0)],
-            grid, tg, op.kind, writes=[1, 2, 7, 8])
+            grid, tg, op.kind, writes=[1, 2, 7, 8], attention="v2" if v2 else "v1")
 
 
 def _gqa_merge(ctx: _Ctx, op: Op) -> None:
@@ -352,14 +383,16 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     gate = op.inputs[2] if len(op.inputs) > 2 else None
     out = op.outputs[0]
     a = op.attrs
-    d, heads, kv, chunk = a["head_dim"], a["heads"], a["kv_heads"], int(a.get("chunk", 64))
-    ctx_max = ctx.shape(part_o)[1] * 1  # informational only; the merge reads n_chunks_max from params
-    macros = dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1")
-    km = ctx.kernel("gqa", _gqa_src(ctx), "gqa_merge", macros)
+    d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
+    v2 = _gqa_v2(ctx, heads, kv)
     rep = heads // kv
+    core = part_o.producer
+    ctx_max = ctx.shape(core.inputs[1])[0] if core is not None else 0
+    macros, n_sg, chunk = _gqa_geometry(ctx, dict(a, chunk=core.attrs.get("chunk", 64) if core is not None else 64), ctx_max, v2)
+    km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros)
     n_chunks_max = ctx.shape(part_o)[1] // (kv * rep * d)
     prm = ctx.params("gqa_merge", kernels.gqa_params(
-        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=ctx.n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
+        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
         in_stride=heads * d, out_stride=heads * d, ctx_max=n_chunks_max * chunk, eps=1e-6, scaling=1.0, has_gate=gate is not None,
         n_chunks_max=n_chunks_max, rows_max=rep * ctx.t))
     st = ctx.program.step_state
@@ -381,12 +414,12 @@ def _draft_attn(ctx: _Ctx, op: Op) -> None:
     ctx_max = ctx.shape(kc)[0]
     chunk = 64
     macros = dict(kernels.gqa_macros(d, chunk=chunk), DRAFT="1", STEP_STATE="1")
-    src = kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_decode.metal")
+    src = _gqa_src(ctx)
     kd, km = ctx.kernel("gqa", src, "gqa_decode", macros), ctx.kernel("gqa", src, "gqa_merge", macros)
     rep = heads // kv
     n_chunks_max, rows_max = -(-ctx_max // chunk), rep * gamma
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
-    part_o, part_md = ctx.scratch("draft_attn.part_o", po), ctx.scratch("draft_attn.part_md", pm)
+    part_o, part_md = ctx.scratch("draft_attn.part_o", po, shared=True), ctx.scratch("draft_attn.part_md", pm, shared=True)
     prm = ctx.params("draft_attn", kernels.draft_attn_params(
         heads=heads, kv_heads=kv, gamma=gamma, ctx_len=0, n_new=0, n_sg=ctx.n_sg, q_off=0, k_off=heads * d, v_off=(heads + kv) * d,
         in_stride=ctx.shape(proj)[1], kvp_stride=ctx.shape(kvp)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
@@ -463,7 +496,7 @@ def _argmax(ctx: _Ctx, op: Op) -> None:
     src = kernels.argmax_source()
     m = ctx.t_macros(t_c, t_src)
     kp, kf = ctx.kernel("argmax", src, "argmax_partial", m), ctx.kernel("argmax", src, "argmax_final", m)
-    pv, pi = ctx.scratch("argmax.val", t_c * ctx.n_sg * 4), ctx.scratch("argmax.idx", t_c * ctx.n_sg * 4)
+    pv, pi = ctx.scratch("argmax.val", t_c * ctx.n_sg * 4, shared=True), ctx.scratch("argmax.idx", t_c * ctx.n_sg * 4, shared=True)
     prm = ctx.params("argmax", kernels.argmax_params(vocab, t_c, ctx.n_sg))
     grid, tg = ctx.crew_grid()
     ctx.add(kp, [(0, *ctx.buf(logits)), (1, pv, 0), (2, pi, 0), (3, prm, 0)], grid, tg, op.kind, writes=[1, 2])
@@ -566,7 +599,8 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_
 
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
                  layout: Optional[StepStateLayout] = None, eos: int = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
-                 tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal") -> Program:
+                 tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal",
+                 attention: Optional[str] = None) -> Program:
     """Check coverage on ``profile`` and emit the step program for a lowered (and passed) graph: for a static
     ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t_max`` read from StepState
     at run time (kernels compiled at ``t_max``). ``pack`` is the pack (or the packs: the target's, then a drafter's)
@@ -584,7 +618,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     check_coverage(g, profile)
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
     ctx = _Ctx(program, packs, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, values=g.values, dynamic_t=dynamic_t,
-               speculative=speculative, tuner=tuner, eos=eos, ring_capacity=ring_capacity)
+               speculative=speculative, attention=attention or profile.attention, tuner=tuner, eos=eos, ring_capacity=ring_capacity)
     _pack_windows(ctx)
     hoisted = {op.attrs["stat_value"]: ctx.slab_info(op.inputs[1].name).n_blocks for op in g.ops if op.kind == "gemv" and op.attrs.get("stat_value")}
     for v in g.values.values():
@@ -676,7 +710,8 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
 def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: int = -1, ring_capacity: int = 4096,
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
-                    verify_threshold: Optional[float] = None, verify_length: Optional[int] = None, barriers: str = "minimal") -> Program:
+                    verify_threshold: Optional[float] = None, verify_length: Optional[int] = None, barriers: str = "minimal",
+                    attention: Optional[str] = None) -> Program:
     """Lower ``model``, run the ``passes`` and emit its step program (see :func:`emit_program`). With a ``drafter``
     (and its pack) the dynamic-T program carries the speculative round instead of the advance: ``verify`` = ``"cost"``
     (the cost-aware verify-length rule when the profile has a cost table for the pack's dominant format, otherwise the
@@ -690,7 +725,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
         for p in passes:
             p(g)
         return emit_program(g, pack=pack, profile=profile, t=t, dynamic_t=dynamic_t, layout=layout, eos=eos, ring_capacity=ring_capacity, tg=tg,
-                            tuner=tuner, tail="advance", token=token, barriers=barriers)
+                            tuner=tuner, tail="advance", token=token, barriers=barriers, attention=attention)
     if not dynamic_t:
         raise ValueError("compile_program: the speculative round needs the dynamic-T program (dynamic_t=True)")
     if drafter_pack is None:
@@ -713,4 +748,4 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     for p in passes:
         p(g)
     return emit_program(g, pack=[pack, drafter_pack], profile=profile, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
-                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers)
+                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention)

@@ -20,3 +20,11 @@
 {"heads": 8, "kv": 2, "d": 256, "ctx": 4096, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 520, "ms": 0.2395, "kv_gbps": 35.1, "us_per_layer": 239.5, "chip": "Apple M5 Pro", "cores": 20}
 {"heads": 8, "kv": 2, "d": 256, "ctx": 8192, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 258, "ms": 0.1824, "kv_gbps": 92.0, "us_per_layer": 182.4, "chip": "Apple M5 Pro", "cores": 20}
 {"heads": 8, "kv": 2, "d": 256, "ctx": 8192, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 1032, "ms": 0.4242, "kv_gbps": 39.6, "us_per_layer": 424.2, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 1, "chunk": 32, "rb": 4, "n_blocks": 264, "ms": 0.137, "kv_gbps": 30.6, "us_per_layer": 137.0, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 4, "chunk": 32, "rb": 4, "n_blocks": 1056, "ms": 0.2198, "kv_gbps": 19.2, "us_per_layer": 219.8, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 1, "chunk": 32, "rb": 4, "n_blocks": 1032, "ms": 0.2334, "kv_gbps": 71.9, "us_per_layer": 233.4, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 4, "chunk": 32, "rb": 4, "n_blocks": 4128, "ms": 0.8384, "kv_gbps": 20.0, "us_per_layer": 838.4, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 1, "chunk": 32, "rb": 4, "n_blocks": 2056, "ms": 0.5154, "kv_gbps": 65.1, "us_per_layer": 515.4, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 4, "chunk": 32, "rb": 4, "n_blocks": 8224, "ms": 1.8888, "kv_gbps": 17.8, "us_per_layer": 1888.8, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 1, "chunk": 32, "rb": 4, "n_blocks": 8200, "ms": 1.4641, "kv_gbps": 91.7, "us_per_layer": 1464.1, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 4, "chunk": 32, "rb": 4, "n_blocks": 32800, "ms": 5.1276, "kv_gbps": 26.2, "us_per_layer": 5127.6, "chip": "Apple M5 Pro", "cores": 20}
