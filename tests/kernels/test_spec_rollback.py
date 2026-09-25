@@ -91,13 +91,24 @@ def test_speculative_sampling_preserves_the_target_distribution(packs):
             spec.seed = seed
             same_seed.append(spec.generate(ids, 2).tokens)
     assert all(p[:2] == s for p, s in zip(plain_seqs, same_seed))
+    # two independent samples of one distribution: per-token counts within 4.5 σ (two independent plain runs give a
+    # total variation of 0.10–0.14 here because the first token varies by seed and mixes ~45 contexts)
     for pos in (1, 2):
         cp, cs = _counts(plain_seqs, pos), _counts(spec_seqs, pos)
         tv = 0.5 * sum(abs(cp.get(t, 0) - cs.get(t, 0)) for t in set(cp) | set(cs)) / n_seeds
         worst = max(abs(cp.get(t, 0) - cs.get(t, 0)) / (2.0 * max(cp.get(t, 0), 1)) ** 0.5 for t in cp if cp[t] >= 20)
         print(f"\nposition {pos}: plain {dict(sorted(cp.items(), key=lambda kv: -kv[1])[:5])} spec {dict(sorted(cs.items(), key=lambda kv: -kv[1])[:5])} "
               f"TV {tv:.3f} worst z {worst:.2f}")
-        assert tv < 0.15 and worst < 4.5, (pos, tv, worst)                 # two empirical distributions of n = 1000 over ≤ 12 tokens
+        assert tv < 0.2 and worst < 4.5, (pos, tv, worst)
+    # the same context: the second token's distribution among the sequences that share the commonest first token
+    first = max(_counts(plain_seqs, 0).items(), key=lambda kv: kv[1])[0]
+    cp = _counts([s for s in plain_seqs if s[0] == first], 1)
+    cs = _counts([s for s in spec_seqs if s[0] == first], 1)
+    n_p, n_s = sum(cp.values()), sum(cs.values())
+    assert n_p >= 100 and n_s >= 100
+    worst = max(abs(cp.get(t, 0) / n_p - cs.get(t, 0) / n_s) / (cp[t] / n_p * (1 - cp[t] / n_p) * (1 / n_p + 1 / n_s)) ** 0.5 for t in cp if cp[t] >= 15)
+    print(f"same first token {first}: n = {n_p} / {n_s}, {len(set(cp) | set(cs))} tokens, worst z {worst:.2f}")
+    assert worst < 4.5
     assert len(set(tuple(s) for s in spec_seqs)) > 10                        # it does sample
     # a near-greedy temperature: identical sequences (the sampler's draws are the argmax)
     cold_p = Session(_model(tdir), str(tdir / "pack"), eos=-1, autotune=False, temperature=1e-3, seed=5)

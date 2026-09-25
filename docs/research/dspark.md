@@ -79,6 +79,40 @@ cost-aware rule the step costs 60–70 ms for 1.6–2.0 tokens: 37.5 ms per toke
 template (1.05 accepted), 27.1 ms per token = parity with plain decode (26.8) on a chat-template code prompt (2.14
 accepted). Greedy output token-identical to plain decode in every run.
 
+**The prompt-set measurement (M5 Pro, Qwen3-8B NVFP4 + `Dogacel/Qwen3-8B-DSpark`, #40)** —
+`python tools/bench/spec_bench.py` over 11 prompts (3 code, 3 math, 3 chat with the Qwen chat template, 2 plain
+text), 128 greedy tokens each, token-weighted; `tools/bench/results/apple-m5-pro-20c_spec.jsonl` [M]:
+
+| verify rule | chat | code | math | text | **all** | tokens / step | mean accepted (of 7) |
+|---|---|---|---|---|---|---|---|
+| plain decode | 27.0 | 27.0 | 27.1 | 26.9 | **27.0 ms** | 1.00 | – |
+| cost-aware rule (design §5.8) | 42.7 | 32.3 | 31.2 | 40.0 | **36.2 ms** | 2.28 | 1.28 (L̄ 1.8) |
+| confident prefix ≥ 0.5 | 49.1 | 41.2 | 49.4 | 43.4 | 46.0 ms | 2.60 | 1.60 (L̄ 3.0) |
+| fixed L = 1 | 46.0 | 40.7 | 39.5 | 44.9 | 42.6 ms | 1.70 | 0.70 |
+| fixed L = 2 | 47.1 | 37.8 | 35.8 | 42.0 | 40.6 ms | 2.15 | 1.15 |
+| fixed L = 3 | 45.6 | 32.4 | 31.7 | 38.5 | 36.9 ms | 2.45 | 1.45 |
+| fixed L = 7 (the whole block) | 103.7 | 64.8 | 61.8 | 83.9 | 78.1 ms | 2.95 | 1.95 |
+
+The greedy tokens equal plain decode's in every run. What it says: (1) the cost-aware rule is the best speculative
+configuration and matches the best fixed L (3) on average while adapting per prompt (it drops to L̄ ≈ 1.1 on the
+chat prompts where acceptance is 0.5–0.75 and keeps L ≈ 3 on code and math) — the rule works; (2) nothing beats plain
+decode on this chip: the best single prompt (a code task, 2.3 accepted of 3) reaches parity at 26.3 ms, the prompt
+set 36 ms — each step pays the draft pass (33 ms on the shader GEMV path, the drafter's BF16 layers and the
+`lm_head` at T = 7 at ~110 GB/s) and the NVFP4 cost table's ×1.28–×1.79 per verified draft; (3) acceptance per
+position is 0.62–0.72 (the calibration below), i.e. 1.3–2.3 accepted per step at L ≤ 3 — the reported 3–4 of the
+paper's settings would need the whole block verified, which the shader path cannot afford; (4) STS calibration is
+not needed for this drafter: `tools/bench/sts_calibrate.py` (744 … 71 observations per position over the prompt
+set) fits τ = 0.67–1.27 with ECE 0.05–0.07 before and after (position 6: 0.17, 71 samples) — the confidence head
+is calibrated as shipped, and the calibrated bench is identical within noise
+(`tools/bench/results/sts_qwen3-8b-dspark_apple-m5-pro-20c.json`).
+
+**Go / no-go.** On the shader-FMA path the M6 gate (≥ 1.5× plain) is **not** reachable on this chip: the fixed cost
+alone (60 ms per step at L = 0 vs 27 ms plain) needs 2.2 committed tokens per step to break even. With the T ≥ 2
+GEMM path (M9: the draft pass at bandwidth ≈ 9 ms for its 2.2 GB, the verify pass at T = 4 at ~×1.1) the same
+acceptance gives ≈ 40 ms per step for 2.3 tokens ≈ 17 ms per token — the gate — so the round stays in the plan
+behind #50/#51; the 27B on the M3 Pro (no accelerator, T-costs unmeasured there) is measured when that machine
+runs `p13`.
+
 Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify(1 + L))`. With the llama.cpp accepted lengths above
 (2.7–4.1 at n-max 4) and the M5 Pro cost table, the break-even is comfortable on FP8 layers and marginal for the NVFP4
 MLPs on the shader path — the reason the verify-length rule, the INT8/NVFP4 drafter and the Apple10 accelerator verify
@@ -92,9 +126,12 @@ path are all in the plan.
   plain story prompt — the prompt format the drafter was trained on matters as much as the quantization.)*
 * The T ≥ 2 GEMM path (M9, #51): the round's cost is the drafter's block pass at T = γ and the verify pass at
   T = 1 + L, both ALU-bound on the shader path; with MLX-class GEMMs at T = 2–8 the same acceptance pays off.
-* The best `L` per chip: `verify_select` vs fixed L = 2 … 7, greedy and sampled.
+* The best `L` per chip: `verify_select` vs fixed L = 2 … 7, greedy and sampled. *(M5 Pro, 8B: the cost-aware rule
+  matches the best fixed L = 3 on average and adapts per prompt; sampled decode uses the same rule.)*
 * Whether `W₂` survives INT8 re-quantization without moving acceptance, and whether top-M bias pruning can be made exact.
-* Whether the STS temperatures shipped with (or fitted for) a drafter transfer to Apple-sized contexts.
+  *(The Markov chain is 3 ms of a 70 ms round on the 8B; the drafter's layers and the block's `lm_head` are the cost.)*
+* Whether the STS temperatures shipped with (or fitted for) a drafter transfer to Apple-sized contexts. *(The 8B drafter's
+  head is calibrated as shipped: ECE 0.05–0.07 per position, τ within 0.67–1.27; STS changes nothing here.)*
 
 Sources: [DSpark paper](https://arxiv.org/abs/2607.05147) · [DFlash paper](https://arxiv.org/abs/2602.06036) ·
 [SGLang integration](https://www.lmsys.org/blog/2026-07-06-dspark-sglang/) ·

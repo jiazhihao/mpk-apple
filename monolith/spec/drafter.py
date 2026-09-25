@@ -58,10 +58,11 @@ class Drafter(Module):
         raise NotImplementedError
 
     def lower_select(self, g: Graph, block: DraftBlock, profile: Profile, *, cost: Optional[Sequence[float]] = None,
-                     threshold: Optional[float] = None) -> Value:
+                     threshold: Optional[float] = None, fixed: Optional[int] = None) -> Value:
         """Emit the SERIAL op choosing the verify length ``L`` (a [1] u32 Value written into StepState). ``cost[l]``
         = the profile's relative cost of a (1 + l)-token target pass (the cost-aware rule of design §5.8) when the
-        caller has it; otherwise the drafter's own rule (``threshold`` overrides its default)."""
+        caller has it; otherwise the drafter's own rule (``threshold`` overrides its default); ``fixed`` = always
+        that many drafts (the measurement's baseline)."""
         raise NotImplementedError
 
     def lower_context_update(self, g: Graph, taps: List[Value], accepted: Value) -> None:

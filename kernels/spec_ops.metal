@@ -6,17 +6,19 @@
 // confidence:    conf[k] = σ(w · [h_k ; emb_k] + b) for the γ block positions — h_k the drafter's normed block hidden
 //                [γ, hidden] BF16, emb_k the Markov embedding W₁[prev_k] [γ, rank] BF16 (rank 0 = no Markov part),
 //                w [hidden + rank] and b in FP32 (the BF16-valued checkpoint parameters, widened). The dot product
-//                accumulates in FP32 and rounds to BF16 before the bias like the reference's BF16 linear; the
-//                sigmoid runs in FP32. One SIMD-group per position.
+//                accumulates in FP32 and rounds to BF16 before the bias like the reference's BF16 linear; the logit
+//                is divided by the position's STS temperature (params, 1 = uncalibrated) and the sigmoid runs in
+//                FP32. One SIMD-group per position.
 // verify_select: one thread. Advances the drafter's context length by the positions the draft pass injected, copies
 //                the block's drafts and confidences into StepState and, outside a prefill chunk, chooses the verify
 //                length L ≤ min(γ, t_max − 1): mode 0 = the reference's confident-prefix rule (the leading positions
 //                with confidence ≥ threshold; threshold ≤ 0 verifies the whole block), mode 1 = the cost-aware rule
 //                of design §5.8, L = argmax_l (1 + Σ_{i≤l} a_i) / cost[l] with a_i = Π_{j≤i} c_j the survival
 //                probability of draft i and cost[l] the profile's cost of a (1 + l)-token target pass relative to a
-//                single-token pass. Then it sets the next step's tokens pending_tokens = [anchor, d_0 … d_{L-1}] and
-//                t_this_step = 1 + L. During a prefill chunk the host feeds the next chunk and only the bookkeeping
-//                runs.
+//                single-token pass, mode 2 = a fixed L = threshold (the measurement's baseline). Then it sets the next
+//                step's tokens pending_tokens = [anchor, d_0 … d_{L-1}] and t_this_step = 1 + L, and logs the block's
+//                confidences at conf_log[step % log_cap][0 … 15] for the calibration. During a prefill chunk the
+//                host feeds the next chunk and only the bookkeeping runs.
 // accept_scan:   one thread; the step's closing SERIAL op when a drafter is wired in (replaces `advance`). A prefill
 //                chunk advances the position and marks its t positions for injection. Otherwise the step fed
 //                pending_tokens = [prompt tail …, anchor, d_0 … d_{L-1}] (L = verify_len; the anchor is at row
@@ -26,8 +28,8 @@
 //                (the KV entries of rejected positions are overwritten by later steps), the anchor becomes the last
 //                committed token, n_inject = checkpoint_index = base + committed (the rows whose target features
 //                the drafter injects next and the state commit passes replay), t_this_step returns to 1 and `done`
-//                is set at EOS. Each step logs (committed << 16) | accepted at log[step % log_cap] (a prefill chunk
-//                logs (t << 16) | 0xFFFF) for the acceptance statistics.
+//                is set at EOS. Each step logs (committed << 16) | (verify_len << 8) | accepted at log[step % log_cap]
+//                (a prefill chunk logs (t << 16) | 0xFFFF) for the acceptance statistics.
 #ifndef STEP_STATE
 #define STEP_STATE 0
 #endif
@@ -42,8 +44,8 @@
 #endif
 
 struct ConcatParams { uint k; uint t_active; uint pad0; uint pad1; };
-struct ConfParams { uint gamma; uint hidden; uint rank; uint pad; };
-struct SelectParams { uint gamma; float threshold; uint t_max; uint mode; float cost[16]; };
+struct ConfParams { uint gamma; uint hidden; uint rank; uint pad; float sts[16]; };
+struct SelectParams { uint gamma; float threshold; uint t_max; uint mode; float cost[16]; uint log_cap; uint pad1; uint pad2; uint pad3; };
 struct AcceptParams { uint ring_cap; int eos; uint log_cap; uint pad1; };
 
 kernel void tap_concat(device const uint4* s0 [[buffer(0)]], device const uint4* s1 [[buffer(1)]], device const uint4* s2 [[buffer(2)]],
@@ -89,12 +91,12 @@ kernel void confidence(device const ushort* hidden [[buffer(0)]], device const u
     uint u = as_type<uint>(acc); u += 0x7FFFu + ((u >> 16) & 1u); const float r = as_type<float>(u & 0xFFFF0000u);   // the BF16 linear
     float z = r + b[0];
     uint v = as_type<uint>(z); v += 0x7FFFu + ((v >> 16) & 1u); z = as_type<float>(v & 0xFFFF0000u);                // BF16 + BF16
-    conf[k] = 1.0f / (1.0f + exp(-z));
+    conf[k] = 1.0f / (1.0f + exp(-z / p.sts[k]));
   }
 }
 
 kernel void verify_select(device const int* drafts [[buffer(0)]], device const float* conf [[buffer(1)]], device StepState* st [[buffer(2)]],
-                          constant SelectParams& p [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+                          constant SelectParams& p [[buffer(3)]], device float* conf_log [[buffer(4)]], uint i [[thread_position_in_grid]]) {
   if (i != 0 || st->done) return;
   st->drafter_ctx_len = st->drafter_ctx_len + st->n_inject;    // the draft pass appended the injected positions
   st->n_inject = 0u;
@@ -102,10 +104,13 @@ kernel void verify_select(device const int* drafts [[buffer(0)]], device const f
   for (uint k = 0; k < p.gamma; k++) {
     st->draft_tokens[k] = drafts[k];
     st->confidence[k] = conf[k];
+    if (p.log_cap) conf_log[(st->step % p.log_cap) * 16u + k] = conf[k];
   }
   uint L = 0u;
   const uint lmax = min(p.gamma, p.t_max - 1u);
-  if (p.mode == 1u) {
+  if (p.mode == 2u) {
+    L = min(uint(max(p.threshold, 0.0f)), lmax);
+  } else if (p.mode == 1u) {
     float a = 1.0f, expect = 1.0f, best = 1.0f / p.cost[0];
     for (uint l = 1; l <= lmax; l++) {
       a *= conf[l - 1u];
@@ -155,7 +160,7 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
     last = tok;
     if (p.eos >= 0 && tok == p.eos) { stop = true; break; }   // nothing after the first EOS is committed
   }
-  if (p.log_cap) log[st->step % p.log_cap] = (committed << 16) | acc;
+  if (p.log_cap) log[st->step % p.log_cap] = (committed << 16) | (L << 8) | acc;
   st->ring_head = head;
   st->accepted = acc;
   st->anchor = last;

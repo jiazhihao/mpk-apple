@@ -205,5 +205,7 @@ not ours — the GPU's drafts equal the oracle's on the golden's real target fea
 format the drafter was trained on (2.14 with the chat template vs 1.05 without). The levers are the ones the design
 names: a SIMD-group-matrix / MPP GEMM for T ≥ 2 (M9, #51) for both the verify pass and the drafter's block pass
 (MLX's `qmm_t` streams NVFP4 at 85–91 % of nominal at T = 2–4 on this chip), the drafter's weights in FP8/NVFP4, and
-the acceptance measurement on the prompt set (#40).
+the acceptance measurement on the prompt set (#40) — done: dspark.md §3 has the gate table over 11 prompts (the
+cost-aware rule 36.2 ms per token vs plain 27.0; fixed L = 1 / 2 / 3 / 7: 42.6 / 40.6 / 36.9 / 78.1) and the STS
+calibration (not needed: the head is calibrated as shipped).
 

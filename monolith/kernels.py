@@ -253,18 +253,27 @@ def concat_params(k: int, t_active: int) -> bytes:
     return struct.pack("<IIII", k, t_active, 0, 0)
 
 
-def conf_params(gamma: int, hidden: int, rank: int) -> bytes:
-    return struct.pack("<IIII", gamma, hidden, rank, 0)
+def conf_params(gamma: int, hidden: int, rank: int, sts: Optional[Sequence[float]] = None) -> bytes:
+    """The ``ConfParams`` record; ``sts[k]`` = the position's calibration temperature (1 = uncalibrated)."""
+    t = [float(x) for x in (sts or [])]
+    if len(t) > 16 or any(x <= 0 for x in t):
+        raise ValueError("conf_params: up to 16 positive STS temperatures")
+    t = t + [1.0] * (16 - len(t))
+    return struct.pack("<IIII16f", gamma, hidden, rank, 0, *t)
 
 
-def select_params(gamma: int, threshold: float, t_max: int, mode: int = 0, cost: Optional[Sequence[float]] = None) -> bytes:
+CONF_LOG_WIDTH = 16
+
+
+def select_params(gamma: int, threshold: float, t_max: int, mode: int = 0, cost: Optional[Sequence[float]] = None, log_cap: int = 0) -> bytes:
     """The ``SelectParams`` record: mode 0 = the confident-prefix rule (``threshold``), 1 = the cost-aware rule with
-    ``cost[l]`` = the relative cost of a (1 + l)-token target pass for l = 0 … γ (≤ 16 entries; cost[0] = 1)."""
+    ``cost[l]`` = the relative cost of a (1 + l)-token target pass for l = 0 … γ (≤ 16 entries; cost[0] = 1),
+    2 = a fixed verify length (``threshold`` = L). ``log_cap`` > 0 logs the block's confidences per step."""
     c = list(cost or [])
     if mode == 1 and (len(c) < 1 or len(c) > 16 or abs(c[0] - 1.0) > 1e-6 or any(x <= 0 for x in c)):
         raise ValueError("select_params: the cost rule needs 1..16 positive costs relative to cost[0] = 1")
     c = c + [1.0] * (16 - len(c))
-    return struct.pack("<IfII16f", gamma, threshold, t_max, mode, *c)
+    return struct.pack("<IfII16fIIII", gamma, threshold, t_max, mode, *c, log_cap, 0, 0, 0)
 
 
 ACCEPT_LOG_CAP = 65536
