@@ -23,7 +23,7 @@ import numpy as np
 
 from .. import kernels
 from ..bench import pack_spec, random_spec
-from ..formats import PackLayout
+from ..formats import FORMATS, PackLayout
 from ..formats.blm import PackInfo
 from ..formats.fp import f32_to_bf16
 
@@ -148,6 +148,58 @@ class Autotuner:
         choice = Choice({"RG": bmacros["RG"]}, bv["mode"], bv["fuse"], best_ms, default_ms or best_ms)
         self.choices[key] = {"macros": choice.macros, "grid_mode": choice.grid_mode, "fuse_norm": choice.fuse_norm, "ms": choice.ms,
                              "default_ms": choice.default_ms, "variants": [(round(ms, 4), v) for ms, v, _ in results]}
+        return choice
+
+    # ---- the tensor-ops tile (#51) -------------------------------------------------------------------------------
+    def tune_gemm(self, info: PackInfo, tm: int, epilogue: Optional[str], *, force: bool = False) -> Choice:
+        """The tile's geometry: one or two threadgroups per core (the sweep in decode-kernels.md §6 found either,
+        by format), timed on synthetic data like the GEMV variants."""
+        key = f"gemm|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|TM{tm}|{epilogue or 'plain'}"
+        if key in self.choices and not force:
+            c = self.choices[key]
+            return Choice(dict(c["macros"]), c["grid_mode"], False, c.get("ms", 0.0), c.get("default_ms", 0.0))
+        nt = self.nt
+        rng = np.random.default_rng(0)
+        spec = random_spec(info.format, info.n, info.k, rng)
+        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order))
+        copies = max(1, int((256 << 20) // max(len(data), 1)))
+        wbuf = nt.Buffer(self.dev, len(data) * copies)
+        for c in range(copies):
+            wbuf.write(data, c * len(data))
+        macros = kernels.gemm_macros(pinfo, tm=tm, out_bf16=True, epilogue=epilogue)
+        tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
+        lib = nt.Library(self.dev, kernels.gemm_source(info.format), dict(macros, **kernels.x_permute_macros(False)), language_version=kernels.MSL_TENSOR_OPS)
+        pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(lib, "x_permute")
+        xb = f32_to_bf16(rng.uniform(-1, 1, size=(tm, info.k)).astype(np.float32))
+        xbuf, rsbuf = nt.Buffer(self.dev, xb.tobytes()), nt.Buffer(self.dev, row_scales.tobytes())
+        xp = nt.Buffer(self.dev, tm * info.k * 2)
+        n_out = info.n // 2 if epilogue == "silu_mul" else info.n
+        ybuf = nt.Buffer(self.dev, tm * n_out * 2)
+        res = nt.Buffer(self.dev, tm * info.n * 2)
+        wpw = int(FORMATS.get(info.format).weights_per_word)
+        n_tiles = -(-info.n // tn)
+        results = []
+        for mode in ("crew", "crew2"):
+            tg = min(384, pso.max_threads_per_threadgroup)
+            n_sg = (tg // 32) * self.cores * (2 if mode == "crew2" else 1)
+            grid = (-(-(n_sg * 32) // tg), 1, 1)
+            prm = kernels.gemm_params(info.n, n_tiles, n_sg, tm, n_blocks=pinfo.n_blocks)
+            pprm = kernels.x_permute_params(info.k, tm, tm, wpw, tk)
+            ds = [nt.Dispatch().pipeline(ppso).buffer(0, xbuf).buffer(3, xp).bytes(4, pprm).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier()]
+            for c in range(copies):
+                d = (nt.Dispatch().pipeline(pso).buffer(0, wbuf, c * len(data)).buffer(1, rsbuf).buffer(2, xp).buffer(3, ybuf).bytes(4, prm)
+                     .grid(*grid).threadgroup(tg, 1, 1))
+                if epilogue == "residual":
+                    d.buffer(7, res)
+                ds.append(d)
+            results.append((self._time(ds) / copies, mode))
+        results.sort(key=lambda r: r[0])
+        best_ms, best_mode = results[0]
+        default_ms = [ms for ms, m in results if m == "crew"][0]
+        if best_ms > default_ms * (1 - NOISE_MARGIN):
+            best_ms, best_mode = default_ms, "crew"
+        choice = Choice({}, best_mode, False, best_ms, default_ms)
+        self.choices[key] = {"macros": {}, "grid_mode": best_mode, "ms": best_ms, "default_ms": default_ms, "variants": [(round(ms, 4), m) for ms, m in results]}
         return choice
 
     # ---- GDN -----------------------------------------------------------------------------------------------------

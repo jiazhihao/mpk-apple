@@ -383,7 +383,8 @@ path.
   install time, never hard-coded (`profiles/` holds the hand-derived first cut).
 * **Dynamic T.** With DSpark the verify length changes every round, so `T_this_step` is read from `StepState` by every
   kernel (T_max = 1 + γ fixed at compile time; the crew geometry never changes). Where the best kernel differs by T —
-  shader-ALU verify for T ≤ 4, the accelerator path for larger T on Apple10 — both variants are encoded and the one
+  the shader GEMV at T = 1, the tensor-ops tile above it on Apple10 (the profile's `accelerator_min_t`, 2 on the
+  M5 Pro for every format; #51) — both variants are encoded and the one
   not selected returns at its first instruction (a predicated dispatch costs ~1.4 µs **[M]**); `executeCommandsIn
   Buffer:indirectBuffer:`, which lets the GPU choose the ICB range, is the optimization if those µs ever matter.
 
@@ -413,7 +414,8 @@ acceptance probability so the verifier can choose how many draft tokens to verif
    calibration, STS, shipped with the drafter or fitted once), choose
    `L = argmax_{0≤l≤γ} (1 + Σᵢ≤ₗ aᵢ) / cost(1 + l)`, where `cost(T)` is the profile's measured cost of a T-token target
    pass in units of a T = 1 pass (M5 Pro shader ALUs: FP8 1 / 1.08 / – / 1.11 / … / 3.6, NVFP4 1 / 1.28 / – / 1.79 /
-   … / 5.3 for T = 1 / 2 / 3 / 4 / … / 8; accelerator path 1.5 at T = 8 **[M]**). This is DSpark's hardware-aware
+   … / 5.3 for T = 1 / 2 / 3 / 4 / … / 8; the tensor-ops tile 1.03 / 1.09 (NVFP4 / FP8) for any T ≤ 16 **[M]**, so
+   with the accelerator on the table is the shader's row at T = 1 and the tile's above — #51). This is DSpark's hardware-aware
    scheduler reduced to batch 1: the confidence chain supplies the expected acceptance, the chip profile the cost.
    Write `T_this_step = 1 + L`.
 5. *Target verify pass* at T = 1 + L (the ordinary step program with dynamic T), tapping features for the next round.
@@ -424,13 +426,14 @@ acceptance probability so the verifier can choose how many draft tokens to verif
    prefix, advance the KV by `accepted + 1`, set the next anchor, append tokens to the ring, check stop conditions.
 
 **Cost model.** Per round: drafter weights once (1.3–3.7 GB), `lm_head` at T = γ (0.72 GB), γ × W₂ (0.9 GB in BF16,
-0.45 in INT8), plus the verify pass at `cost(1 + L)`. The `cost(T)` table measured so far is for shader-FMA kernels;
-MLX's SIMD-group-matrix path streams NVFP4 at 85–91 % of nominal at T = 2–4 on the M5 Pro
-([kernel study](../research/gemv-kernel-study.md) §3c), so with such a verify kernel `cost(4)` should be ~1.1, not
-1.8 — the T > 1 GEMM is a `simdgroup_multiply_accumulate` (Apple7+) or MPP kernel, not a wider FMA loop. Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify)`.
+0.45 in INT8), plus the verify pass at `cost(1 + L)`. The shader-FMA `cost(T)` table (×1.8 at T = 4 for NVFP4) was
+the reason the round could not pay for itself on the M5 Pro; the tensor-ops tile (§5.6, #50/#51) makes every T ≤ 16
+cost 1.03–1.09 of a T = 1 pass — and the drafter's BF16 block pass at T = γ streams at 274 GB/s instead of ~110 —
+which is what turned the M6 gate on this chip (dspark.md §3). On a chip without the accelerator the T > 1 GEMM
+would be a `simdgroup_multiply_accumulate` kernel (Apple7+), not a wider FMA loop. Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify)`.
 With the public drafters' reported accepted lengths (2.7–4.1 on math/code/chat at n-max 4 **[R]**) and the M5 Pro's
 cost table, L = 3–4 on the shader path pays for FP8 layers but is marginal for the NVFP4 MLPs (×1.79 at T = 4), which
-is exactly why the accelerator verify path (§5.6, ×1.5 at T = 8) and the per-chip choice matter. On an M3 Pro
+is exactly why the accelerator verify path (§5.6, ×1.03–1.09 up to 16 tokens) and the per-chip choice matter. On an M3 Pro
 (no accelerator, T-costs unmeasured) L will be smaller. Every number here is re-measured in plan M6; the gate is
 tokens/s, not acceptance.
 

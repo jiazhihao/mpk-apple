@@ -33,3 +33,18 @@ def test_profile_validation():
     with pytest.raises(ValueError):
         Profile.from_dict("x", {"gpu_cores": 1, "nominal_gbps": 1.0,
                                 "engine": {"family": "Apple9", "lane_order": "contiguous", "cost_T": {"fp8": {"1": 1.2}}}})
+
+
+def test_accelerator_fields():
+    from monolith.core.profile import Profile, load_profiles
+
+    base = {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}}
+    assert Profile.from_dict("p", base).accelerator == "off" and Profile.from_dict("p", base).accelerator_min_t == {}
+    on = Profile.from_dict("p", dict(base, engine=dict(base["engine"], accelerator="on", accelerator_min_t={"nvfp4": 2, "fp8": 4})))
+    assert on.accelerator == "on" and on.accelerator_min_t == {"nvfp4": 2, "fp8": 4}
+    with pytest.raises(ValueError):
+        Profile.from_dict("p", dict(base, engine=dict(base["engine"], accelerator="maybe")))
+    with pytest.raises(ValueError):
+        Profile.from_dict("p", dict(base, engine=dict(base["engine"], accelerator_min_t={"nvfp4": 0})))
+    m5 = load_profiles()["apple-m5-pro-20c"]
+    assert m5.accelerator == "on" and m5.accelerator_min_t["nvfp4"] == 2 and m5.cost("accelerator_nvfp4", 8) == pytest.approx(1.03)

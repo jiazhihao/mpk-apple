@@ -64,7 +64,7 @@ Per speculative round with γ = 7, relative to a T = 1 target pass (17.6 GB):
 | `lm_head` at T = γ | 0.72 GB (NVFP4) | 4 % | shared with the target |
 | Markov bias, γ × W₂ | 7 × 127 MB (BF16) = 0.9 GB; 0.45 GB at INT8 | 5 / 2.5 % | sequential; ~0.45 ms per position on an M5 Pro; top-M pruning is an exactness question |
 | Feature projection for the accepted positions | `Wc` 25,600 × 5,120 (262 MB BF16) + 5 layers' k/v projections | 1.5 % | once per round |
-| Verify pass at T = 1 + L | 17.6 GB × `cost(1 + L)` | M5 Pro shader ALUs: FP8 ×1.08 / ×1.11 at T = 2 / 4, NVFP4 ×1.28 / ×1.79; accelerator ×1.5 at T = 8 **[M]** | the quantity `verify_select` optimizes |
+| Verify pass at T = 1 + L | 17.6 GB × `cost(1 + L)` | M5 Pro shader ALUs: FP8 ×1.08 / ×1.11 at T = 2 / 4, NVFP4 ×1.28 / ×1.79; the tensor-ops tile ×1.03 (NVFP4) / ×1.09 (FP8) for any T ≤ 16 **[M]** (#50/#51) | the quantity `verify_select` optimizes |
 
 Memory: target 21 GB + drafter 1.3–3.7 GB + injected-context KV (≈ 20 KB per committed token: 5 layers × 8 KV heads ×
 128 × K and V in BF16) + state. On the 36 GB M3 Pro the NVFP4 or INT8 drafter fits comfortably; the BF16 one is tight.
@@ -106,12 +106,38 @@ set) fits τ = 0.67–1.27 with ECE 0.05–0.07 before and after (position 6: 0.
 is calibrated as shipped, and the calibrated bench is identical within noise
 (`tools/bench/results/sts_qwen3-8b-dspark_apple-m5-pro-20c.json`).
 
-**Go / no-go.** On the shader-FMA path the M6 gate (≥ 1.5× plain) is **not** reachable on this chip: the fixed cost
-alone (60 ms per step at L = 0 vs 27 ms plain) needs 2.2 committed tokens per step to break even. With the T ≥ 2
-GEMM path (M9: the draft pass at bandwidth ≈ 9 ms for its 2.2 GB, the verify pass at T = 4 at ~×1.1) the same
-acceptance gives ≈ 40 ms per step for 2.3 tokens ≈ 17 ms per token — the gate — so the round stays in the plan
-behind #50/#51; the 27B on the M3 Pro (no accelerator, T-costs unmeasured there) is measured when that machine
+**Go / no-go (shader path).** On the shader-FMA path the M6 gate (≥ 1.5× plain) is **not** reachable on this chip:
+the fixed cost alone (60 ms per step at L = 0 vs 27 ms plain) needs 2.2 committed tokens per step to break even.
+With the T ≥ 2 GEMM path (M9: the draft pass at bandwidth ≈ 9 ms for its 2.2 GB, the verify pass at T = 4 at ~×1.1)
+the same acceptance gives ≈ 40 ms per step for 2.3 tokens ≈ 17 ms per token — the gate — so the round stayed in the
+plan behind #50/#51; the 27B on the M3 Pro (no accelerator, T-costs unmeasured there) is measured when that machine
 runs `p13`.
+
+**With the accelerator verify path (#50/#51, 2026-09-25)** — the same prompt set and bench, the profile's
+`accelerator: on` (every T > 1 GEMV of the target *and of the drafter* on `gemm_tile`, decode-kernels.md §6; the
+shader path re-measured the same day as the A/B) [M]:
+
+| verify rule | path | chat | code | math | text | **all** | tokens / step | mean accepted (of 7) |
+|---|---|---|---|---|---|---|---|---|
+| plain decode | – | 27.1 | 27.0 | 27.1 | 26.9 | **27.0 ms** | 1.00 | – |
+| cost-aware rule | tile | 27.3 | 16.9 | 14.3 | 21.6 | **19.9 ms** | 3.08 | 2.08 (L̄ 7.0) |
+| cost-aware rule | shader | 42.5 | 32.1 | 30.0 | 40.1 | 35.8 ms | 2.30 | 1.30 (L̄ 1.8) |
+| fixed L = 4 | tile | 27.7 | 18.8 | 16.6 | 22.4 | 21.3 ms | 2.78 | 1.78 |
+| fixed L = 4 | shader | 105.0 | 69.8 | 63.9 | 86.4 | 80.8 ms | 2.67 | 1.67 |
+| fixed L = 7 (the whole block) | tile, first permute | 31.1 | 19.3 | 16.4 | 24.7 | 22.7 ms | 3.08 | 2.08 |
+| fixed L = 7 | shader | 106.5 | 66.3 | 59.6 | 87.7 | 79.3 ms | 2.92 | 1.92 |
+
+(The tile rows are the final kernel; the first version's `x_permute` cost 8.8 ms per step — the fixed L = 7 row
+kept from that run shows it: 22.7 vs the cost rule's 19.9, the same L̄ 7.0.) The greedy tokens equal plain decode's
+in every run (the 8B golden holds through 16 speculative steps on the tile path). What changed: (1) the tile makes
+the verify pass flat in T (1.03–1.09 of a T = 1 pass for any T ≤ 16), so the cost-aware rule verifies the whole
+block every step — L̄ 7.0, 3.08 tokens per step, 2.08 accepted — and a whole-block step costs 61 ms instead of
+230; (2) against the shader path's best (its cost rule, 35.8 ms) the round is **1.80× faster**, and against plain
+decode **1.36×** on the prompt set: math 1.89×, code 1.60×, text 1.24×, chat 0.99× — the chat prompts accept
+0.5–1.2 per step and pay the round for it; (3) the M6 gate (≥ 1.5× plain) is met on math and code, missed on
+text and chat: the step is 94 % bus-bound now (decode-kernels.md §5), so what remains is the drafter's acceptance
+— the prompt's and the drafter's, not the engine's — and the two BF16 `lm_head` passes per step (a quarter of
+that with the 27B's NVFP4 head).
 
 Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify(1 + L))`. With the llama.cpp accepted lengths above
 (2.7–4.1 at n-max 4) and the M5 Pro cost table, the break-even is comfortable on FP8 layers and marginal for the NVFP4

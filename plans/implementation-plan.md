@@ -486,9 +486,16 @@ NVFP4 177 GB/s, FP8 253, INT4 204 at 8 or 16 tokens — 0.9–1.1× a T = 1 shad
 below `p14` at 32 tokens (the un-overlapped fill and the activation traffic; a multi-SIMD-group staged variant is
 the T ≥ 32 follow-up). The M5-only pipelining experiment (dequantize tile n+1 while the accelerator multiplies
 tile n) is answered by the measurement: within a SIMD-group the fill and the matmul serialize, and the operand
-registers cannot hold a second tile. Next: the accelerator **verify path** for T = 1 + L wired into the dynamic-T
-program as the predicated variant (#51); MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1). Exit: per-chip
-results table next to each chip's bound, including tokens/s with DSpark.
+registers cannot hold a second tile. **#51 built:** with the profile's `accelerator: on` every T > 1 GEMV — the
+target's verify pass, the drafter's block pass, the prompt chunks — runs on the tile as the predicated variant above
+T = 1 (the per-T shader variants collapse into one tile dispatch fed by a shared normalize-and-permute), the verify
+cost table takes the tile's rows, and the round on Qwen3-8B NVFP4 + its DSpark drafter goes from 35.8 to 19.9 ms
+per token on the prompt set (1.80× the shader path, 1.36× plain decode: math 1.89×, code 1.60×, text 1.24×, chat
+0.99×) with the whole block verified every step, the step 94 % bus-bound; the greedy tokens still equal the golden
+(dspark.md §3, decode-kernels.md §5). The M6 gate (≥ 1.5× plain) is met on math and code on this chip.
+Remaining: MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1); the staged multi-SIMD-group tile for T ≥ 32 and a
+K-split for the down projection (§6 of decode-kernels.md). Exit: per-chip results table next to each chip's bound,
+including tokens/s with DSpark.
 
 ### Backlog (post-v1)
 

@@ -36,6 +36,32 @@ using namespace mpp::tensor_ops;
 #ifndef OUT_BF16
 #define OUT_BF16 0
 #endif
+#ifndef STEP_STATE
+#define STEP_STATE 0                 // 1: the row count comes from StepState (buffer 15) and the dispatch is a per-T variant
+#endif
+#ifndef T_SRC
+#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step, 1 = n_inject, 2 = the T_STATIC_ROWS macro
+#endif
+#ifndef T_STATIC_ROWS
+#define T_STATIC_ROWS 1u
+#endif
+#ifndef T_LO
+#define T_LO 0                       // with T_HI: the variant runs only when T_LO < T_act <= T_HI (design §5.7)
+#endif
+#ifndef EPILOGUE
+#define EPILOGUE 0                   // 1: y = bf16(v + residual) (EPILOGUE_ROUND: v rounded to BF16 first); 2: silu(gate)·up over
+#endif                               //    chunk-interleaved rows (block b = gate rows [0, CHUNK) | up rows [CHUNK, R)), N/2 outputs
+#ifndef EPILOGUE_ROUND
+#define EPILOGUE_ROUND 0
+#endif
+#ifndef STAT_OUT
+#define STAT_OUT 0                   // 1: per-block partial sums of squares of the BF16-rounded outputs, stat_out[t * n_blocks + block]
+#endif
+#if R != 16 && R != 8
+#error "gemm_tile: the epilogues index pack blocks of 8 or 16 rows"
+#endif
+#define CHUNK (R / 2u)
+#define PAIR_XOR ((R == 16u) ? 8u : 1u)                    // the lane holding the partner row of a silu_mul pair
 #ifndef Q_OUTER
 #define Q_OUTER 0                    // 1: lane group outer, word inner (a tile's row piece is a whole cache line)
 #endif
@@ -85,7 +111,12 @@ using namespace mpp::tensor_ops;
 #endif
 #endif
 
-struct GemmParams { uint n_rows; uint n_tiles; uint n_sg; uint t_active; float out_scale; uint pad0, pad1, pad2; };
+struct GemmParams { uint n_rows; uint n_tiles; uint n_sg; uint t_active; float out_scale; uint tile0; uint n_blocks; uint pad; };
+// n_rows / n_tiles / n_blocks / tile0 describe a row range of the slab (a whole slab: N / all tiles / all blocks / 0);
+// outputs and stat partials are range-relative, the weights and row scales are addressed by the slab tile.
+
+static inline float round_bf16(float v) { uint u = as_type<uint>(v); u += 0x7FFFu + ((u >> 16) & 1u); return as_type<float>(u & 0xFFFF0000u); }
+static inline float silu_f(float g) { return g / (1.0f + exp(-g)); }
 
 static inline uint unit_word(uint lane, uint r, uint j) {
 #if LANE_ORDER == 0
@@ -106,14 +137,32 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
                       device float* y [[buffer(3)]],
 #endif
                       constant GemmParams& p [[buffer(4)]],
+#if EPILOGUE == 1
+                      device const ushort* residual [[buffer(7)]],
+#endif
+#if STAT_OUT
+                      device float* stat_out [[buffer(8)]],
+#endif
+#if STEP_STATE
+                      device const StepState* st [[buffer(15)]],
+#endif
                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
+#if STEP_STATE
+  if (st->done) return;
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
+#ifdef T_HI
+  if (T_act > T_HI || T_act <= T_LO) return;
+#endif
+#else
+  const uint T_act = p.t_active;
+#endif
   matmul2d<desc, execution_simdgroup> op;
   tA_t tA(xp, dextents<int, 2>(int(K), int(TM)));
   const uint c0b = 4u * ((lane & 1u) + 2u * ((lane >> 3) & 1u));      // this thread's column-run base
   const uint c1b = ((lane >> 1) & 3u) + 4u * ((lane >> 4) & 1u);      // this thread's row-slot base
   const uint mq = (lane & 1u) | (((lane >> 3) & 1u) << 1);            // its member id in the quad sharing those rows
-  for (uint tile = sg; tile < p.n_tiles; tile += p.n_sg) {
+  for (uint tile = p.tile0 + sg; tile < p.tile0 + p.n_tiles; tile += p.n_sg) {
     auto bT = op.get_right_input_cooperative_tensor<bfloat, bfloat, float>();
     auto cT = op.get_destination_cooperative_tensor<tA_t, decltype(bT), float>();
     for (uint16_t i = 0; i < cT.get_capacity(); i++) cT[i] = 0.0f;
@@ -232,48 +281,150 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
       if (kt == KT - 1u) op.run(sA, bT, cT);                          // fill-only timing: one run so the fill is not dead
 #endif
     }
-    // epilogue: the per-row tensor scale, rows beyond t_active untouched
+    // epilogue over the destination: element ((blk*(TN/16) + jump)*2 + s2) << 2 | q holds row n = c0b + 16*jump + q
+    // and token m = 16*blk + c1b + 8*s2; a lane's 4 rows lie in one pack block, the block's other rows in the lanes
+    // differing in bit 0 (and bit 3 when R = 16); rows beyond t_active and the range are not written
+#pragma clang loop unroll(full)
     for (uint jump = 0; jump < TN / 16u; jump++) {
-      const uint n = c0b + 16u * jump;                                   // 4 consecutive rows of the tile
-      const uint row = tile * TN + n;
+      const uint n = c0b + 16u * jump;                                   // this lane's 4 consecutive rows of the tile
+      const uint row = tile * TN + n;                                    // the slab row (weights, row scales)
+      const uint rrow = (tile - p.tile0) * TN + n;                       // the range-relative row (outputs)
+      const uint bb = (tile - p.tile0) * (TN / R) + (n / R);             // the range-relative pack block
       float rs[4];
-      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (row + qq < p.n_rows) ? row_scale[row + qq] * p.out_scale : 0.0f;
-      for (uint blk = 0; blk < NB_C; blk++) for (uint s2 = 0; s2 < 2u; s2++) {
-        const uint m = 16u * blk + c1b + 8u * s2;
-        if (m >= p.t_active) continue;
-        for (uint qq = 0; qq < 4u; qq++) {
-          if (row + qq >= p.n_rows) continue;
-          const float v = cT[uint16_t((((blk * (TN / 16u) + jump) * 2u + s2) << 2) | qq)] * rs[qq];
-#if OUT_BF16
-          uint u = as_type<uint>(v); u += 0x7FFFu + ((u >> 16) & 1u);
-          y[(ulong)m * p.n_rows + row + qq] = ushort(u >> 16);
+#pragma clang loop unroll(full)
+      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? row_scale[row + qq] * p.out_scale : 0.0f;
+#pragma clang loop unroll(full)
+      for (uint blk = 0; blk < NB_C; blk++)
+#pragma clang loop unroll(full)
+        for (uint s2 = 0; s2 < 2u; s2++) {
+          const uint m = 16u * blk + c1b + 8u * s2;
+          float v[4];
+#pragma clang loop unroll(full)
+          for (uint qq = 0; qq < 4u; qq++) v[qq] = cT[uint16_t((((blk * (TN / 16u) + jump) * 2u + s2) << 2) | qq)] * rs[qq];
+#if EPILOGUE == 2
+          float pv[4];                                                   // the partner rows: up for a gate lane, gate for an up lane
+#pragma clang loop unroll(full)
+          for (uint qq = 0; qq < 4u; qq++) pv[qq] = simd_shuffle_xor(v[qq], ushort(PAIR_XOR));
+          const bool gate_lane = (lane & PAIR_XOR) == 0u;               // rows [0, CHUNK) of the block
+#pragma clang loop unroll(full)
+          for (uint qq = 0; qq < 4u; qq++) v[qq] = silu_f(v[qq]) * pv[qq];
+          const uint orow0 = bb * CHUNK + (n % R), n_out = p.n_rows / 2u;
+          const bool writer = gate_lane && m < T_act;
 #else
-          y[(ulong)m * p.n_rows + row + qq] = v;
+          const uint orow0 = rrow, n_out = p.n_rows;
+          const bool writer = m < T_act;
+#endif
+          float ssq = 0.0f;
+#pragma clang loop unroll(full)
+          for (uint qq = 0; qq < 4u; qq++) {
+            if (!writer || rrow + qq >= p.n_rows) continue;
+            float vv = v[qq];
+#if EPILOGUE == 1
+#if EPILOGUE_ROUND
+            vv = round_bf16(vv);
+#endif
+            vv += as_type<float>(uint(residual[(ulong)m * n_out + orow0 + qq]) << 16);
+#endif
+            const float vr = round_bf16(vv);
+            ssq = fma(vr, vr, ssq);
+#if OUT_BF16
+            y[(ulong)m * n_out + orow0 + qq] = ushort(as_type<uint>(vr) >> 16);
+#else
+            y[(ulong)m * n_out + orow0 + qq] = vv;
+#endif
+          }
+#if STAT_OUT
+          // the block's sum over its rows: the lanes differing in bit 0 (and bit 3 when a block is 16 rows)
+          ssq += simd_shuffle_xor(ssq, ushort(1));
+#if R == 16
+          ssq += simd_shuffle_xor(ssq, ushort(8));
+#endif
+          if (m < T_act && (lane & ((R == 16u) ? 9u : 1u)) == 0u && rrow < p.n_rows) stat_out[m * p.n_blocks + bb] = ssq;
 #endif
         }
-      }
     }
   }
 }
 
-// x_permute: x [T, K] BF16 (rows t >= t_active ignored) -> x' [TM, K] in gemm_tile's reduction order, zero beyond
-// t_active. Pack order first (word j of lane l -> columns [j*32*WPW + l*WPW, +WPW)), then inside each 64-column tile
-// the accelerator's slot order: slot 4*(bit0 + 2*bit3) + 16*jump + q of quad member (bit0, bit3) holds tile column
-// (TK/4)*(bit0 + 2*bit3) + 4*jump + q, so a thread's TK/4 slots are TK/4 consecutive pack columns.
-struct XPermParams { uint k; uint t_active; uint tm; uint wpw; uint tk; uint pad0, pad1, pad2; };
+// x_permute: x [T, K] BF16 (rows t >= T_act ignored) -> x' [TM, K] in gemm_tile's reduction order, zero beyond
+// T_act; with PERM_NORM the RMSNorm scaling is applied on the way (x'[t][i] = bf16(h[t][c(i)] · r[t] · norm_w[c(i)]),
+// r[t] = rsqrt(Σ stat[t·stat_parts ..] / K + eps) — the normalized activation the reference's norm produces).
+// Pack order first (word j of lane l -> columns [j*32*WPW + l*WPW, +WPW)), then inside each TK-column tile the
+// accelerator's slot order: slot 4*(bit0 + 2*bit3) + 16*jump + q of quad member (bit0, bit3) holds tile column
+// (TK/4)*(bit0 + 2*bit3) + 4*jump + q, so a thread's TK/4 slots are TK/4 consecutive pack columns. PERM_SG
+// SIMD-groups per output row, each a K/PERM_SG slice, the strides compile-time (K, TK, WPW) and the gathers issued
+// PERM_UNROLL at a time — a step runs one of these per GEMV input, so its latency is the whole cost.
+// With STEP_STATE the same per-T predicate as the tile it feeds.
+#ifndef PERM_NORM
+#define PERM_NORM 0
+#endif
+#ifndef PERM_SG
+#define PERM_SG 4u
+#endif
+#define PERM_UNROLL 4u
+struct XPermParams { uint k; uint t_active; uint tm; uint wpw; uint tk; uint stat_parts; float eps; uint pad; };
 
-kernel void x_permute(device const ushort* x [[buffer(0)]], device ushort* xp [[buffer(1)]], constant XPermParams& p [[buffer(2)]],
-                      uint gid [[thread_position_in_grid]]) {
-  const uint total = p.tm * p.k;
-  if (gid >= total) return;
-  const uint t = gid / p.k, i = gid % p.k;
-  if (t >= p.t_active) { xp[gid] = 0; return; }
-  const uint kt = i / p.tk, slot = i % p.tk, ct = p.tk / 4u;
+static inline uint perm_source(uint i) {                                  // the original column of slot i
+  const uint kt = i / TK, slot = i % TK;
   const uint mq = ((slot >> 2) & 1u) + 2u * ((slot >> 3) & 1u), jump = slot >> 4, qq = slot & 3u;
-  const uint c = kt * p.tk + ct * mq + 4u * jump + qq;                   // the pack-order column
-  const uint kl = p.k / 32u, span = 32u * p.wpw;
-  const uint j = c / span, rem = c % span, l = rem / p.wpw, e = rem % p.wpw;
-  xp[gid] = x[t * p.k + l * kl + j * p.wpw + e];
+  const uint c = kt * TK + (TK / 4u) * mq + 4u * jump + qq;               // the pack-order column
+  const uint span = 32u * WPW;
+  const uint j = c / span, rem = c % span, l = rem / WPW, e = rem % WPW;
+  return l * KL + j * WPW + e;
+}
+
+kernel void x_permute(device const ushort* x [[buffer(0)]],
+#if PERM_NORM
+                      device const float* stat [[buffer(1)]], device const float* norm_w [[buffer(2)]],
+#endif
+                      device ushort* xp [[buffer(3)]], constant XPermParams& p [[buffer(4)]],
+#if STEP_STATE
+                      device const StepState* st [[buffer(15)]],
+#endif
+                      uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
+  const uint sg = gid / sw;
+  const uint t = sg / PERM_SG, slice = sg % PERM_SG;
+  if (t >= p.tm) return;
+#if STEP_STATE
+  if (st->done) return;
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
+#ifdef T_HI
+  if (T_act > T_HI || T_act <= T_LO) return;
+#endif
+#else
+  const uint T_act = p.t_active;
+#endif
+  const uint k0 = slice * (K / PERM_SG), k1 = k0 + K / PERM_SG;          // this SIMD-group's slice of the row
+  device ushort* out = xp + (ulong)t * K;
+  if (t >= T_act) {
+    for (uint i = k0 + lane; i < k1; i += 32u) out[i] = 0;
+    return;
+  }
+#if PERM_NORM
+  float ssq = 0.0f;
+  for (uint i = lane; i < p.stat_parts; i += 32u) ssq += stat[t * p.stat_parts + i];
+  ssq = simd_sum(ssq);
+  const float r = rsqrt(ssq / float(K) + p.eps);
+#endif
+  device const ushort* row = x + (ulong)t * K;
+  for (uint i = k0 + lane; i < k1; i += 32u * PERM_UNROLL) {
+    uint src[PERM_UNROLL];
+    ushort v[PERM_UNROLL];
+#pragma clang loop unroll(full)
+    for (uint u = 0; u < PERM_UNROLL; u++) {                                // independent gathers (a slice may be shorter than the unroll)
+      src[u] = (i + 32u * u < k1) ? perm_source(i + 32u * u) : 0u;
+      v[u] = (i + 32u * u < k1) ? row[src[u]] : ushort(0);
+    }
+#pragma clang loop unroll(full)
+    for (uint u = 0; u < PERM_UNROLL; u++) {
+      if (i + 32u * u >= k1) continue;
+#if PERM_NORM
+      const float f = round_bf16(as_type<float>(uint(v[u]) << 16) * r * norm_w[src[u]]);
+      v[u] = ushort(as_type<uint>(f) >> 16);
+#endif
+      out[i + 32u * u] = v[u];
+    }
+  }
 }
 
 // coop_layout: the register layout the fill assumes, read back from the API for the test (one SIMD-group).

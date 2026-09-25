@@ -153,3 +153,72 @@ def test_round_needs_the_dynamic_program_and_a_fitting_layout(pair):
     static = compile_program(model, tp, PROF, t=1)
     gdn = [o for o in static.ops if o.name == "gdn_mixer"][0]
     assert static.kernels[gdn.kernel].macros["SLOTS"] == "2u" and any(b[0] == 15 for b in gdn.bindings)
+
+
+# ---- the accelerator path (#51) ---------------------------------------------------------------------------------------
+
+PROF_ACCEL = Profile.from_dict("pa", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {
+    "family": "Apple10", "lane_order": "interleaved16", "accelerator": "on",
+    "cost_T": {"bf16": {"1": 1.0, "2": 1.1, "4": 1.3, "8": 2.0}, "accelerator_bf16": {"8": 1.05, "16": 1.06}}}})
+
+
+def test_accelerator_plan_in_the_round_program(pair):
+    """With the profile's accelerator on, a GEMV's per-T variants above min_t (2 by default) become one gemm_tile
+    dispatch predicated on (1, t_max], fed by an x_permute the siblings share; static row counts take the tile whole;
+    the verify cost table takes the tile's row; the tile kernels ask for MSL 4.0."""
+    from monolith import kernels
+
+    model, drafter, tp, dp = pair
+    prog = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp)
+    gate_up = [o for o in prog.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]
+    assert [o.meta.get("t_variant") for o in gate_up] == [1, 8] and [o.meta["t_range"] for o in gate_up] == [[0, 1], [1, 8]]
+    shader, tile = gate_up
+    assert not shader.meta.get("accelerator") and prog.kernels[shader.kernel].function == "gemv_T" and prog.kernels[shader.kernel].macros["T_HI"] == "1"
+    assert tile.meta["accelerator"] and tile.meta["tm"] == 8 and tile.meta["tile"] == [16, 256]
+    km = prog.kernels[tile.kernel]
+    assert km.function == "gemm_tile" and km.language_version == kernels.MSL_TENSOR_OPS
+    assert km.macros["EPILOGUE"] == "2" and km.macros["T_LO"] == "1" and km.macros["T_HI"] == "8" and km.macros["STEP_STATE"] == "1"
+    assert shader.meta["variant_group"] == tile.meta["variant_group"]
+    # its input: one x_permute with the norm applied on the way, right before it, writing the scratch the tile reads
+    i = prog.ops.index(tile)
+    perm = prog.ops[i - 1]
+    assert perm.meta["kind"] == "x_permute" and perm.meta["normed"] and perm.meta["t_range"] == [1, 8]
+    assert perm.meta.get("variant_group") is None and tile.barrier_before      # the tile waits for its permute (the barrier pass)
+    assert prog.kernels[perm.kernel].macros["PERM_NORM"] == "1" and prog.kernels[perm.kernel].language_version == kernels.MSL_TENSOR_OPS
+    assert [b for b in tile.bindings if b[0] == 2][0][1] == [b for b in perm.bindings if b[0] == 3][0][1]
+    # the attention layer's q|k|v GEMV and its gate sibling read the same normalized input: one permute for both
+    qkv = [o for o in prog.ops if o.name == "gemv:layers.1.self_attn.qkv.q_proj+k_proj+v_proj" and o.meta.get("accelerator")]
+    perms = {[b for b in o.bindings if b[0] == 2][0][1] for o in qkv}
+    assert len(qkv) == 2 and len(perms) == 1 and [o.meta["row_range"] is not None for o in qkv] == [True, True]
+    # the drafter: the block GEMVs (static rows = the block) take the tile whole, fc (n_inject rows) is split
+    blk = [o for o in prog.ops if o.name == "gemv:draft.layers.0.self_attn.qkv.q_proj+k_proj+v_proj"]
+    assert len(blk) == 1 and blk[0].meta["accelerator"] and blk[0].meta["t_range"] is None and "T_HI" not in prog.kernels[blk[0].kernel].macros
+    assert prog.kernels[blk[0].kernel].macros["T_SRC"] == "2" and prog.kernels[blk[0].kernel].macros["T_STATIC_ROWS"] == "3u"
+    fc = [o for o in prog.ops if o.name == "gemv:draft.fc.fc"]
+    assert [o.meta.get("t_variant") for o in fc] == [1, 8] and prog.kernels[fc[1].kernel].macros["T_SRC"] == "1"
+    # the cost rule: T = 1 on the shader, T >= 2 on the tile's row at TM = 8
+    assert verify_costs(PROF_ACCEL, tp, 3, 8) == pytest.approx([1.0, 1.05, 1.05, 1.05])
+    assert verify_costs(PROF_ACCEL, tp, 3, 8, accelerator="off") == pytest.approx([1.0, 1.1, 1.2, 1.3])
+    vs = [o for o in prog.ops if o.name == "verify_select"][0]
+    prm = prog.buffers[[b for b in vs.bindings if b[0] == 3][0][1]].init
+    assert struct.unpack_from("<4f", prm, 16) == pytest.approx((1.0, 1.05, 1.05, 1.05))
+    # the program survives its JSON (the language version included)
+    back = Program.from_json(prog.to_json())
+    assert back.kernels[tile.kernel].language_version == kernels.MSL_TENSOR_OPS and back.kernels[shader.kernel].language_version == 0
+    # the override turns it off
+    off = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp, accelerator="off")
+    assert not any(o.meta.get("accelerator") for o in off.ops)
+
+
+def test_accelerator_plan_in_the_plain_programs(pair):
+    """The chunked-prefill program splits every GEMV into the shader's T = 1 and the tile for (1, t_max]; the static
+    T = 1 decode program keeps the shader alone."""
+    model, _, tp, _ = pair
+    pre = compile_program(model, tp, PROF_ACCEL, dynamic_t=True)
+    gate_up = [o for o in pre.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]
+    assert [o.meta.get("t_variant") for o in gate_up] == [1, 8] and gate_up[1].meta["accelerator"] and gate_up[0].meta["t_range"] == [0, 1]
+    down = [o for o in pre.ops if o.name == "gemv:layers.1.mlp.down.down_proj"]
+    assert down[1].meta["accelerator"] and pre.kernels[down[1].kernel].macros["EPILOGUE"] == "1" and pre.kernels[down[1].kernel].macros["STAT_OUT"] == "1"
+    assert any(b[0] == 7 for b in down[1].bindings) and any(b[0] == 8 for b in down[1].bindings)
+    dec = compile_program(model, tp, PROF_ACCEL, t=1)
+    assert len([o for o in dec.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]) == 1 and not any(o.meta.get("accelerator") for o in dec.ops)

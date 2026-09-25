@@ -36,7 +36,11 @@ gather, ragged lane stripes and a package-declared value adapter (mlx_lm folds `
 porting-log.md); the porting guide (#48, `docs/porting.md`) closes M8. M9's accelerator GEMM is built (#50,
 `kernels/gemm_tile.metal`): the cooperative right-input fill from the pack words streams NVFP4 at 177 GB/s and FP8
 at 253 for 8 or 16 tokens — 0.9–1.1× a T = 1 shader pass, 34–49 % above `p14`'s staged tile; at 32 tokens it is
-below `p14` (decode-kernels.md §6). Next: the accelerator verify path in the step program (#51). Speculative decoding targets a **DSpark** drafter, not the MTP head.
+below `p14` (decode-kernels.md §6). #51 wires it into the step program: with the profile's `accelerator: on`
+every T > 1 GEMV runs on the tile as the predicated variant above T = 1, and the DSpark round on the 8B goes from
+35.8 to 19.9 ms per token on the prompt set (1.80× the shader path, 1.36× plain: math 1.89×, code 1.60×, text
+1.24×, chat 0.99×; the step 94 % bus-bound), tokens equal to the golden (dspark.md §3) — the M6 gate is met on
+math and code on this chip. Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order
 
@@ -106,10 +110,12 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order: M9 — the accelerator verify path (#51: `gemm_tile` as the
-   predicated T ≥ 5 variant of the verify pass, the cost table's accelerator column) is what the speculative gate
-   needs on this chip; the attention core's SIMD-group-matrix scoring for the long-context rows. The 27B items
-   (#36, #40's M3 Pro rows, #46) and the M3 Pro / M4 rows of the A/B tables need those machines.
+0. **Keep building** — what is left on this machine: the round's fixed cost (the budget in decode-kernels.md §5:
+   the draft pass's remaining shader ops and the serial tail), the staged multi-SIMD-group tile for T ≥ 32 and the
+   K-split for the down projection (decode-kernels.md §6), the attention core's SIMD-group-matrix scoring for the
+   long-context rows, and the autotuner-at-install profile writer (#49). The 27B items (#36, #40's M3 Pro rows,
+   #46), the M3 Pro / M4 rows of the A/B tables (#2, #3, #5, #7, #8, #49), #42 (a GPU box), #43 (Max-class parts)
+   and #52 (macOS 27) need machines this one is not.
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
    H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).

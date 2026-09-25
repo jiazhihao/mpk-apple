@@ -25,6 +25,7 @@ from ..core.ir import BlockDomain, Graph, Op, OpClass, Value
 from ..core.profile import Profile
 from ..core.shapes import N_INJ, Sym, T, bind, numel, step_bindings
 from ..core.step_state import StepStateLayout
+from ..formats import FORMATS
 from ..formats.blm import PackInfo
 from ..nn.module import Model
 from ..packs.packer import ALIGN, PackFile
@@ -57,12 +58,15 @@ class _Ctx:
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
     attention: str = "v1"                                                 # the attention kernel (profile / override)
+    accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
+    accel_min_t: Dict[str, int] = field(default_factory=dict)             # cost_T format key -> the smallest T the tile covers
     tuner: Any = None                                                     # compiler.autotune.Autotuner or None
     shared: Dict[str, str] = field(default_factory=dict)                  # shared scratch name -> buffer (sized to the largest request)
     eos: int = -1
     ring_capacity: int = 4096
     counter: int = 0
     norm_scratch: Dict[Tuple[str, str, int], str] = field(default_factory=dict)   # (x, stat, rows) -> the normalized scratch
+    perm_scratch: Dict[Tuple[Any, ...], str] = field(default_factory=dict)         # (input, stat, tm, wpw, tk, range) -> the permuted scratch
 
     # ---- helpers -----------------------------------------------------------------------------------------------
     def slab_info(self, name: str) -> PackInfo:
@@ -71,7 +75,7 @@ class _Ctx:
                 return pk.slab_info(name)
         raise KeyError(f"emit: no pack holds the slab {name!r}")
 
-    def kernel(self, key: str, source: str, function: str, macros: Dict[str, str]) -> str:
+    def kernel(self, key: str, source: str, function: str, macros: Dict[str, str], language_version: int = 0) -> str:
         macros = dict(macros)
         if self.dynamic_t:
             macros["STEP_STATE"] = "1"
@@ -79,7 +83,7 @@ class _Ctx:
             source = source.replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1)
         k = f"{function}|{key}|{kernels.macro_key(macros)}"
         if k not in self.program.kernels:
-            self.program.kernels[k] = KernelSpec(source, function, macros)
+            self.program.kernels[k] = KernelSpec(source, function, macros, language_version)
         return k
 
     def params(self, name: str, data: bytes) -> str:
@@ -284,6 +288,13 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
         block0, n_blocks, n_rows, nbytes = 0, info.n_blocks, info.n, int(info.nbytes)
     variants = t_variants(t_c) if (ctx.speculative and ctx.dynamic_t and t_src != STATIC_ROWS and t_c > 1) else [t_c]
     epilogue = op.attrs.get("epilogue")
+    # the accelerator path (#51): the T above accel_min_t go to one gemm_tile dispatch (predicated like a variant)
+    variants, tile_range = _accel_plan(ctx, info, op, t_c, t_src, variants)
+    ctx.counter += 1
+    vgroup = ctx.counter if (len(variants) > 1 or tile_range is not None) else None
+    if tile_range is not None and not variants:
+        _gemm_tile(ctx, op, info, tile_range, t_src, block0, n_blocks, n_rows, nbytes, vgroup)   # a static row count: the tile alone
+        return
     choices = [ctx.tuner.tune_gemv(info, tv, epilogue, stat is not None) if ctx.tuner is not None else None for tv in variants]
     fuse_norm = bool(choices[0]) and all(c is not None and c.fuse_norm for c in choices)
     eps = float(op.attrs.get("eps", 1e-6))
@@ -299,14 +310,12 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
     stat_out = op.attrs.get("stat_value")
     if stat_out is not None:
         ctx.stat_parts[stat_out] = n_blocks
-    ctx.counter += 1
-    vgroup = ctx.counter if len(variants) > 1 else None
     lo = 0
     for tv, choice in zip(variants, choices):
         rg = int(choice.macros["RG"]) if choice else None
         macros = dict(kernels.gemv_macros(info, t=tv, rg=rg, epilogue=epilogue, out_bf16=True, stat_out=stat_out is not None,
                                           norm=fuse_norm, round_before_residual=bool(op.attrs.get("round_residual"))), **ctx.t_macros(tv, t_src))
-        if len(variants) > 1:
+        if len(variants) > 1 or tile_range is not None:
             macros["T_LO"], macros["T_HI"] = str(lo), str(tv)
         k = ctx.kernel(f"gemv_T|{info.format}", kernels.gemv_source(info.format), "gemv_T", macros)
         n_sg, grid, tg = ctx.geometry(choice.grid_mode if choice else "crew", n_blocks)
@@ -323,9 +332,117 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
             writes.append(8)
         ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
                 rg=int(macros["RG"]), geometry=choice.grid_mode if choice else "crew", fused_norm=fuse_norm, t_variant=tv,
-                t_range=[lo, tv] if len(variants) > 1 else None, variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
+                t_range=[lo, tv] if (len(variants) > 1 or tile_range is not None) else None, variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
                 row_range=[block0 * info.rows, n_rows] if rr is not None else None)
         lo = tv
+    if tile_range is not None:
+        _gemm_tile(ctx, op, info, tile_range, t_src, block0, n_blocks, n_rows, nbytes, vgroup)     # the T above the shader's
+
+
+def gemm_tm(t: int) -> int:
+    """The tile's token rows for a T range ending at ``t`` (the accelerator's 16-row minimum makes 8 cost what 16 costs)."""
+    if t <= 8:
+        return 8
+    if t <= 16:
+        return 16
+    if t <= 32:
+        return 32
+    raise ValueError(f"gemm_tile: T = {t} exceeds the largest tile (32 rows)")
+
+
+def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variants: List[int]) -> Tuple[List[int], Optional[Tuple[int, int]]]:
+    """Split a GEMV's row counts between the shader variants and the tensor-ops tile: with the accelerator on and the
+    slab's format at or above its ``accel_min_t`` (default 2), the T in (min_t − 1, t_c] go to one tile dispatch at
+    TM = gemm_tm(t_c); the shader keeps the variants below (T = 1 with the default). Static row counts take the tile
+    whole when they reach min_t; a program without per-T variants (chunked prefill) is split the same way."""
+    if ctx.accelerator != "on" or t_c < 2:
+        return variants, None
+    min_t = int(ctx.accel_min_t.get(COST_FORMAT.get(info.format, info.format), 2))
+    if t_c < min_t:
+        return variants, None
+    rr = op.attrs.get("row_range")
+    try:
+        tm = gemm_tm(t_c)
+        tn = kernels.gemm_tile_shape(tm)[0]
+        kernels.gemm_macros(info, tm=tm, epilogue=op.attrs.get("epilogue"), stat_out=op.attrs.get("stat_value") is not None,
+                            round_before_residual=bool(op.attrs.get("round_residual")))
+        if rr is not None and int(rr[0]) % tn:
+            raise ValueError("the row range does not start on a tile")
+    except ValueError:
+        return variants, None                                          # the shape or the range is not the tile's: the shader path
+    if t_src == STATIC_ROWS:
+        return [], (0, t_c)                                            # a static row count: the tile alone, unpredicated
+    shader = [tv for tv in (variants if len(variants) > 1 else t_variants(t_c)) if tv < min_t]
+    return shader, (shader[-1] if shader else 0, t_c)
+
+
+def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_src: int,
+               block0: int, n_blocks: int, n_rows: int, nbytes: int, vgroup: Optional[int]) -> None:
+    """The tile dispatch of a GEMV for the T in ``t_range`` (design §5.7 predication): the input goes through
+    x_permute once per (input, statistic, tile) — the norm applied on the way when the op carries one — into a
+    scratch the siblings share, then gemm_tile with the op's epilogue, statistic output and row range."""
+    ins = list(op.inputs)
+    x, w = ins[0], ins[1]
+    rest = ins[2:]
+    stat = nw = residual = None
+    if op.attrs.get("norm"):
+        stat, nw = rest[0], rest[1]
+        rest = rest[2:]
+    if op.attrs.get("epilogue") == "residual":
+        residual = rest[0]
+    y = op.outputs[0]
+    epilogue = op.attrs.get("epilogue")
+    stat_out = op.attrs.get("stat_value")
+    if stat_out is not None:
+        ctx.stat_parts[stat_out] = n_blocks
+    lo, hi = t_range
+    tm = gemm_tm(hi)
+    predicated = t_src != STATIC_ROWS
+    f = FORMATS.get(info.format)
+    wpw = int(f.weights_per_word)
+    macros = kernels.gemm_macros(info, tm=tm, out_bf16=True, epilogue=epilogue, stat_out=stat_out is not None,
+                                 round_before_residual=bool(op.attrs.get("round_residual")))
+    tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
+    tmac = dict(ctx.t_macros(hi, t_src))
+    if predicated:
+        tmac["T_LO"], tmac["T_HI"] = str(lo), str(hi)
+    kdim = ctx.shape(x)[1]
+    # the permuted (and normalized) input, shared by the siblings reading the same input at the same T range
+    xb = ctx.buf(x)
+    key = (xb, stat.name if stat is not None else None, tm, wpw, tk, lo, hi, t_src)
+    xp = ctx.perm_scratch.get(key)
+    if xp is None:
+        xp = ctx.scratch(f"{y.name}.xp", tm * kdim * 2)
+        ctx.perm_scratch[key] = xp
+        pk = ctx.kernel(f"x_permute|{info.format}", kernels.gemm_source(info.format), "x_permute",
+                        dict(macros, **kernels.x_permute_macros(stat is not None), **tmac), language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
+        eps = float(op.attrs.get("eps", 1e-6))
+        parts = ctx.stat_parts.get(stat.name, 1) if stat is not None else 1
+        prm = ctx.params("x_permute", kernels.x_permute_params(kdim, hi, tm, wpw, tk, parts, eps))
+        bindings = [(0, *xb), (3, xp, 0), (4, prm, 0)]
+        if stat is not None:
+            bindings += [(1, *ctx.buf(stat)), (2, *ctx.windows[nw.name])]
+        # not a member of the variant group: the barrier pass joins a group's members without a check (they are
+        # alternatives), and the tile must wait for this permute — its own identity gives the tile the barrier
+        ctx.add(pk, bindings, *kernels.x_permute_grid(tm), f"x_permute:{y.name}", writes=[3], kind="x_permute", t_variant=hi,
+                t_range=[lo, hi] if predicated else None, normed=stat is not None)
+    choice = ctx.tuner.tune_gemm(info, tm, epilogue) if ctx.tuner is not None else None
+    mode = choice.grid_mode if choice else "crew"
+    k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), "gemm_tile", dict(macros, **tmac), language_version=kernels.MSL_TENSOR_OPS)
+    n_tiles = -(-n_rows // tn)
+    n_sg, grid, tg = ctx.geometry(mode, n_tiles)
+    prm = ctx.params("gemm", kernels.gemm_params(n_rows, n_tiles, n_sg, hi, tile0=block0 * info.rows // tn, n_blocks=n_blocks))
+    bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, xp, 0), (3, *ctx.buf(y)), (4, prm, 0)]
+    writes = [3]
+    if residual is not None:
+        bindings.append((7, *ctx.buf(residual)))
+    if stat_out is not None:
+        bindings.append((8, stat_out, 0))
+        writes.append(8)
+    ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
+            accelerator=True, tm=tm, tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
+            variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
+            row_range=[block0 * info.rows, n_rows] if op.attrs.get("row_range") is not None else None)
 
 
 def _gqa_src(ctx: _Ctx, v2: bool = False) -> str:
@@ -600,7 +717,7 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
                  layout: Optional[StepStateLayout] = None, eos: int = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
                  tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal",
-                 attention: Optional[str] = None) -> Program:
+                 attention: Optional[str] = None, accelerator: Optional[str] = None) -> Program:
     """Check coverage on ``profile`` and emit the step program for a lowered (and passed) graph: for a static
     ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t_max`` read from StepState
     at run time (kernels compiled at ``t_max``). ``pack`` is the pack (or the packs: the target's, then a drafter's)
@@ -608,7 +725,8 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     sampled tokens); ``None`` leaves the closing op to the graph (a program with the DSpark round emits its own
     ``accept_scan``). ``barriers``: ``"minimal"`` keeps an ICB barrier only where a dependency needs one (the
     barrier pass), ``"all"`` after every op (v0; the A/B baseline). The profile's ``sibling_order`` decides whether a
-    mixer's gate GEMV is encoded after its core (``alu_first``, ``either``) or before it (``bus_first``)."""
+    mixer's gate GEMV is encoded after its core (``alu_first``, ``either``) or before it (``bus_first``); its
+    ``accelerator`` (or the override) sends the T > 1 GEMVs to the tensor-ops tile (#51)."""
     layout = layout or StepStateLayout()
     packs = [pack] if isinstance(pack, PackFile) else list(pack)
     if dynamic_t:
@@ -618,7 +736,8 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     check_coverage(g, profile)
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
     ctx = _Ctx(program, packs, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, values=g.values, dynamic_t=dynamic_t,
-               speculative=speculative, attention=attention or profile.attention, tuner=tuner, eos=eos, ring_capacity=ring_capacity)
+               speculative=speculative, attention=attention or profile.attention, accelerator=accelerator or profile.accelerator,
+               accel_min_t=dict(profile.accelerator_min_t), tuner=tuner, eos=eos, ring_capacity=ring_capacity)
     _pack_windows(ctx)
     hoisted = {op.attrs["stat_value"]: ctx.slab_info(op.inputs[1].name).n_blocks for op in g.ops if op.kind == "gemv" and op.attrs.get("stat_value")}
     for v in g.values.values():
@@ -668,9 +787,11 @@ def _bus_first(ops: List[Op]) -> List[Op]:
     return out
 
 
-def verify_costs(profile: Profile, pack: PackFile, gamma: int, t_max: int) -> Optional[List[float]]:
+def verify_costs(profile: Profile, pack: PackFile, gamma: int, t_max: int, accelerator: Optional[str] = None) -> Optional[List[float]]:
     """``cost[l]`` = the profile's relative cost of a (1 + l)-token pass over the pack's dominant weight format,
-    l = 0 … min(γ, t_max − 1); None when the profile has no table for that format (the M3 Pro's, until p13 runs)."""
+    l = 0 … min(γ, t_max − 1); None when the profile has no table for that format (the M3 Pro's, until p13 runs).
+    With the accelerator on, the T at or above the format's ``accelerator_min_t`` cost the tile's row
+    (``accelerator_<format>`` at the tile's TM) when the profile has it."""
     by_fmt: Dict[str, int] = {}
     for s in pack.manifest["slabs"]:
         by_fmt[s["format"]] = by_fmt.get(s["format"], 0) + int(s["nbytes"])
@@ -678,10 +799,22 @@ def verify_costs(profile: Profile, pack: PackFile, gamma: int, t_max: int) -> Op
         return None
     fmt = max(by_fmt, key=lambda f: by_fmt[f])
     key = COST_FORMAT.get(fmt, fmt)
+    accel = (accelerator or profile.accelerator) == "on"
+    min_t = int(profile.accelerator_min_t.get(key, 2))
+    out = []
     try:
-        return [profile.cost(key, 1 + l) for l in range(min(gamma, t_max - 1) + 1)]
+        for l in range(min(gamma, t_max - 1) + 1):
+            t = 1 + l
+            if accel and t >= min_t:
+                try:
+                    out.append(profile.cost(f"accelerator_{key}", gemm_tm(t)))
+                    continue
+                except (KeyError, ValueError):
+                    pass                                               # no tile row: the shader's
+            out.append(profile.cost(key, t))
     except (KeyError, ValueError):
         return None
+    return out
 
 
 def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Profile, *, cost: Optional[Sequence[float]] = None,
@@ -711,7 +844,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
                     verify_threshold: Optional[float] = None, verify_length: Optional[int] = None, barriers: str = "minimal",
-                    attention: Optional[str] = None) -> Program:
+                    attention: Optional[str] = None, accelerator: Optional[str] = None) -> Program:
     """Lower ``model``, run the ``passes`` and emit its step program (see :func:`emit_program`). With a ``drafter``
     (and its pack) the dynamic-T program carries the speculative round instead of the advance: ``verify`` = ``"cost"``
     (the cost-aware verify-length rule when the profile has a cost table for the pack's dominant format, otherwise the
@@ -725,7 +858,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
         for p in passes:
             p(g)
         return emit_program(g, pack=pack, profile=profile, t=t, dynamic_t=dynamic_t, layout=layout, eos=eos, ring_capacity=ring_capacity, tg=tg,
-                            tuner=tuner, tail="advance", token=token, barriers=barriers, attention=attention)
+                            tuner=tuner, tail="advance", token=token, barriers=barriers, attention=attention, accelerator=accelerator)
     if not dynamic_t:
         raise ValueError("compile_program: the speculative round needs the dynamic-T program (dynamic_t=True)")
     if drafter_pack is None:
@@ -740,7 +873,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
         if verify_length is None or not 0 <= verify_length <= drafter.gamma:
             raise ValueError(f"compile_program: verify='fixed' needs verify_length in 0..{drafter.gamma}")
         fixed = int(verify_length)
-    cost = verify_costs(profile, pack, drafter.gamma, layout.t_max) if verify == "cost" else None
+    cost = verify_costs(profile, pack, drafter.gamma, layout.t_max, accelerator) if verify == "cost" else None
     if cost is None and fixed is None and verify_threshold is None:
         verify_threshold = FALLBACK_THRESHOLD           # no cost table (or the threshold rule asked for without a threshold)
     lower_round(g, model, drafter, token, profile, cost=cost, threshold=verify_threshold, fixed=fixed)
@@ -748,4 +881,4 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     for p in passes:
         p(g)
     return emit_program(g, pack=[pack, drafter_pack], profile=profile, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
-                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention)
+                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention, accelerator=accelerator)

@@ -73,15 +73,15 @@ class GemmBench:
         if check and macros.get("EXP_MODE", "0") != "0":
             check = False                                                   # experiments compute the wrong thing on purpose
         pso = self.pipeline(fmt, "gemm_tile", macros)
-        ppso = self.pipeline(fmt, "x_permute", macros)
+        ppso = self.pipeline(fmt, "x_permute", dict(macros, **kernels.x_permute_macros(False)))
         cores = self.info.gpu_cores
         tg = min(tg, pso.max_threads_per_threadgroup)                   # the register budget may cap the crew threadgroup
         n_sg = (tg // 32) * cores * tg_per_core
         grid = -(-(n_sg * 32) // tg)
         n_tiles = kernels.gemm_tiles(n, tn)
         params = kernels.gemm_params(n, n_tiles, n_sg, t_act)
-        perm = (nt.Dispatch().pipeline(ppso).buffer(0, xbuf).buffer(1, xpbuf).bytes(2, kernels.x_permute_params(k, t_act, tm, int(f.weights_per_word), tk))
-                .grid(-(-(tm * k) // 256)).threadgroup(256).barrier())
+        perm = (nt.Dispatch().pipeline(ppso).buffer(0, xbuf).buffer(3, xpbuf).bytes(4, kernels.x_permute_params(k, t_act, tm, int(f.weights_per_word), tk))
+                .grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
         dispatches = [perm]
         for c in range(copies):
             dispatches.append(nt.Dispatch().pipeline(pso).buffer(0, wbuf, c * len(data)).buffer(1, rsbuf).buffer(2, xpbuf).buffer(3, ybuf)
