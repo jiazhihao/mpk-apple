@@ -26,7 +26,9 @@ speculative decode is token-identical to plain decode on the 8B and on the hybri
 this chip: parity with plain decode at best on the shader GEMV path (decode-kernels.md §5) — the M6 gate waits for
 the T ≥ 2 GEMM path (M9). Sampling with a drafter is exact speculative sampling (#39); the prompt-set measurement (#40, dspark.md §3) puts
 the cost-aware rule at 36 ms per token vs 27 plain — a no-go on the shader path, a projected go on the T ≥ 2 GEMM
-path (M9). Next: the remaining compiler items and M7–M9. Speculative decoding targets a **DSpark** drafter, not the MTP head.
+path (M9). The barrier pass and the sibling overlap (#29, #35: the gate GEMV beside the mixer core) take the 0.8B
+from 6.85 to 6.58 ms per token; the ICB barrier flag orders the flagged command behind all before it (measured;
+the field is `barrier_before`). Next: #34 (attention v2 for long context, math modes) and M8–M9. Speculative decoding targets a **DSpark** drafter, not the MTP head.
 
 ## Read these, in this order
 
@@ -94,10 +96,10 @@ M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every k
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order: the remaining compiler items (#29 barrier placement + #35 the
-   sibling overlap, #34 attention v2 for long context and the math modes), #41's write-up, then M8's format 2 (#47)
-   and the porting guide (#48), then M9 — the T ≥ 2 GEMM verify kernel (#50/#51) is what the speculative gate needs
-   on this chip. The 27B items (#36, #40's M3 Pro rows, #46) need the 36 GB machine.
+0. **Keep building** — the roadmap issues in order: #34 (attention v2 for long context, the math modes), then M8's
+   format 2 (#47) and the porting guide (#48), then M9 — the T ≥ 2 GEMM verify kernel (#50/#51) is what the
+   speculative gate needs on this chip. The 27B items (#36, #40's M3 Pro rows, #46) and the M3 Pro / M4 rows of the
+   A/B tables need those machines.
 1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
    are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
    H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).

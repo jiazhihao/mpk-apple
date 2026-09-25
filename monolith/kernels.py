@@ -70,9 +70,10 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
 
 
 def gemv_params(n_rows: int, n_blocks: int, n_sg: int, t_active: int, *, out_scale: float = 1.0, eps: float = 0.0,
-                stat_parts: int = 1) -> bytes:
-    """The ``GemvParams`` record (buffer 4)."""
-    return struct.pack("<IIIIffII", n_rows, n_blocks, n_sg, t_active, out_scale, eps, stat_parts, 0)
+                stat_parts: int = 1, block0: int = 0) -> bytes:
+    """The ``GemvParams`` record (buffer 4); ``block0`` / ``n_blocks`` / ``n_rows`` describe a row range of the slab
+    (a whole slab: 0 / all blocks / N)."""
+    return struct.pack("<IIIIffII", n_rows, n_blocks, n_sg, t_active, out_scale, eps, stat_parts, block0)
 
 
 # ---- the other decode kernels -------------------------------------------------------------------------------

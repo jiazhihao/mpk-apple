@@ -132,6 +132,26 @@ RG 4 with the norm fused (53.8 → 51.9 µs), the `lm_head` keeps its default (1
 SL 4 / SPB 4 (24.1 → 20.7 µs). The decode step: **6.45 ms per token vs 6.91 default** (three paired runs each), the
 golden unchanged; `mlx-lm` 0.31.3: 6.2 ms.
 
+**Barrier placement and the sibling overlap (#29, #35) [M].** Two facts first. (1) The ICB barrier flag orders the
+*flagged command behind everything before it* (a `setBarrier` command waits for all preceding commands; commands
+without it may start while their predecessors run) — measured with a slow writer / fast reader pair
+(`tools/bench`-style probe, 2026-09-24: the reader without the flag sums a partially written buffer; with it, never);
+the runtime's field is now `barrier_before`. (2) The mixers are emitted as core → gate GEMV → merge / gated norm,
+the gate projection a block-aligned row range of the same slab (`[q | k | v | gate]`, `[z | qkv | a | b]`) so the
+bus-bound gate GEMV runs beside the ALU-bound core (design §5.12), and the barrier pass keeps a flag only where an
+op touches what the ops before it wrote. On the 0.8B: 175 dispatches, 151 barriers (the 18 GDN and 6 attention
+gate GEMVs un-barriered); paired runs of 128 tokens, 4 rounds, min | median ms per token:
+
+| program | ms / token |
+|---|---|
+| every op barriered (v0) | 6.848 \| 6.868 |
+| barrier pass, core encoded first (`alu_first`, the profile's rule) | **6.584 \| 6.625** (−3.9 %) |
+| barrier pass, gate encoded first (`bus_first`) | 6.630 \| 6.667 (−3.2 %) |
+
+The ranges of the two orders touch (6.649 vs 6.630), so the Apple10 rule is the better one by ~1 % within noise —
+kept as the profile says. The 8B (no gate: a pure chain) keeps all 223 barriers and its 26.9 ms; the drafter's
+context projections and the per-T variants are the other un-barriered groups of a speculative program.
+
 ## 4. The DSpark round's kernels (#24) — `apple-m5-pro-20c_draft.jsonl`
 
 **What exists.** The round of design §5.8 lowers to the existing op kinds plus five of its own

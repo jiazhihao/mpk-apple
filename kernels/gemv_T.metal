@@ -72,7 +72,10 @@
 #define WPG WPW
 #endif
 
-struct GemvParams { uint n_rows; uint n_blocks; uint n_sg; uint t_active; float out_scale; float eps; uint stat_parts; uint pad; };
+// block0: the first slab block of the dispatch — a row range of one slab as its own dispatch (a mixer's gate
+// projection emitted as an un-barriered sibling of the mixer core, design §5.12): rows [block0·R, block0·R + n_rows)
+// of the slab, outputs (and STAT_OUT partials) relative to the range.
+struct GemvParams { uint n_rows; uint n_blocks; uint n_sg; uint t_active; float out_scale; float eps; uint stat_parts; uint block0; };
 
 static inline uint unit_word(uint lane, uint r, uint j) {
 #if LANE_ORDER == 0
@@ -134,7 +137,8 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
     rn[t] = rsqrt(ssq / float(K) + p.eps);
   }
 #endif
-  for (uint b = sg; b < p.n_blocks; b += p.n_sg) {
+  for (uint bb = sg; bb < p.n_blocks; bb += p.n_sg) {
+    const uint b = bb + p.block0;                                    // the slab block; bb the range-relative one
     device const uint4* wb = w + (ulong)b * (R * 32u * UNIT_WORDS);
 #if STAT_OUT
     float ssq_out[T];
@@ -226,16 +230,17 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
       }
       for (uint i = 0; i < RG; i++) {
         const uint r = r0 + i;
-        const uint row = b * R + r;
-        const float rs = (row < p.n_rows) ? row_scale[row] * p.out_scale : 0.0f;
+        const uint row = b * R + r;                                  // the slab row (weights, row scales)
+        const uint rrow = bb * R + r;                                // the range-relative row (outputs)
+        const float rs = (rrow < p.n_rows) ? row_scale[row] * p.out_scale : 0.0f;
         for (uint t = 0; t < T; t++) {
           float v = simd_sum(acc[i][t]) * rs;
 #if EPILOGUE == 2
           if (r < CHUNK) { gate_v[r][t] = v; continue; }
-          const uint orow = b * CHUNK + (r - CHUNK), n_out = p.n_rows / 2u;
+          const uint orow = bb * CHUNK + (r - CHUNK), n_out = p.n_rows / 2u;
           v = silu_f(gate_v[r - CHUNK][t]) * v;
 #else
-          const uint orow = row, n_out = p.n_rows;
+          const uint orow = rrow, n_out = p.n_rows;
 #if EPILOGUE == 1
 #if EPILOGUE_ROUND
           v = round_bf16(v);
@@ -260,7 +265,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
       }
     }
 #if STAT_OUT
-    if (lane == 0) for (uint t = 0; t < T; t++) if (t < T_act) stat_out[t * p.n_blocks + b] = ssq_out[t];
+    if (lane == 0) for (uint t = 0; t < T; t++) if (t < T_act) stat_out[t * p.n_blocks + bb] = ssq_out[t];
 #endif
   }
 }

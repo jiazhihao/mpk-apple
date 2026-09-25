@@ -54,6 +54,11 @@ def test_round_program(pair):
     assert kern["gdn_commit"].macros["COMMIT"] == "1" and kern["gdn_commit"].macros["SLOTS"] == "2u"
     ops = {o.name: o for o in prog.ops}
     assert ops["gdn_commit"].bindings[:4] == ops["gdn_mixer"].bindings[:4] and any(b[0] == 15 for b in ops["gdn_commit"].bindings)
+    # the barrier pass: the per-T variants of one GEMV join without barriers; the mixer cores and their gate GEMVs too
+    gate_up = [i for i, o in enumerate(prog.ops) if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]
+    assert [prog.ops[i].barrier_before for i in gate_up] == [True, False, False, False]
+    i_gdn = names.index("gdn_mixer")
+    assert prog.ops[i_gdn + 1].meta["sibling"] and not prog.ops[i_gdn + 1].barrier_before
     # two slots for the recurrent states, one for the KV caches
     c = model.config
     kd, vd = c.linear_num_key_heads * c.linear_key_head_dim, c.linear_num_value_heads * c.linear_value_head_dim

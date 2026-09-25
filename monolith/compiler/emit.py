@@ -1,7 +1,8 @@
 """``compile_program`` / ``emit_program``: the lowered graph → a runtime :class:`Program` (plan M4, v0).
 
 v0 keeps every decision simple and correct: one device buffer per graph value (no aliasing except the row views the
-IR declares), a barrier after every op, the norm as ``rmsnorm_stat`` → ``norm_apply`` → plain GEMV (the fuse pass
+IR declares), a barrier on every op unless the barrier pass proves it independent of the ops before it, the norm as
+``rmsnorm_stat`` → ``norm_apply`` → plain GEMV (the fuse pass
 that hoists the statistic into the producer's epilogue comes next), kernels specialized to the program's static ``T``
 (a prefill program at ``T = P`` and a decode program at ``T = 1`` share their buffers by name), weights and constants
 mapped straight from the pack file in page-aligned windows (no copy). The op handlers below are the only place an op
@@ -28,6 +29,7 @@ from ..formats.blm import PackInfo
 from ..nn.module import Model
 from ..packs.packer import ALIGN, PackFile
 from ..runtime.program import BufferSpec, KernelSpec, OpSpec, Program
+from .barriers import place_barriers
 from .coverage import check_coverage
 from .passes import DEFAULT_PASSES
 
@@ -58,6 +60,7 @@ class _Ctx:
     eos: int = -1
     ring_capacity: int = 4096
     counter: int = 0
+    norm_scratch: Dict[Tuple[str, str, int], str] = field(default_factory=dict)   # (x, stat, rows) -> the normalized scratch
 
     # ---- helpers -----------------------------------------------------------------------------------------------
     def slab_info(self, name: str) -> PackInfo:
@@ -99,9 +102,14 @@ class _Ctx:
         n_sg = self.n_sg * (2 if mode == "crew2" else 1)
         return n_sg, (-(-(n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
 
-    def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str, **meta: Any) -> None:
+    def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str, *, writes: Optional[Sequence[int]] = None,
+            **meta: Any) -> None:
+        """Append a dispatch; ``writes`` = the binding indices the kernel writes (the barrier pass reads them; an
+        op without the record is taken to write everything it binds)."""
         if self.dynamic_t and name not in ("advance", "accept_scan", "verify_select") and not any(b[0] == 15 for b in bindings):
             bindings = list(bindings) + [(15, self.program.step_state, 0)]
+        if writes is not None:
+            meta["writes"] = sorted(int(i) for i in writes)
         self.program.ops.append(OpSpec(kernel, bindings, tuple(grid), tuple(tg), True, [], name, dict(meta)))
 
     def shape(self, v: Value) -> Tuple[int, ...]:
@@ -194,7 +202,7 @@ def _embed(ctx: _Ctx, op: Op) -> None:
     macros = dict(kernels.embed_macros(info, ids=op.attrs.get("ids")), **ctx.t_macros(t_c, t_src))
     k = ctx.kernel("embed", kernels.embed_source(), "embed", macros)
     prm = ctx.params("embed", kernels.embed_params(info.k, t_c, info.n, mask_id=int(op.attrs.get("mask_id", 0))))
-    ctx.add(k, [(0, *ctx.buf(tokens)), (1, *ctx.windows[table.name]), (2, *ctx.buf(h)), (3, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind)
+    ctx.add(k, [(0, *ctx.buf(tokens)), (1, *ctx.windows[table.name]), (2, *ctx.buf(h)), (3, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind, writes=[2])
 
 
 def _rmsnorm_stat(ctx: _Ctx, op: Op) -> None:
@@ -205,7 +213,7 @@ def _rmsnorm_stat(ctx: _Ctx, op: Op) -> None:
     t_c, t_src = ctx.rows_of(op)
     k = ctx.kernel("rmsnorm_stat", kernels.rmsnorm_stat_source(), "rmsnorm_stat", ctx.t_macros(t_c, t_src))
     prm = ctx.params("stat", kernels.stat_params(ctx.shape(h)[1], t_c))
-    ctx.add(k, [(0, *ctx.buf(h)), (1, *ctx.buf(stat)), (2, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind)
+    ctx.add(k, [(0, *ctx.buf(h)), (1, *ctx.buf(stat)), (2, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind, writes=[1])
 
 
 def _norm_apply(ctx: _Ctx, h: Value, stat: Value, nw: Value, eps: float, out: Tuple[str, int], t_c: int, t_src: int,
@@ -213,7 +221,7 @@ def _norm_apply(ctx: _Ctx, h: Value, stat: Value, nw: Value, eps: float, out: Tu
     k = ctx.kernel("norm_apply", kernels.norm_apply_source(), "norm_apply", ctx.t_macros(t_c, t_src))
     kdim = ctx.shape(h)[1]
     prm = ctx.params("norm_apply", kernels.norm_apply_params(kdim, t_c, ctx.stat_parts.get(stat.name, 1), eps))
-    ctx.add(k, [(0, *ctx.buf(h)), (1, *ctx.buf(stat)), (2, *ctx.windows[nw.name]), (3, *out), (4, prm, 0)], (t_c, 1, 1), (32, 1, 1), name)
+    ctx.add(k, [(0, *ctx.buf(h)), (1, *ctx.buf(stat)), (2, *ctx.windows[nw.name]), (3, *out), (4, prm, 0)], (t_c, 1, 1), (32, 1, 1), name, writes=[3])
 
 
 def _norm_apply_op(ctx: _Ctx, op: Op) -> None:
@@ -251,6 +259,16 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
     y = op.outputs[0]
     t_c, t_src = ctx.rows_of(op)
     info = ctx.slab_info(w.name)
+    # a row range of the slab: whole blocks only (a mixer's gate rows, design §5.12)
+    rr = op.attrs.get("row_range")
+    if rr is not None:
+        start, count = int(rr[0]), int(rr[1])
+        if start % info.rows or start + count > info.n or (count % info.rows and start + count != info.n):
+            raise ValueError(f"gemv {w.name}: row range {rr} must start on a block of {info.rows} rows and end on one or at the slab's end ({info.n})")
+        block0, n_blocks, n_rows = start // info.rows, -(-count // info.rows), count
+        nbytes = int(info.nbytes) * n_blocks // info.n_blocks
+    else:
+        block0, n_blocks, n_rows, nbytes = 0, info.n_blocks, info.n, int(info.nbytes)
     variants = t_variants(t_c) if (ctx.speculative and ctx.dynamic_t and t_src != STATIC_ROWS and t_c > 1) else [t_c]
     epilogue = op.attrs.get("epilogue")
     choices = [ctx.tuner.tune_gemv(info, tv, epilogue, stat is not None) if ctx.tuner is not None else None for tv in variants]
@@ -258,12 +276,18 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
     eps = float(op.attrs.get("eps", 1e-6))
     x_binding = ctx.buf(x)
     if stat is not None and not fuse_norm:
-        xn = ctx.scratch(f"{y.name}.xn", t_c * ctx.shape(x)[1] * 2)
-        _norm_apply(ctx, x, stat, nw, eps, (xn, 0), t_c, t_src)
+        key = (x.name, stat.name, t_c)
+        xn = ctx.norm_scratch.get(key)                    # one normalized copy per (input, statistic): siblings share it
+        if xn is None:
+            xn = ctx.scratch(f"{y.name}.xn", t_c * ctx.shape(x)[1] * 2)
+            _norm_apply(ctx, x, stat, nw, eps, (xn, 0), t_c, t_src)
+            ctx.norm_scratch[key] = xn
         x_binding = (xn, 0)
     stat_out = op.attrs.get("stat_value")
     if stat_out is not None:
-        ctx.stat_parts[stat_out] = info.n_blocks
+        ctx.stat_parts[stat_out] = n_blocks
+    ctx.counter += 1
+    vgroup = ctx.counter if len(variants) > 1 else None
     lo = 0
     for tv, choice in zip(variants, choices):
         rg = int(choice.macros["RG"]) if choice else None
@@ -272,49 +296,76 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
         if len(variants) > 1:
             macros["T_LO"], macros["T_HI"] = str(lo), str(tv)
         k = ctx.kernel(f"gemv_T|{info.format}", kernels.gemv_source(info.format), "gemv_T", macros)
-        n_sg, grid, tg = ctx.geometry(choice.grid_mode if choice else "crew", info.n_blocks)
-        prm = ctx.params("gemv", kernels.gemv_params(info.n, info.n_blocks, n_sg, tv, eps=eps,
+        n_sg, grid, tg = ctx.geometry(choice.grid_mode if choice else "crew", n_blocks)
+        prm = ctx.params("gemv", kernels.gemv_params(n_rows, n_blocks, n_sg, tv, eps=eps, block0=block0,
                                                      stat_parts=ctx.stat_parts.get(stat.name, 1) if stat is not None else 1))
         bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, *x_binding), (3, *ctx.buf(y)), (4, prm, 0)]
+        writes = [3]
         if fuse_norm:
             bindings += [(5, *ctx.buf(stat)), (6, *ctx.windows[nw.name])]
         if residual is not None:
             bindings.append((7, *ctx.buf(residual)))
         if stat_out is not None:
             bindings.append((8, stat_out, 0))
-        ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", kind=op.kind, bytes=int(info.nbytes), format=info.format, n=info.n, k=info.k,
+            writes.append(8)
+        ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
                 rg=int(macros["RG"]), geometry=choice.grid_mode if choice else "crew", fused_norm=fuse_norm, t_variant=tv,
-                t_range=[lo, tv] if len(variants) > 1 else None)
+                t_range=[lo, tv] if len(variants) > 1 else None, variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
+                row_range=[block0 * info.rows, n_rows] if rr is not None else None)
         lo = tv
 
 
+def _gqa_src(ctx: _Ctx) -> str:
+    return kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_decode.metal")
+
+
 def _gqa(ctx: _Ctx, op: Op) -> None:
+    """The attention core: partials per (kv head, chunk, row) into the op's two output values."""
     proj, kc, vc, cos, sin, qn, kn = op.inputs
-    out = op.outputs[0]
+    part_o, part_md = op.outputs
     a = op.attrs
-    d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
+    d, heads, kv, chunk = a["head_dim"], a["heads"], a["kv_heads"], int(a.get("chunk", 64))
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
-    chunk = 64
     macros = dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1")     # position always comes from StepState
-    src = kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_decode.metal")
-    kd, km = ctx.kernel("gqa", src, "gqa_decode", macros), ctx.kernel("gqa", src, "gqa_merge", macros)
+    kd = ctx.kernel("gqa", _gqa_src(ctx), "gqa_decode", macros)
     rep = heads // kv
     n_chunks_max, rows_max = -(-ctx_max // chunk), rep * ctx.t
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
-    part_o, part_md = ctx.scratch("gqa.part_o", po), ctx.scratch("gqa.part_md", pm)
+    if _value_bytes(part_o, ctx.t) < po or _value_bytes(part_md, ctx.t) < pm:
+        raise ValueError(f"gqa_decode: the partial values are too small for {kv} kv heads × {n_chunks_max} chunks × {rows_max} rows")
     prm = ctx.params("gqa", kernels.gqa_params(
-        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=ctx.n_sg, q_off=segs["q"][0],
-        gate_off=segs["gate"][0] if "gate" in segs else 0, k_off=segs["k"][0], v_off=segs["v"][0], in_stride=ctx.shape(proj)[1],
-        out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]), scaling=float(a["scaling"]), has_gate=bool(a.get("gate")),
-        n_chunks_max=n_chunks_max, rows_max=rows_max))
+        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=ctx.n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
+        v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
+        scaling=float(a["scaling"]), has_gate=False, n_chunks_max=n_chunks_max, rows_max=rows_max))
     st = ctx.program.step_state
     grid, tg = ctx.crew_grid()
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
-                 (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, part_o, 0), (8, part_md, 0), (9, prm, 0), (15, st, 0)],
-            grid, tg, op.kind)
-    ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, *ctx.buf(proj)), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
-            (ctx.t * heads, 1, 1), (32, 1, 1), "gqa_merge")
+                 (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *ctx.buf(part_o)), (8, *ctx.buf(part_md)), (9, prm, 0), (15, st, 0)],
+            grid, tg, op.kind, writes=[1, 2, 7, 8])
+
+
+def _gqa_merge(ctx: _Ctx, op: Op) -> None:
+    """The fold over the chunks, times σ(gate) when the gate projection value is given (its own dispatch, so the
+    gate GEMV can run beside the core)."""
+    part_o, part_md = op.inputs[0], op.inputs[1]
+    gate = op.inputs[2] if len(op.inputs) > 2 else None
+    out = op.outputs[0]
+    a = op.attrs
+    d, heads, kv, chunk = a["head_dim"], a["heads"], a["kv_heads"], int(a.get("chunk", 64))
+    ctx_max = ctx.shape(part_o)[1] * 1  # informational only; the merge reads n_chunks_max from params
+    macros = dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1")
+    km = ctx.kernel("gqa", _gqa_src(ctx), "gqa_merge", macros)
+    rep = heads // kv
+    n_chunks_max = ctx.shape(part_o)[1] // (kv * rep * d)
+    prm = ctx.params("gqa_merge", kernels.gqa_params(
+        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=ctx.n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
+        in_stride=heads * d, out_stride=heads * d, ctx_max=n_chunks_max * chunk, eps=1e-6, scaling=1.0, has_gate=gate is not None,
+        n_chunks_max=n_chunks_max, rows_max=rep * ctx.t))
+    st = ctx.program.step_state
+    gb = ctx.buf(gate) if gate is not None else ctx.buf(part_o)
+    ctx.add(km, [(0, *ctx.buf(part_o)), (1, *ctx.buf(part_md)), (2, *gb), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
+            (ctx.t * heads, 1, 1), (32, 1, 1), op.kind, writes=[3])
 
 
 def _draft_attn(ctx: _Ctx, op: Op) -> None:
@@ -344,47 +395,64 @@ def _draft_attn(ctx: _Ctx, op: Op) -> None:
     grid, tg = ctx.crew_grid()
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, part_o, 0), (8, part_md, 0), (9, prm, 0), (11, *ctx.buf(kvp)),
-                 (15, st, 0)], grid, tg, op.kind)
+                 (15, st, 0)], grid, tg, op.kind, writes=[1, 2, 7, 8])
     ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, *ctx.buf(proj)), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
-            (gamma * heads, 1, 1), (32, 1, 1), "gqa_merge")
+            (gamma * heads, 1, 1), (32, 1, 1), "gqa_merge", writes=[3])
+
+
+def _gdn_macros(ctx: _Ctx, a: Dict[str, Any], commit: bool) -> Dict[str, str]:
+    hv, hk, dk, dv, cw = a["v_heads"], a["k_heads"], a["dk"], a["dv"], a["conv_width"]
+    gch = ctx.tuner.tune_gdn(hv, hk, dk, dv, cw, ctx.t) if ctx.tuner is not None else None
+    return dict(kernels.gdn_macros(dk, dv, conv_width=cw, t=ctx.t, slice_cols=int(str(gch.macros["SL"]).rstrip("u")) if gch else 8,
+                                   slices_per_block=int(str(gch.macros["SPB"]).rstrip("u")) if gch else 4, slots=2, commit=commit),
+                STEP_STATE="1")
 
 
 def _gdn(ctx: _Ctx, op: Op) -> None:
-    """The GDN mixer (two dispatches) or, for ``gdn_commit``, the commit pass alone. The states live in two slots by
-    step parity, so the kernel always reads StepState (like the attention's position)."""
+    """The GDN core (the FP32 read-out into the op's output value) or, for ``gdn_commit``, the commit pass. The
+    states live in two slots by step parity, so the kernel always reads StepState (like the attention's position)."""
     a = op.attrs
     commit = op.kind == "gdn_commit"
     n_proj = len(a["proj_segments"]) and (1 + max(idx for idx, _, _ in a["proj_segments"].values()))
     projs = op.inputs[:n_proj]
-    cs, rs, conv_w, a_log, dt_bias, norm_w = op.inputs[n_proj:]
-    out = op.outputs[0]
-    hv, hk, dk, dv, cw = a["v_heads"], a["k_heads"], a["dk"], a["dv"], a["conv_width"]
+    cs, rs, conv_w, a_log, dt_bias = op.inputs[n_proj:]
+    o_part = op.outputs[0]
+    hv, hk, dk, dv = a["v_heads"], a["k_heads"], a["dk"], a["dv"]
     ps = a["proj_segments"]                                           # local -> (value index, column offset, columns)
     kd = hk * dk
     ab_separate = ps["in_proj_a"][0] != ps["in_proj_qkv"][0]
     if ctx.shape(cs)[0] != 2 or ctx.shape(rs)[0] != 2:
         raise ValueError(f"gdn_mixer: the states need two slots (StateEntry.checkpoints = 2), got {ctx.shape(cs)} / {ctx.shape(rs)}")
-    gch = ctx.tuner.tune_gdn(hv, hk, dk, dv, cw, ctx.t) if ctx.tuner is not None else None
-    macros = dict(kernels.gdn_macros(dk, dv, conv_width=cw, t=ctx.t, slice_cols=int(str(gch.macros["SL"]).rstrip("u")) if gch else 8,
-                                     slices_per_block=int(str(gch.macros["SPB"]).rstrip("u")) if gch else 4, slots=2, commit=commit),
-                  STEP_STATE="1")
-    src = kernels.gdn_source()
-    kmix = ctx.kernel("gdn", src, "gdn_mixer", macros)
-    o_part = ctx.scratch("gdn.o_part", kernels.gdn_workspace(ctx.t, hv, dv))
+    macros = _gdn_macros(ctx, a, commit)
+    kmix = ctx.kernel("gdn", kernels.gdn_source(), "gdn_mixer", macros)
     main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
     prm = ctx.params("gdn", kernels.gdn_params(
         hv=hv, hk=hk, t_active=ctx.t, q_off=ps["in_proj_qkv"][1], k_off=ps["in_proj_qkv"][1] + kd, v_off=ps["in_proj_qkv"][1] + 2 * kd,
-        z_off=ps["in_proj_z"][1], a_off=ps["in_proj_a"][1], b_off=ps["in_proj_b"][1], in_stride=ctx.shape(main)[1],
+        z_off=0, a_off=ps["in_proj_a"][1], b_off=ps["in_proj_b"][1], in_stride=ctx.shape(main)[1],
         ab_stride=ctx.shape(abv)[1], ab_separate=ab_separate, out_stride=hv * dv, n_sg=ctx.n_sg, key_dim=kd, eps=float(a["eps"])))
     st = ctx.program.step_state
     grid, tg = ctx.crew_grid()
     ctx.add(kmix, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (3, *ctx.buf(rs)), (4, *ctx.windows[conv_w.name]),
-                   (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, o_part, 0), (9, prm, 0), (15, st, 0)], grid, tg, op.kind)
-    if commit:
-        return
-    knorm = ctx.kernel("gdn", src, "gdn_norm", macros)
-    ctx.add(knorm, [(0, o_part, 0), (1, *ctx.buf(main)), (2, *ctx.windows[norm_w.name]), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
-            (ctx.t * hv, 1, 1), (32, 1, 1), "gdn_norm")
+                   (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, *ctx.buf(o_part)), (9, prm, 0), (15, st, 0)],
+            grid, tg, op.kind, writes=[2, 3, 7])
+
+
+def _gdn_norm(ctx: _Ctx, op: Op) -> None:
+    """The gated RMSNorm over the read-out: ``z`` comes from its own value (the gate GEMV, the core's sibling)."""
+    o_part, z, norm_w = op.inputs
+    out = op.outputs[0]
+    a = op.attrs
+    hv, dv = a["v_heads"], a["dv"]
+    attrs = dict(a, k_heads=1, dk=32, conv_width=2)                  # the norm kernel only needs DV (and the shared macros)
+    core = op.inputs[0].producer
+    macros = _gdn_macros(ctx, core.attrs if core is not None else attrs, False)
+    knorm = ctx.kernel("gdn", kernels.gdn_source(), "gdn_norm", macros)
+    prm = ctx.params("gdn_norm", kernels.gdn_params(
+        hv=hv, hk=1, t_active=ctx.t, q_off=0, k_off=0, v_off=0, z_off=0, a_off=0, b_off=0, in_stride=ctx.shape(z)[1], ab_stride=ctx.shape(z)[1],
+        ab_separate=False, out_stride=hv * dv, n_sg=ctx.n_sg, key_dim=0, eps=float(a["eps"])))
+    st = ctx.program.step_state
+    ctx.add(knorm, [(0, *ctx.buf(o_part)), (1, *ctx.buf(z)), (2, *ctx.windows[norm_w.name]), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
+            (ctx.t * hv, 1, 1), (32, 1, 1), op.kind, writes=[3])
 
 
 def _argmax(ctx: _Ctx, op: Op) -> None:
@@ -398,8 +466,8 @@ def _argmax(ctx: _Ctx, op: Op) -> None:
     pv, pi = ctx.scratch("argmax.val", t_c * ctx.n_sg * 4), ctx.scratch("argmax.idx", t_c * ctx.n_sg * 4)
     prm = ctx.params("argmax", kernels.argmax_params(vocab, t_c, ctx.n_sg))
     grid, tg = ctx.crew_grid()
-    ctx.add(kp, [(0, *ctx.buf(logits)), (1, pv, 0), (2, pi, 0), (3, prm, 0)], grid, tg, op.kind)
-    ctx.add(kf, [(0, pv, 0), (1, pi, 0), (2, *ctx.buf(token)), (3, prm, 0)], (t_c, 1, 1), (32, 1, 1), "argmax_final")
+    ctx.add(kp, [(0, *ctx.buf(logits)), (1, pv, 0), (2, pi, 0), (3, prm, 0)], grid, tg, op.kind, writes=[1, 2])
+    ctx.add(kf, [(0, pv, 0), (1, pi, 0), (2, *ctx.buf(token)), (3, prm, 0)], (t_c, 1, 1), (32, 1, 1), "argmax_final", writes=[2])
 
 
 def _sample(ctx: _Ctx, op: Op) -> None:
@@ -418,10 +486,10 @@ def _sample(ctx: _Ctx, op: Op) -> None:
                                                      min_p=float(a.get("min_p", 0.0)), seed=int(a.get("seed", 0)), step=0))
     st = ctx.program.step_state
     grid, tg = ctx.crew_grid()
-    ctx.add(kh, [(0, *ctx.buf(logits)), (1, hist, 0), (3, prm, 0), (15, st, 0)], grid, tg, op.kind)
-    ctx.add(ks, [(1, hist, 0), (2, tau, 0), (3, prm, 0), (15, st, 0)], (ctx.t, 1, 1), (32, 1, 1), "sample_select")
-    ctx.add(kg, [(0, *ctx.buf(logits)), (2, tau, 0), (3, prm, 0), (4, pv, 0), (5, pi, 0), (15, st, 0)], grid, tg, "sample_gumbel")
-    ctx.add(kf, [(0, pv, 0), (1, pi, 0), (2, *ctx.buf(token)), (3, prm, 0), (15, st, 0)], (ctx.t, 1, 1), (32, 1, 1), "argmax_final")
+    ctx.add(kh, [(0, *ctx.buf(logits)), (1, hist, 0), (3, prm, 0), (15, st, 0)], grid, tg, op.kind, writes=[1])
+    ctx.add(ks, [(1, hist, 0), (2, tau, 0), (3, prm, 0), (15, st, 0)], (ctx.t, 1, 1), (32, 1, 1), "sample_select", writes=[2])
+    ctx.add(kg, [(0, *ctx.buf(logits)), (2, tau, 0), (3, prm, 0), (4, pv, 0), (5, pi, 0), (15, st, 0)], grid, tg, "sample_gumbel", writes=[4, 5])
+    ctx.add(kf, [(0, pv, 0), (1, pi, 0), (2, *ctx.buf(token)), (3, prm, 0), (15, st, 0)], (ctx.t, 1, 1), (32, 1, 1), "argmax_final", writes=[2])
 
 
 # ---- the DSpark round (design §5.8; issue #24) ------------------------------------------------------------------
@@ -442,7 +510,7 @@ def _tap_concat(ctx: _Ctx, op: Op) -> None:
     prm = ctx.params("tap_concat", kernels.concat_params(k_each, t_c))
     bindings = [(i, *ctx.buf(taps[min(i, len(taps) - 1)])) for i in range(8)]     # unused slots bound to a valid buffer
     bindings += [(8, *ctx.buf(x)), (9, prm, 0)]
-    ctx.add(k, bindings, (t_c * len(taps), 1, 1), (32, 1, 1), op.kind)
+    ctx.add(k, bindings, (t_c * len(taps), 1, 1), (32, 1, 1), op.kind, writes=[8])
 
 
 def _confidence(ctx: _Ctx, op: Op) -> None:
@@ -455,7 +523,7 @@ def _confidence(ctx: _Ctx, op: Op) -> None:
     k = ctx.kernel("spec_ops", _spec_ops(ctx), "confidence", {})
     prm = ctx.params("confidence", kernels.conf_params(gamma, hid, rank, sts=op.attrs.get("sts")))
     ctx.add(k, [(0, *ctx.buf(hidden)), (1, *ctx.buf(emb)), (2, *ctx.windows[w.name]), (3, *ctx.windows[b.name]), (4, *ctx.buf(conf)), (5, prm, 0)],
-            (gamma, 1, 1), (32, 1, 1), op.kind)
+            (gamma, 1, 1), (32, 1, 1), op.kind, writes=[4])
 
 
 def _verify_select(ctx: _Ctx, op: Op) -> None:
@@ -476,7 +544,8 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
     prm = ctx.params("verify_select", kernels.select_params(gamma, thr, ctx.layout.t_max, mode=mode, cost=cost, log_cap=kernels.ACCEPT_LOG_CAP))
     ctx.program.buffers.setdefault(CONF_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * kernels.CONF_LOG_WIDTH * 4, None, "arena"))
     cb = ctx.buf(conf) if conf is not None else (ctx.scratch("verify_select.conf", gamma * 4), 0)
-    ctx.add(k, [(0, *ctx.buf(drafts)), (1, *cb), (2, ctx.program.step_state, 0), (3, prm, 0), (4, CONF_LOG, 0)], (1, 1, 1), (32, 1, 1), op.kind)
+    ctx.add(k, [(0, *ctx.buf(drafts)), (1, *cb), (2, ctx.program.step_state, 0), (3, prm, 0), (4, CONF_LOG, 0)], (1, 1, 1), (32, 1, 1), op.kind,
+            writes=[2, 4])
 
 
 def _accept_scan(ctx: _Ctx, op: Op) -> None:
@@ -485,24 +554,27 @@ def _accept_scan(ctx: _Ctx, op: Op) -> None:
     prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP))
     ctx.program.buffers.setdefault(ACCEPT_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * 4, None, "arena"))
     ctx.add(k, [(0, *ctx.buf(token)), (1, ctx.program.step_state, 0), (2, ctx.program.ring, 0), (3, prm, 0), (4, ACCEPT_LOG, 0)],
-            (1, 1, 1), (32, 1, 1), op.kind)
+            (1, 1, 1), (32, 1, 1), op.kind, writes=[1, 2, 4])
 
 
 HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_apply_op, "gemv": _gemv, "lm_head": _gemv,
-            "gqa_decode": _gqa, "gdn_mixer": _gdn, "gdn_commit": _gdn, "argmax": _argmax, "sample": _sample,
+            "gqa_decode": _gqa, "gqa_merge": _gqa_merge, "gdn_mixer": _gdn, "gdn_commit": _gdn, "gdn_norm": _gdn_norm, "argmax": _argmax,
+            "sample": _sample,
             "tap_concat": _tap_concat, "draft_attn": _draft_attn, "confidence": _confidence, "verify_select": _verify_select,
             "accept_scan": _accept_scan}
 
 
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
                  layout: Optional[StepStateLayout] = None, eos: int = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
-                 tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False) -> Program:
+                 tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal") -> Program:
     """Check coverage on ``profile`` and emit the step program for a lowered (and passed) graph: for a static
     ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t_max`` read from StepState
     at run time (kernels compiled at ``t_max``). ``pack`` is the pack (or the packs: the target's, then a drafter's)
     the graph's weights and constants come from. ``tail="advance"`` appends the step's advance on ``token`` (the
     sampled tokens); ``None`` leaves the closing op to the graph (a program with the DSpark round emits its own
-    ``accept_scan``)."""
+    ``accept_scan``). ``barriers``: ``"minimal"`` keeps an ICB barrier only where a dependency needs one (the
+    barrier pass), ``"all"`` after every op (v0; the A/B baseline). The profile's ``sibling_order`` decides whether a
+    mixer's gate GEMV is encoded after its core (``alu_first``, ``either``) or before it (``bus_first``)."""
     layout = layout or StepStateLayout()
     packs = [pack] if isinstance(pack, PackFile) else list(pack)
     if dynamic_t:
@@ -534,17 +606,32 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
                 raise KeyError(f"emit_program: the pack has no entry for {v.name!r}")
     program.buffers[program.step_state] = BufferSpec(layout.size, layout.pack({"t_this_step": t}), "step_state")
     program.buffers[program.ring] = BufferSpec(ring_capacity * 8, None, "ring")
-    for op in g.ops:
+    order = list(g.ops)
+    if profile.sibling_order == "bus_first":
+        order = _bus_first(order)
+    for op in order:
         HANDLERS[op.kind](ctx, op)
     if tail == "advance":
         if token is None:
             raise ValueError("emit_program: the advance needs the sampled token value")
         adv = ctx.kernel("advance", kernels.advance_source(layout.to_msl()), "advance", {})
         prm = ctx.params("advance", kernels.advance_params(t, ring_capacity, eos))
-        ctx.add(adv, [(0, *ctx.buf(token)), (1, program.step_state, 0), (2, program.ring, 0), (3, prm, 0)], (1, 1, 1), (32, 1, 1), "advance")
+        ctx.add(adv, [(0, *ctx.buf(token)), (1, program.step_state, 0), (2, program.ring, 0), (3, prm, 0)], (1, 1, 1), (32, 1, 1), "advance",
+                writes=[1, 2])
     elif tail is not None:
         raise ValueError(f"emit_program: unknown tail {tail!r}")
+    place_barriers(program, barriers)
     return program
+
+
+def _bus_first(ops: List[Op]) -> List[Op]:
+    """Move each sibling gate GEMV in front of the mixer core it was emitted after (profiles where the bus-bound
+    dispatch must be encoded first for the pair to overlap)."""
+    out = list(ops)
+    for i, op in enumerate(out):
+        if op.attrs.get("sibling") and i > 0 and out[i - 1].kind in ("gqa_decode", "gdn_mixer"):
+            out[i - 1], out[i] = out[i], out[i - 1]
+    return out
 
 
 def verify_costs(profile: Profile, pack: PackFile, gamma: int, t_max: int) -> Optional[List[float]]:
@@ -589,7 +676,7 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
 def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: int = -1, ring_capacity: int = 4096,
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
-                    verify_threshold: Optional[float] = None, verify_length: Optional[int] = None) -> Program:
+                    verify_threshold: Optional[float] = None, verify_length: Optional[int] = None, barriers: str = "minimal") -> Program:
     """Lower ``model``, run the ``passes`` and emit its step program (see :func:`emit_program`). With a ``drafter``
     (and its pack) the dynamic-T program carries the speculative round instead of the advance: ``verify`` = ``"cost"``
     (the cost-aware verify-length rule when the profile has a cost table for the pack's dominant format, otherwise the
@@ -603,7 +690,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
         for p in passes:
             p(g)
         return emit_program(g, pack=pack, profile=profile, t=t, dynamic_t=dynamic_t, layout=layout, eos=eos, ring_capacity=ring_capacity, tg=tg,
-                            tuner=tuner, tail="advance", token=token)
+                            tuner=tuner, tail="advance", token=token, barriers=barriers)
     if not dynamic_t:
         raise ValueError("compile_program: the speculative round needs the dynamic-T program (dynamic_t=True)")
     if drafter_pack is None:
@@ -626,4 +713,4 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     for p in passes:
         p(g)
     return emit_program(g, pack=[pack, drafter_pack], profile=profile, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
-                        tg=tg, tuner=tuner, tail=None, speculative=True)
+                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers)

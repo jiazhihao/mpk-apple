@@ -88,14 +88,24 @@ def test_lowering_stage_count(tmp_path):
     g.check()
     kinds = Counter(op.kind for op in g.ops)
     # 5 all-to-all stages per layer (design §5.1) + embed + lm_head + argmax; the norm statistics are separate ops
-    # until the fuse pass hoists them (2 per layer + the final norm)
-    assert kinds == {"gemv": 8, "gdn_mixer": 1, "gqa_decode": 1, "rmsnorm_stat": 5, "embed": 1, "lm_head": 1, "argmax": 1}
+    # until the fuse pass hoists them (2 per layer + the final norm); each mixer's gate projection is its own
+    # gemv (the un-barriered sibling of the core, §5.12) and the core's merge / gated norm its own op
+    assert kinds == {"gemv": 10, "gdn_mixer": 1, "gdn_norm": 1, "gqa_decode": 1, "gqa_merge": 1, "rmsnorm_stat": 5, "embed": 1,
+                     "lm_head": 1, "argmax": 1}
     assert tok.name == "token" and tuple(tok.shape)[0].name == "T"
     gdn = next(op for op in g.ops if op.kind == "gdn_mixer")
     assert gdn.attrs["updates"] == ["layers.0.linear_attn.conv_state", "layers.0.linear_attn.rec_state"]
-    assert [s[0] for s in gdn.attrs["segments"]] == ["q", "k", "v", "z", "a", "b"]
+    assert [s[0] for s in gdn.attrs["segments"]] == ["z", "q", "k", "v", "a", "b"]
+    assert gdn.attrs["proj_segments"]["in_proj_qkv"] == (0, 0, 2 * 64 + 256) and gdn.attrs["proj_segments"]["in_proj_a"] == (0, 2 * 64 + 256, 4)
     attn = next(op for op in g.ops if op.kind == "gqa_decode")
-    assert attn.attrs["rope"] == "permuted" and attn.attrs["segments"][1][0] == "gate"
+    assert attn.attrs["rope"] == "permuted" and [s[0] for s in attn.attrs["segments"]] == ["q", "k", "v"]
+    kinds_seq = [op.kind for op in g.ops]
+    i = kinds_seq.index("gqa_decode")
+    assert kinds_seq[i + 1] == "gemv" and g.ops[i + 1].attrs["sibling"] and g.ops[i + 1].attrs["row_range"] == (8 * 32 + 2 * 2 * 32, 8 * 32)
+    assert kinds_seq[i + 2] == "gqa_merge" and len(g.ops[i + 2].inputs) == 3
+    j = kinds_seq.index("gdn_mixer")
+    assert kinds_seq[j + 1] == "gemv" and g.ops[j + 1].attrs["sibling"] and g.ops[j + 1].attrs["row_range"] == (0, 256)
+    assert kinds_seq[j + 2] == "gdn_norm" and g.ops[j - 1].attrs["row_range"] == (256, 2 * 64 + 256 + 8)
     assert sorted(m.tap_values) == [-1, 0, 1]                  # the embedding and every layer
     # the tied lm_head reads the embedding slab
     embed_w = next(op for op in g.ops if op.kind == "embed").inputs[1]
@@ -110,24 +120,24 @@ def test_pack_from_model_tree(tmp_path):
     m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
     layout = PackLayout(rows=16, lane_order="interleaved16")
     names = [r.name for r in slab_requests(m, layout)]
-    assert names[:2] == ["embed_tokens.weight", "layers.0.linear_attn.in_proj.in_proj_qkv+in_proj_z+in_proj_a+in_proj_b"]
+    assert names[:2] == ["embed_tokens.weight", "layers.0.linear_attn.in_proj.in_proj_z+in_proj_qkv+in_proj_a+in_proj_b"]
     assert "lm_head.weight" not in names
     manifest = pack_model(m, str(tmp_path), str(tmp_path / "pack"), layout)
     pf = PackFile(tmp_path / "pack")
     assert len(manifest["slabs"]) == 9 and {a["name"] for a in manifest["aux"]} >= {"rope_cos", "rope_sin", "layers.0.linear_attn.a_log"}
     L0, L1 = f"{P}layers.0.", f"{P}layers.1."
-    # stacked GDN input projection: rows in checkpoint order
-    got = pf.dequantize_slab("layers.0.linear_attn.in_proj.in_proj_qkv+in_proj_z+in_proj_a+in_proj_b")
-    exp = np.concatenate([held[L0 + f"linear_attn.{n}.weight"] for n in ("in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b")])
+    # stacked GDN input projection: rows in part order, the z gate first (its own block-aligned dispatch)
+    got = pf.dequantize_slab("layers.0.linear_attn.in_proj.in_proj_z+in_proj_qkv+in_proj_a+in_proj_b")
+    exp = np.concatenate([held[L0 + f"linear_attn.{n}.weight"] for n in ("in_proj_z", "in_proj_qkv", "in_proj_a", "in_proj_b")])
     assert np.array_equal(got, exp)
-    # attention: [q (head-permuted) | gate | k (head-permuted) | v]
+    # attention: [q (head-permuted) | k (head-permuted) | v | gate] — the gate rows last, a block-aligned range
     d, rot = 32, 8
     hp = rope_head_perm(d, rot)
     q_proj, k_proj, v_proj = held[L1 + "self_attn.q_proj.weight"], held[L1 + "self_attn.k_proj.weight"], held[L1 + "self_attn.v_proj.weight"]
     q = np.concatenate([q_proj[h * 2 * d: h * 2 * d + d][hp] for h in range(8)])
     gate = np.concatenate([q_proj[h * 2 * d + d: (h + 1) * 2 * d] for h in range(8)])
     k = np.concatenate([k_proj[j * d: (j + 1) * d][hp] for j in range(2)])
-    exp = np.concatenate([q, gate, k, v_proj])
+    exp = np.concatenate([q, k, v_proj, gate])
     assert np.array_equal(pf.dequantize_slab("layers.1.self_attn.qkv.q_proj+k_proj+v_proj"), exp)
     # gate/up chunk interleave (8 = pack rows / 2)
     gu = np.concatenate([held[L1 + "mlp.gate_proj.weight"], held[L1 + "mlp.up_proj.weight"]])[interleave_chunks(256, 256, 8)]
@@ -152,10 +162,20 @@ def test_mixed_format_parts_split_into_slabs(tmp_path):
     lin.set_format("in_proj_a", "fp8_e4m3")
     lin.set_format("in_proj_b", "fp8_e4m3")
     groups = lin.slab_groups()
-    assert [g.name.split(".")[-1] for g in groups] == ["in_proj_qkv+in_proj_z", "in_proj_a+in_proj_b"]
+    assert [g.name.split(".")[-1] for g in groups] == ["in_proj_z+in_proj_qkv", "in_proj_a+in_proj_b"]
     g = Graph("mixed")
     proj = lin.lower(g, g.input("x", (1, 256), __import__("monolith.core", fromlist=["DType"]).DType.BF16))
-    assert len(proj.values) == 2 and proj.segments["in_proj_a"] == (1, 0, 4) and proj.segments["in_proj_z"] == (0, 2 * 64 + 256, 256)
+    assert len(proj.values) == 2 and proj.segments["in_proj_a"] == (1, 0, 4) and proj.segments["in_proj_z"] == (0, 0, 256)
+    # a row range of the first group leaves the others whole; a range on group 0 alone emits one op
+    g = Graph("ranged")
+    g.input("x", (1, 256), __import__("monolith.core", fromlist=["DType"]).DType.BF16)
+    ranged = lin.lower(g, g.values["x"], rows=(256, 2 * 64 + 256))
+    assert len(ranged.values) == 2 and ranged.segments["in_proj_qkv"] == (0, 0, 2 * 64 + 256) and "in_proj_z" not in ranged.segments
+    assert ranged.values[0].producer.attrs["row_range"] == (256, 2 * 64 + 256) and ranged.values[0].shape == (1, 2 * 64 + 256)
+    only = lin.lower(g, g.values["x"], rows=(0, 256), groups=[0], sibling=True)
+    assert len(only.values) == 1 and only.values[0].producer.attrs["sibling"] and only.segments == {"in_proj_z": (0, 0, 256)}
+    with pytest.raises(ValueError):
+        lin.lower(g, g.values["x"], rows=(0, 4096))
     m.blocks[1].mixer.qkv.set_format("v_proj", "nvfp4")
     with pytest.raises(ValueError):
         m.blocks[1].mixer.qkv.slab_groups()                   # a row permutation cannot span formats
@@ -197,11 +217,22 @@ def test_compile_program_from_the_pack(tmp_path):
     prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
     prog = compile_program(m, PackFile(tmp_path / "pack"), prof, t=3, eos=7, passes=())     # the bare emitter; passes have their own test
     kinds = [o.name.split(":")[0] for o in prog.ops]
-    # per layer: 2 × (rmsnorm_stat, norm_apply) + 4 gemv + mixer (2 dispatches); embed; final stat + norm_apply + lm_head; argmax (2); advance
+    # per layer: 2 × (rmsnorm_stat, norm_apply) + 5 gemv (the gate as its own dispatch) + mixer core + merge; embed; final stat +
+    # norm_apply + lm_head; argmax (2); advance — the norm_apply of the input norm is shared by the core rows and the gate
     assert kinds.count("embed") == 1 and kinds.count("advance") == 1 and kinds.count("argmax") == 1 and kinds.count("argmax_final") == 1
     assert kinds.count("gdn_mixer") == 1 and kinds.count("gdn_norm") == 1 and kinds.count("gqa_decode") == 1 and kinds.count("gqa_merge") == 1
-    assert kinds.count("rmsnorm_stat") == 5 and kinds.count("norm_apply") == 5 and kinds.count("gemv") == 8 and kinds.count("lm_head") == 1
-    assert all(o.barrier_after for o in prog.ops)
+    assert kinds.count("rmsnorm_stat") == 5 and kinds.count("norm_apply") == 5 and kinds.count("gemv") == 10 and kinds.count("lm_head") == 1
+    # barriers only where a dependency needs one: a mixer's gate GEMV does not wait for the core (it runs beside it,
+    # design §5.12); the norm / merge after them waits; everything else waits for its predecessor
+    i_gdn = kinds.index("gdn_mixer")
+    assert kinds[i_gdn + 1] == "gemv" and prog.ops[i_gdn + 1].meta["sibling"] and not prog.ops[i_gdn + 1].barrier_before
+    assert prog.ops[i_gdn].barrier_before and kinds[i_gdn + 2] == "gdn_norm" and prog.ops[i_gdn + 2].barrier_before
+    i_att = kinds.index("gqa_decode")
+    assert kinds[i_att + 1] == "gemv" and not prog.ops[i_att + 1].barrier_before and prog.ops[i_att + 2].barrier_before
+    assert prog.ops[0].barrier_before and sum(1 for o in prog.ops if not o.barrier_before) == 2
+    assert prog.ops[i_gdn + 1].meta["row_range"] == [0, 256] and prog.ops[i_gdn - 1].meta["row_range"] == [256, 2 * 64 + 256 + 8]
+    every = compile_program(m, PackFile(tmp_path / "pack"), prof, t=3, eos=7, passes=(), barriers="all")
+    assert all(o.barrier_before for o in every.ops) and len(every.ops) == len(prog.ops)
     roles = {}
     for b in prog.buffers.values():
         roles[b.role] = roles.get(b.role, 0) + 1
@@ -313,8 +344,8 @@ def test_emitter_honors_the_tuner(tmp_path):
     assert names.count("norm_apply") == 0 and [o.name.split(":")[0] for o in plain.ops].count("norm_apply") == 5
     gemvs = [o for o in prog.ops if o.name.startswith("gemv:") or o.name.startswith("lm_head:")]
     assert all(prog.kernels[o.kernel].macros["RG"] == "8" and o.threadgroup == (64, 1, 1) for o in gemvs)
-    normed = [o for o in gemvs if o.meta["fused_norm"]]
-    assert len(normed) == 5 and all(any(b[0] == 5 for b in o.bindings) and any(b[0] == 6 for b in o.bindings) for o in normed)
+    normed = [o for o in gemvs if o.meta["fused_norm"]]                        # 2 per layer (the core rows and the gate) + gate_up + lm_head
+    assert len(normed) == 7 and all(any(b[0] == 5 for b in o.bindings) and any(b[0] == 6 for b in o.bindings) for o in normed)
     gdn = next(o for o in prog.ops if o.name == "gdn_mixer")
     assert prog.kernels[gdn.kernel].macros["SL"] == "4u" and prog.kernels[gdn.kernel].macros["SPB"] == "2u"
     assert any(c[0] == "gdn" for c in stub.calls) and sum(c[0] == "gemv" for c in stub.calls) == len(gemvs)
