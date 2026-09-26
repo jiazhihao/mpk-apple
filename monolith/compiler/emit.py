@@ -123,7 +123,7 @@ class _Ctx:
         if mode.startswith("ksplit"):                                    # the tile's K-split: one tile per threadgroup of S SIMD-groups
             n_sg, n_tg, tg = kernels.gemm_geometry(mode, n_blocks)
             return n_sg, (n_tg, 1, 1), (tg, 1, 1)
-        n_sg = self.n_sg * (2 if mode == "crew2" else 1)
+        n_sg = self.n_sg * kernels.crew_factor(mode)
         return n_sg, (-(-(n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
 
     def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str, *, writes: Optional[Sequence[int]] = None,
@@ -313,7 +313,8 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
     if tile_range is not None and not variants:
         _gemm_tile(ctx, op, info, tile_range, t_src, block0, n_blocks, n_rows, nbytes, vgroup)   # a static row count: the tile alone
         return
-    choices = [ctx.tuner.tune_gemv(info, tv, epilogue, stat is not None) if ctx.tuner is not None else None for tv in variants]
+    parts_in = ctx.stat_parts.get(stat.name, 1) if stat is not None else 1        # the statistic's partials the fused norm folds
+    choices = [ctx.tuner.tune_gemv(info, tv, epilogue, stat is not None, stat_parts=parts_in) if ctx.tuner is not None else None for tv in variants]
     fuse_norm = bool(choices[0]) and all(c is not None and c.fuse_norm for c in choices)
     eps = float(op.attrs.get("eps", 1e-6))
     x_binding = ctx.buf(x)
@@ -407,6 +408,16 @@ def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variant
             raise ValueError("the row range does not start on a tile")
     except ValueError:
         return variants, None                                          # the shape or the range is not the tile's: the shader path
+    if ctx.tuner is not None and rr is None:
+        # the tuner has timed both paths on this shape: the tile at TM rows and the shader at the range's top T — where the
+        # shader wins (K = 1024 slabs at T ≤ 8: the tile's fill has too few K steps to amortize; decode-kernels.md §11)
+        # the T variants stay on it. A row range keeps the profile's rule (its tile share is the whole op's).
+        norm_in = op.attrs.get("norm")
+        parts_in = ctx.stat_parts.get(op.inputs[2].name, 1) if norm_in else 1
+        shader_ms = ctx.tuner.tune_gemv(info, t_c, op.attrs.get("epilogue"), bool(norm_in), stat_parts=parts_in).ms
+        tile_ms = ctx.tuner.tune_gemm(info, tm, op.attrs.get("epilogue")).ms
+        if shader_ms > 0 and tile_ms > 0 and shader_ms < tile_ms:
+            return variants, None
     if t_src == STATIC_ROWS:
         return [], (0, t_c)                                            # a static row count: the tile alone, unpredicated
     shader = [tv for tv in _prune_variants(ctx, variants if len(variants) > 1 else t_variants(t_c), t_src) if tv < min_t]
@@ -586,7 +597,7 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     kd = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_decode_v2" if v2 else "gqa_decode", macros)
     rep = heads // kv
     t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
-    n_chunks_max, rows_max = -(-ctx_max // chunk), rep * t_c
+    n_chunks_max, rows_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, n_sg), rep * t_c   # the merge derives the same count
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
     if _value_bytes(part_o, ctx.t) < po or _value_bytes(part_md, ctx.t) < pm:
         raise ValueError(f"gqa_decode: the partial values are too small for {kv} kv heads × {n_chunks_max} chunks × {rows_max} rows")
@@ -618,7 +629,9 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     if fused:
         macros = dict(macros, **fused[1])
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros)
-    n_chunks_max = ctx.shape(part_o)[1] // (kv * rep * d)
+    n_chunks_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, n_sg) if core is not None else ctx.shape(part_o)[1] // (kv * rep * d)
+    if n_chunks_max * kv * rep * d > ctx.shape(part_o)[1]:
+        raise ValueError(f"gqa_merge: the partial values hold {ctx.shape(part_o)[1] // (kv * rep * d)} chunks, the core writes {n_chunks_max}")
     t_c, _ = ctx.rows_of(op)
     prm = ctx.params("gqa_merge", kernels.gqa_params(
         heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,

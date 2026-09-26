@@ -34,6 +34,24 @@
 #define PV_UNROLL 8u                 // keys whose values the P·V pass loads ahead of consuming them (divides 32)
 #endif
 
+// The keys per chunk this step (the core and the merge compute the same value): the smallest chunk down to 16 keys
+// whose blocks of a T = 1 step still fit one wave of the crew — a short context on a small model is 16–24 blocks of
+// 64 keys over 240 SIMD-groups, each walking its keys alone, and 16-key chunks put four times the SIMD-groups on it
+// (decode-kernels.md §11); a context whose 64-key blocks already exceed a wave keeps them (halving there only adds a
+// tail wave and merge work: measured slower at 1024 keys). Bounded by the partial workspace's chunk count;
+// independent of T, so every T's rows sum in the same order (a drafter's chain row and the target's verify row of
+// one position agree to the bit).
+static inline uint pick_chunk(uint ctx, uint kv_heads, uint rep, uint n_sg, uint n_chunks_max) {
+  const uint n_rg1 = (rep + RBMAX - 1u) / RBMAX;
+  uint ch = CH;
+  while (ch > 16u) {
+    const uint ch2 = ch / 2u, n_half = (ctx + ch2 - 1u) / ch2;
+    if (kv_heads * n_rg1 * n_half > n_sg || n_half > n_chunks_max) break;
+    ch = ch2;
+  }
+  return ch;
+}
+
 struct GqaParams {
   uint heads; uint kv_heads; uint t_active; uint position;
   uint n_sg; uint q_off; uint gate_off; uint k_off;

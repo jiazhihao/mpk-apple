@@ -325,7 +325,7 @@ def test_emitter_honors_the_tuner(tmp_path):
         def __init__(self):
             self.calls = []
 
-        def tune_gemv(self, info, t, epilogue, norm_fed):
+        def tune_gemv(self, info, t, epilogue, norm_fed, **kw):
             self.calls.append(("gemv", info.n, info.k, epilogue, norm_fed))
             return Choice({"RG": "8"}, "block", fuse_norm=norm_fed)
 

@@ -169,7 +169,9 @@ python -m monolith.trace --model ~/models/<ckpt> --pack /tmp/pack --steps 5    #
 `generate` also takes a drafter (`--drafter <dir> --drafter-pack <pack> --drafter-kind dspark`), sampling
 (`--temperature --top-k --top-p --min-p --seed`), and the engine knobs (`--barriers`, `--attention`, `--math`,
 `--no-autotune`). The first run autotunes the GEMV and GDN geometries per op and caches the choice in the pack
-directory.
+directory. `python tools/bench/layer_vs_mlx.py --model <ckpt> --pack /tmp/pack` compares a decoder layer's cost with
+mlx-lm's on the same checkpoint (the slope of the step over the layer count, T = 1 / 4 / 8, two contexts, per-op
+profiles on both sides; decode-kernels.md §11) — the measurement a model or kernel change is judged by.
 
 ### 1.7 The PR
 

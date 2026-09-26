@@ -196,7 +196,7 @@ def test_autotuner_picks_and_caches(dev, tmp_path):
     rng = np.random.default_rng(1)
     _, info, _ = pack_spec(random_spec("bf16", 512, K, rng), PackLayout(rows=16))
     c = tuner.tune_gemv(info, 1, "residual", False)
-    assert isinstance(c, Choice) and c.ms > 0 and c.ms <= c.default_ms * 1.001 and c.grid_mode in ("crew", "crew2", "block")
+    assert isinstance(c, Choice) and c.ms > 0 and c.ms <= c.default_ms * 1.001 and c.grid_mode in ("crew", "crew2", "crew3", "crew4", "block")
     cn = tuner.tune_gemv(info, 1, None, True)
     assert cn.ms > 0 and isinstance(cn.fuse_norm, bool)
     g = tuner.tune_gdn(4, 4, 128, 128, 4, 1)

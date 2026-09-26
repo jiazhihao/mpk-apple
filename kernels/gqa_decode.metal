@@ -1,7 +1,8 @@
 // gqa_decode + gqa_merge: the full-attention mixer for T new tokens (design §5.6; issue #21).
 //
-// Block = (kv head j, chunk c of CH key positions, row group of RBMAX query rows); a SIMD-group takes static
-// slices of the kv_heads × n_chunks × n_row_groups blocks, n_chunks = ceil((position + T) / CH) computed in-kernel
+// Block = (kv head j, chunk c of ch key positions, row group of RBMAX query rows); a SIMD-group takes static
+// slices of the kv_heads × n_chunks × n_row_groups blocks, n_chunks = ceil((position + T) / ch) computed in-kernel
+// with ch = pick_chunk(...) ≤ CH (gqa_common.metal: smaller chunks while the blocks would leave the crew idle)
 // so the work grows with the context under the fixed crew geometry. Lane ℓ owns dims [ℓ·D/32, (ℓ+1)·D/32) of
 // every vector. For its block a SIMD-group:
 //   1. prologue — its query rows of kv head j (q head h = j·rep + i, token t; row = t·rep + i):
@@ -73,7 +74,8 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
   const uint rows = rep * T;
   const uint n_rg = (rows + RBMAX - 1u) / RBMAX;
   const uint ctx = qpos0 + T;                                  // keys: [0, position) cached, [position, qpos0) new, [qpos0, ctx) this step
-  const uint n_chunks = (ctx + CH - 1u) / CH;
+  const uint ch = pick_chunk(ctx, p.kv_heads, rep, p.n_sg, p.n_chunks_max);   // keys per chunk this step (≤ CH)
+  const uint n_chunks = (ctx + ch - 1u) / ch;
   const uint n_blocks = p.kv_heads * n_chunks * n_rg;          // block = (kv head, chunk, row group)
 #if STEAL
   StealScan scan = steal_begin();                              // own slice first, then steal (kernels/common/steal.metal, #44)
@@ -85,7 +87,7 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
   for (uint b = sg; b < n_blocks; b += p.n_sg) {
 #endif
     const uint rg = b % n_rg, c = (b / n_rg) % n_chunks, j = b / (n_rg * n_chunks);
-    const uint k0 = c * CH, k1 = min(k0 + CH, ctx);
+    const uint k0 = c * ch, k1 = min(k0 + ch, ctx);
     const uint r0 = rg * RBMAX;
     const uint nr = min(RBMAX, rows - r0);
     // prologue: this row group's queries, normed and RoPE'd, DL dims per lane
@@ -229,7 +231,8 @@ kernel void gqa_merge(device const float* part_o [[buffer(0)]], device const flo
   if (t >= T) return;
   const uint rep = p.heads / p.kv_heads;
   const uint j = h / rep, row = t * rep + (h % rep);
-  const uint n_chunks = (ctx + CH - 1u) / CH;
+  const uint ch = pick_chunk(ctx, p.kv_heads, rep, p.n_sg, p.n_chunks_max);
+  const uint n_chunks = (ctx + ch - 1u) / ch;
   float m_g = -INFINITY;
   for (uint c = 0; c < n_chunks; c++) m_g = max(m_g, part_md[((j * p.n_chunks_max + c) * p.rows_max + row) * 2u]);
   float d_g = 0.0f, o[DL];

@@ -265,6 +265,16 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
     return macros
 
 
+def crew_factor(mode: str) -> int:
+    """Threadgroups per core of a crew geometry mode: ``crew`` 1, ``crew2`` 2, ``crew3`` 3, ``crew4`` 4 (the denser
+    crews keep more SIMD-groups in flight per core for the short latency chains of a small slab's items)."""
+    if mode == "crew":
+        return 1
+    if mode.startswith("crew") and mode[4:].isdigit() and 2 <= int(mode[4:]) <= 4:
+        return int(mode[4:])
+    raise ValueError(f"unknown crew geometry {mode!r}")
+
+
 def gemm_geometry(mode: str, n_tiles: int, cores: Optional[int] = None, tg: int = 384) -> Tuple[int, int, int]:
     """``(n_sg, threadgroups, threadgroup size)`` of a tile dispatch for an autotuned geometry mode: ``crew`` /
     ``crew2`` (12 SIMD-groups per core, one or two threadgroups per core, static slices of the tiles; needs
@@ -274,7 +284,7 @@ def gemm_geometry(mode: str, n_tiles: int, cores: Optional[int] = None, tg: int 
         return n_tiles * s, n_tiles, 32 * s
     if cores is None:
         raise ValueError("gemm_geometry: the crew modes need the core count")
-    n_sg = (tg // 32) * cores * (2 if mode == "crew2" else 1)
+    n_sg = (tg // 32) * cores * crew_factor(mode)
     return n_sg, -(-(n_sg * 32) // tg), tg
 
 
@@ -450,6 +460,19 @@ def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg:
 def steal_reset_params(n: int) -> bytes:
     """``steal_reset``'s count (buffer 1): the cursors to zero (one per nominal SIMD-group)."""
     return struct.pack("<I", n)
+
+
+GQA_CHUNK_MIN = 16
+GQA_CREW_MAX = 480                      # the largest crew a profile dispatches (two threadgroups per core on 20 cores)
+
+
+def gqa_chunks_max(ctx_max: int, kv_heads: int, chunk: int = 64, n_sg: int = GQA_CREW_MAX) -> int:
+    """The chunk count the partial workspace holds: ``ctx_max`` in chunks of ``chunk`` keys, or the count the kernels'
+    run-time choice can reach with chunks down to 16 keys while the blocks would leave the crew of ``n_sg`` idle
+    (``pick_chunk`` in gqa_common.metal; the layer sizes its values with the largest crew, the emitter's params carry
+    the dispatch's)."""
+    small = min(-(-ctx_max // GQA_CHUNK_MIN), 2 * n_sg // max(1, kv_heads) + 2)
+    return max(-(-ctx_max // chunk), small)
 
 
 def gqa_workspace(kv_heads: int, n_chunks_max: int, rows_max: int, head_dim: int) -> Tuple[int, int]:

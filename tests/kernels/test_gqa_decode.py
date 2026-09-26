@@ -2,6 +2,8 @@
 reference's roundings) and (b) the GQAAttention layer oracle (torch, the HF-faithful semantics), on fresh and
 filled caches, T = 1 and T > 1 (causal inside the step), several chunks and row groups, both head dims."""
 
+import math
+
 import numpy as np
 import pytest
 
@@ -37,7 +39,7 @@ class Cfg:
         self.gate_off = hd + 2 * kd
         self.n1 = hd + 2 * kd + (hd if gate else 0)
         self.rows_max = self.rep * t_max
-        self.n_chunks_max = -(-ctx_max // chunk)
+        self.n_chunks_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, 12 * dev.info().gpu_cores) if False else kernels.gqa_chunks_max(ctx_max, kv, chunk)
         self.scaling = d ** -0.5
 
 
@@ -169,6 +171,11 @@ def ref_step(h, proj, position, k_cache, v_cache):
     return out.reshape(t, c.heads * d)
 
 
+def _ulp(x: float) -> float:
+    """One BF16 ulp at magnitude ``x`` (8 bits of mantissa)."""
+    return 2.0 ** (math.floor(math.log2(max(x, 1e-30))) - 7)
+
+
 def _bars(got, ref):
     got, ref = got.astype(np.float64).ravel(), ref.astype(np.float64).ravel()
     cos = float(np.dot(got, ref) / (np.linalg.norm(got) * np.linalg.norm(ref) + 1e-30))
@@ -202,7 +209,7 @@ def test_matches_kernel_contract(dev, cfg):
         got = h.step(proj, pos)
         ref = ref_step(h, bf16_to_f32(proj), pos, k_ref, v_ref)
         cos, max_abs, scale = _bars(got, ref)
-        assert cos > 0.99999 and max_abs <= 2e-3 * scale, (t, pos, cos, max_abs, scale)
+        assert cos > 0.99999 and max_abs <= 2 * _ulp(scale), (t, pos, cos, max_abs, scale)   # 2 BF16 ulps: the chunked softmax rounds p̃ per chunk, the chunk chosen at run time
         kc, vc = h.caches()
         assert np.abs(kc[: pos + t] - k_ref[: pos + t]).max() <= 1e-2 * np.abs(k_ref[: pos + t]).max()   # ≤ 1 ULP flips at rsqrt boundaries
         assert np.array_equal(vc[: pos + t], v_ref[: pos + t])
@@ -287,7 +294,7 @@ def test_v2_matches_kernel_contract(dev, cfg):
         got = h.step(proj, pos)
         ref = ref_step(h, bf16_to_f32(proj), pos, k_ref, v_ref)
         cos, max_abs, scale = _bars(got, ref)
-        assert cos > 0.99999 and max_abs <= 2e-3 * scale, (t, pos, cos, max_abs, scale)
+        assert cos > 0.99999 and max_abs <= 2 * _ulp(scale), (t, pos, cos, max_abs, scale)   # 2 BF16 ulps: the chunked softmax rounds p̃ per chunk, the chunk chosen at run time
         kc, vc = h.caches()
         assert np.abs(kc[: pos + t] - k_ref[: pos + t]).max() <= 1e-2 * np.abs(k_ref[: pos + t]).max()
         assert np.array_equal(vc[: pos + t], v_ref[: pos + t])

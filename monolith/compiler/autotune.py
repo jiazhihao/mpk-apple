@@ -30,8 +30,11 @@ from ..formats.fp import f32_to_bf16
 NOISE_MARGIN = 0.03           # a variant replaces the default only if faster by more than this fraction
 
 
-def gemv_key(info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool) -> str:
-    return f"gemv|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|T{t}|{epilogue or 'plain'}|{'norm' if norm_fed else 'raw'}"
+def gemv_key(info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool, stat_parts: int = 64) -> str:
+    key = f"gemv|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|T{t}|{epilogue or 'plain'}|{'norm' if norm_fed else 'raw'}"
+    if norm_fed and stat_parts != 64:
+        key += f"|P{stat_parts}"                                     # the producer's partial count: the fused norm folds it per SIMD-group
+    return key
 
 
 def gdn_key(hv: int, hk: int, dk: int, dv: int, conv_width: int, t: int) -> str:
@@ -41,7 +44,7 @@ def gdn_key(hv: int, hk: int, dk: int, dv: int, conv_width: int, t: int) -> str:
 @dataclass
 class Choice:
     macros: Dict[str, str]
-    grid_mode: str                 # "crew" | "crew2" | "block"
+    grid_mode: str                 # "crew" | "crew2" | "crew3" | "crew4" | "block" | "ksplit<S>[nc]"
     fuse_norm: bool = False
     ms: float = 0.0
     default_ms: float = 0.0
@@ -79,12 +82,14 @@ class Autotuner:
         if mode == "block":
             n_sg = n_blocks
             return n_sg, -(-(n_sg * 32) // 64), 64
-        n_sg = 12 * self.cores * (2 if mode == "crew2" else 1)
+        n_sg = 12 * self.cores * kernels.crew_factor(mode)
         return n_sg, -(-(n_sg * 32) // 384), 384
 
     # ---- GEMV ----------------------------------------------------------------------------------------------------
-    def tune_gemv(self, info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool, *, force: bool = False) -> Choice:
-        key = gemv_key(info, t, epilogue, norm_fed)
+    def tune_gemv(self, info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool, *, force: bool = False, stat_parts: int = 64) -> Choice:
+        """``stat_parts``: the partial sums per token the norm statistic arrives in (the producer's blocks × its row
+        split) — the fused variant folds them in every SIMD-group, so the benchmark must see the program's count."""
+        key = gemv_key(info, t, epilogue, norm_fed, stat_parts)
         if key in self.choices and not force:
             c = self.choices[key]
             return Choice(dict(c["macros"]), c["grid_mode"], c.get("fuse_norm", False), c.get("ms", 0.0), c.get("default_ms", 0.0))
@@ -99,14 +104,15 @@ class Autotuner:
         xb = f32_to_bf16(rng.uniform(-1, 1, size=(t, info.k)).astype(np.float32))
         xbuf, rsbuf = nt.Buffer(self.dev, xb.tobytes()), nt.Buffer(self.dev, row_scales.tobytes())
         ybuf = nt.Buffer(self.dev, t * info.n * 2)
-        stat = nt.Buffer(self.dev, (t * 4 * 64))
-        stat.write(np.full(t * 64, float(info.k) / 64, np.float32).tobytes(), 0)
+        parts = max(1, int(stat_parts))
+        stat = nt.Buffer(self.dev, t * 4 * parts)
+        stat.write(np.full(t * parts, float(info.k) / parts, np.float32).tobytes(), 0)
         nw = nt.Buffer(self.dev, np.ones(info.k, np.float32).tobytes())
         res = nt.Buffer(self.dev, t * info.n * 2)
         xn = nt.Buffer(self.dev, t * info.k * 2)
         variants: List[Tuple[str, Dict[str, Any]]] = []
         rgs = [r for r in (2, 4, 8) if r <= info.rows and info.rows % r == 0]
-        for rg, mode in itertools.product(rgs, ("crew", "crew2", "block")):
+        for rg, mode in itertools.product(rgs, ("crew", "crew2", "crew3", "crew4", "block")):
             # the row splits (RSPLIT > 1) only where the blocks alone leave SIMD-groups idle or end in a short last wave
             for rs in kernels.gemv_rsplits(info.rows, rg, epilogue):
                 if rs > 1 and (mode == "block" or pinfo.n_blocks >= 4 * self.grid(mode, pinfo.n_blocks)[0]):
@@ -123,11 +129,11 @@ class Autotuner:
                 continue
             n_sg, grid, tg = self.grid(v["mode"], pinfo.n_blocks)
             pso = nt.Pipeline(nt.Library(self.dev, kernels.gemv_source(info.format), macros), "gemv_T")
-            prm = kernels.gemv_params(info.n, pinfo.n_blocks, n_sg, t, eps=1e-6, stat_parts=64)
+            prm = kernels.gemv_params(info.n, pinfo.n_blocks, n_sg, t, eps=1e-6, stat_parts=parts)
             ds = []
             if norm_fed and not v["fuse"]:
                 apso = nt.Pipeline(nt.Library(self.dev, kernels.norm_apply_source(), {}), "norm_apply")
-                aprm = kernels.norm_apply_params(info.k, t, 64, 1e-6)
+                aprm = kernels.norm_apply_params(info.k, t, parts, 1e-6)
             for c in range(copies):
                 if norm_fed and not v["fuse"]:
                     ds.append(nt.Dispatch().pipeline(apso).buffer(0, xbuf).buffer(1, stat).buffer(2, nw).buffer(3, xn).bytes(4, aprm).grid(t).threadgroup(32))

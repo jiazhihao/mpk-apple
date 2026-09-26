@@ -16,6 +16,7 @@ import numpy as np
 
 from ..core.dtypes import DType
 from ..core.ir import BlockDomain, Graph, OpClass, Value
+from ..kernels import gqa_chunks_max
 from ..packs.transforms import rope_head_perm
 
 ATTN_CHUNK = 64          # keys per chunk of the attention core (the partial workspace is sized by it)
@@ -127,7 +128,7 @@ class GQAAttention(Module):
         cos, sin = ctx.consts["rope_cos"], ctx.consts["rope_sin"]
         qn = self.const_value(g, f"{self.prefix}q_norm", (self.head_dim,), DType.F32)
         kn = self.const_value(g, f"{self.prefix}k_norm", (self.head_dim,), DType.F32)
-        rep, n_chunks_max = self.heads // self.kv_heads, -(-self.max_context // chunk)
+        rep, n_chunks_max = self.heads // self.kv_heads, gqa_chunks_max(self.max_context, self.kv_heads, chunk)
         t = h.shape[0]
         part_o = g.value(f"{self.prefix}part_o", (t, self.kv_heads * n_chunks_max * rep * self.head_dim), DType.F32)
         part_md = g.value(f"{self.prefix}part_md", (t, self.kv_heads * n_chunks_max * rep * 2), DType.F32)

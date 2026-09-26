@@ -788,3 +788,88 @@ chip. Also in this run: the re-tuned plain decode of the 8B is 21.02 (§9: 20.62
 the 4096-row projections (RSPLIT 8, crew2: 0.036 vs 0.081 ms in isolation for o_proj, cold and streamed) and the
 step did not follow; the autotuner's isolated timings are a follow-up of their own (the same blind spot as the
 gate|up pick above). The rows are in `apple-m5-pro-20c_spec_vs_mlx.jsonl` with `"drafter": "lm"`.
+
+## 11. The layer-level comparison against MLX (#113, 2026-09-26) — `apple-m5-pro-20c_layers_vs_mlx.jsonl`
+
+`tools/bench/layer_vs_mlx.py` measures one decoder layer's share of a decode step on both engines the same way: the
+**slope of the step's time over the number of layers** the model is truncated to (ours: the package built with
+`num_layers_override`; mlx-lm: `model.layers[:k]`), at T = 1 and at a verify pass's T (4, 8) over a context of 128
+and 1024 tokens, best of 3 paired alternations. Ours at T = 1 is `Session.generate` (GPU and wall ms per step; the two
+agree to 0.1 %), at T > 1 the static-T program run as prefill-like steps; mlx-lm at T = 1 is its own `generation_tps`
+(the gate's number), at T > 1 the pipelined `async_eval` loop of its generate step. The slope removes the embedding,
+the head, the argmax and the Python/host time of both, so it is the kernels' per-layer cost. Per sub-op the tool
+reads our program's per-op profile (min over steps, folded per layer) and times MLX's ops at the layer's shapes as
+64 independent calls per eval — a number to read with care: those calls re-read one weight matrix and the M5 Pro
+caches it, so MLX's small qmm's look faster than they run in its step (its 8B layer sums to 328 µs of ops against a
+400 µs slope; ours 550 against 549 — the ICB replay has no per-dispatch gap the profile does not already contain).
+
+**Where it started** (the LM drafter's chain step, §10; the 8B's plain decode at 0.76× mlx-lm, §8) [M]:
+
+| model | T | ctx | ours µs / layer | mlx-lm µs / layer | ours / mlx | our sub-ops (µs, T = 1, ctx 128) |
+|---|---|---|---|---|---|---|
+| 0.6B 4-bit (28 layers) | 1 | 128 | 140 | 59 | 2.37 | qkv 21, o 10, gate\|up 28, down 15, **attention 65**, merge 4 |
+| | 1 | 1024 | 147 | 59 | 2.50 | |
+| | 4 | 128 / 1024 | 252 / 346 | 71 / 86 | 3.6 / 4.0 | the tile at TM 8 on K = 1024: 35–45 per GEMV |
+| | 8 | 128 / 1024 | 272 / 441 | 115 / 144 | 2.4 / 3.1 | |
+| 8B NVFP4 (36 layers) | 1 | 128 | 549 | 400 | 1.37 | qkv 77, o 39, gate\|up 230, down 111, **attention 87**, merge 5 |
+| | 1 | 1024 | 563 | 419 | 1.34 | |
+| | 4 | 128 / 1024 | 1028 / 1212 | 459 / 525 | 2.2 / 2.3 | |
+| | 8 | 128 / 1024 | 1085 / 1391 | 846 / 959 | 1.3 / 1.5 | |
+
+Three things the table says. (1) **The attention core at T = 1 over a short context was the largest single loss**:
+65–87 µs per layer where MLX's SDPA takes 6–8. The core's blocks are (kv head, 64-key chunk, row group): at T = 1
+and 128 keys that is 16–24 blocks over 240 SIMD-groups, each walking its 64 keys alone through two dependent passes.
+(2) Our GEMVs on the 0.6B's K = 1024 slabs ran at 160–200 GB/s against ~270 for MLX's qmm in its step (its layer
+slope less its attention and the small kernels): one payload word per lane, so the per-item fixed costs — the
+activation's conversion, the scale words, the norm's partial-sum fold, the epilogue — are not amortized. (3) The
+tensor-ops tile at TM = 8 on those slabs costs 2× its isolated timing in the program (35–45 µs against 9–17) and more
+than the T = 1 shader; the profile's `accelerator_min_t` rule sent every T > 1 there.
+
+**Changed** (all bit-exact per op or within the contract's 2 ulps; `tests/kernels` under shader validation) [M]:
+
+* **The attention's chunk is chosen at run time** (`pick_chunk`, gqa_common.metal): the smallest chunk down to 16 keys
+  whose T = 1 blocks still fit one wave of the crew — 16-key chunks at 128 keys (64 blocks instead of 16), 64-key
+  chunks where they already exceed a wave (1024 keys: halving there measured slower — a second wave plus merge work).
+  The core and the merge derive the same value from the context, the crew and the workspace's chunk count, which the
+  layer now allots for it (`gqa_chunks_max`); the choice ignores T so a drafter's chain row and the target's verify
+  row of one position still agree to the bit. Attention 65 → 24 µs per 0.6B layer, 87 → 34 per 8B layer; the merge
+  folds more chunks (4.4 → 5.7). The chunked softmax rounds p̃ against each chunk's maximum, so the attention tests'
+  bound is 2 BF16 ulps of the output scale now (it was 1: the deviation is the same size, more keys carry it).
+* **Denser crews as GEMV geometry candidates** (`crew3`, `crew4`: three or four threadgroups per core), autotuned:
+  a small slab's items are short latency chains and one threadgroup per core leaves the core under-occupied — the
+  tuner took `crew3` with RSPLIT 8 for the 0.6B's projections (o_proj 9.9 → 8.2 µs, down 14.6 → 12.8, qkv 21 → 17).
+* **The fused norm's partial fold** in `gemv_T` runs four independent accumulators per lane: a row-split producer
+  leaves up to 2048 partials per token (256 blocks × RSPLIT 8 on the 8B) and every SIMD-group of the consumer folded
+  them in one dependent chain — the source of the 8B's plain step growing 20.6 → 21.0 ms when the split arrived (§10).
+* **The tuner sees the program's partial count** (`tune_gemv(stat_parts=…)`, keyed): it had timed every fused-norm
+  variant with 64 partials.
+* **Shader or tile per op by the tuner's timings**: where the shader at the range's top T is faster than the tile at
+  TM (the K = 1024 slabs at T ≤ 8), the T variants stay on the shader instead of the profile's per-format rule.
+
+**After** (the same protocol, both packs re-tuned) [M]:
+
+| model | T | ctx | before µs / layer | **after** | mlx-lm | after / mlx | our step → | mlx-lm step |
+|---|---|---|---|---|---|---|---|---|
+| 0.6B 4-bit | 1 | 128 | 140 | **89** | 59 | 1.50 | 4.38 → 2.96 ms | 2.08 ms |
+| 0.6B 4-bit | 1 | 1024 | 147 | **135** | 59 | 2.27 | 4.57 → 4.24 ms | 2.53 ms |
+| 0.6B 4-bit | 4 | 128 | 252 | **211** | 71 | 2.98 | 7.97 → 6.78 ms | 2.42 ms |
+| 0.6B 4-bit | 4 | 1024 | 346 | **346** | 86 | 4.01 | 10.60 → 10.59 ms | 3.06 ms |
+| 0.6B 4-bit | 8 | 128 | 272 | **261** | 115 | 2.27 | 8.54 → 8.18 ms | 3.96 ms |
+| 0.6B 4-bit | 8 | 1024 | 442 | **443** | 144 | 3.09 | 13.26 → 13.27 ms | 5.03 ms |
+| 8B NVFP4 | 1 | 128 | 549 | **477** | 404 | 1.18 | 21.08 → 18.40 ms | 15.66 ms |
+| 8B NVFP4 | 1 | 1024 | 563 | **540** | 421 | 1.28 | 21.57 → 20.72 ms | 16.34 ms |
+| 8B NVFP4 | 4 | 128 | 1029 | **1004** | 456 | 2.20 | 39.37 → 38.48 ms | 17.18 ms |
+| 8B NVFP4 | 4 | 1024 | 1212 | **1205** | 524 | 2.30 | 45.98 → 45.86 ms | 19.45 ms |
+| 8B NVFP4 | 8 | 128 | 1085 | **1075** | 862 | 1.25 | 41.57 → 40.99 ms | 33.30 ms |
+| 8B NVFP4 | 8 | 1024 | 1391 | **1402** | 968 | 1.45 | 52.58 → 52.70 ms | 36.60 ms |
+
+At T = 1 the 0.6B's layer is 89 µs against MLX's 59 (1.50×, from 2.37×) over 128 tokens of context and 135 over
+1024 (the 64-key chunks of a long context: 40 µs of attention against MLX's 15 — the long-context attention is M9's
+SIMD-group-matrix scoring); the 8B's is 1.2–1.3× at T = 1. The T > 1 rows barely moved: the tuner keeps the tile
+there because its isolated timing (9–17 µs per 0.6B GEMV) is half what the same dispatch takes in the program
+(35–45 µs) — a discrepancy the tile's own harness reproduces only with a streamed weight set; in the program the
+tile follows a shader kernel and reads a small x'. Until that is understood the small-K verify pass is a shader
+matter. **The layer gate is open.** In order of what it would return per 0.6B layer at T = 1: a small-context
+attention core for T = 1 (24 µs against MLX's 5.6: a lanes-over-keys kernel with no chunk merge), the int4 pack's
+scales as BF16 pairs (8 → 4 bytes per group: 12 → 10.3 MB per layer, the bytes MLX streams), the K = 1024 GEMVs'
+in-program efficiency (190 GB/s; MLX's qmm ~270 in its step), then the T > 1 regime.

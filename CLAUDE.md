@@ -78,7 +78,13 @@ decoding at 9.24 — 1.036×, ahead on math, behind on chat/text (decode-kernels
 inside the round (the same `Qwen3-0.6B-4bit` mlx-lm drafts with; token-identical to plain decode, mlx-lm's
 acceptance), with graph activation scopes and per-pass mixer modes; it exposed the small-model step: our 0.6B decodes
 at 4.1 ms per token where MLX takes 2.1 (row-split GEMV items and the attention's load-ahead brought it from 4.6),
-so the LM round costs more than mlx-lm's until the per-layer gap closes (decode-kernels.md §10) — the next task.
+so the LM round costs more than mlx-lm's until the per-layer gap closes (decode-kernels.md §10). That comparison
+is #113: `tools/bench/layer_vs_mlx.py` measures a decoder layer's cost on both engines as the slope of the step over
+the layer count (decode-kernels.md §11) — at T = 1 the 0.6B's layer was 140 µs against MLX's 59 and the 8B's 549
+against 400; the attention core at T = 1 over a short context was the largest loss (16–24 blocks of 64 keys over 240
+SIMD-groups: the chunk is chosen at run time now, 65 → 24 µs), then the GEMVs on K = 1024 slabs (denser crews as
+tuner candidates, the fused norm's fold unrolled, the tuner timing with the program's partial count, shader or tile
+per op by measured time); the layer gate (every layer strictly faster than MLX's) is open.
 
 ## Read these, in this order
 
