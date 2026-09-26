@@ -74,8 +74,8 @@ class TableRequest:
 
 
 class Packer:
-    def __init__(self, checkpoint: str | Path, out_dir: str | Path) -> None:
-        self.ckpt = SafetensorsDir(checkpoint)
+    def __init__(self, checkpoint: str | Path, out_dir: str | Path, rename=None, adapt=None) -> None:
+        self.ckpt = SafetensorsDir(checkpoint, rename=rename, adapt=adapt)
         self.out = Path(out_dir)
         self.out.mkdir(parents=True, exist_ok=True)
         self.dtypes = {n: self.ckpt.info(n).dtype for n in self.ckpt.names()}

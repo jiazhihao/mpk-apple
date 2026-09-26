@@ -16,20 +16,50 @@ runtime, Python front-end and compiler, generated MSL kernels.
 Status (2026-09-24): design, plan, surveys and hardware characterization (M3 Pro and M5 Pro) exist, and the engine
 is being built as stacked PRs (roadmap issue #1): skeleton + registries, format plugins, `pack_weights`, the GEMV
 harness and M1 study, runtime core v1 (ICB + host pump + token ring + StepState), and the layer library with the
-first model package (`monolith/models/qwen3_5`, oracle-verified against the HF golden of the 0.8B). Next: the M3
-kernels and the compiler passes. Speculative decoding targets a **DSpark** drafter, not the checkpoint's MTP head.
+first model package (`monolith/models/qwen3_5`), the M3 kernels, and compiler v0: the 0.8B decodes end to end on the
+GPU from one replayed encode and reproduces its HF goldens, prompts of any length fed in chunks of `t_max`
+(`python -m monolith.generate`); since then: the fuse pass, chunked prefill through the dynamic-T program,
+GPU sampling, per-op tracing and autotuning, model 2 (`monolith/models/qwen3`, Qwen3-8B NVFP4, zero engine edits),
+the DSpark drafter as a `Drafter` module verified against DeepSpec's reference, the round's kernels + IR lowering
+(#24), and the round inside the target's step program (#38: `python -m monolith.generate --drafter …`; greedy
+speculative decode is token-identical to plain decode on the 8B and on the hybrid 0.8B, the host idle). Speed on
+this chip: parity with plain decode at best on the shader GEMV path (decode-kernels.md §5) — the M6 gate waits for
+the T ≥ 2 GEMM path (M9). Sampling with a drafter is exact speculative sampling (#39); the prompt-set measurement (#40, dspark.md §3) puts
+the cost-aware rule at 36 ms per token vs 27 plain — a no-go on the shader path, a projected go on the T ≥ 2 GEMM
+path (M9). The barrier pass and the sibling overlap (#29, #35: the gate GEMV beside the mixer core) take the 0.8B
+from 6.85 to 6.58 ms per token; the ICB barrier flag orders the flagged command behind all before it (measured;
+the field is `barrier_before`). #34 closed with a measured no: the attention v2 (kept as a per-profile option)
+is not the long-context win, SIMD-group-matrix scoring is (M9); fast math buys 1–2 % and breaks bit-identity,
+so safe stays. Format 2 (#47) is built: affine INT4 groups (`formats/int4_affine`, MLX / AWQ / GPTQ) as a plugin —
+the MLX 4-bit 0.8B decodes token-identical to its oracle; the port needed a per-group bias hook, the quantized-embedding
+gather, ragged lane stripes and a package-declared value adapter (mlx_lm folds `1 +` into the zero-centered norms;
+porting-log.md); the porting guide (#48, `docs/porting.md`) closes M8. M9's accelerator GEMM is built (#50,
+`kernels/gemm_tile.metal`): the cooperative right-input fill from the pack words streams NVFP4 at 177 GB/s and FP8
+at 253 for 8 or 16 tokens — 0.9–1.1× a T = 1 shader pass, 34–49 % above `p14`'s staged tile; at 32 tokens it is
+below `p14` (decode-kernels.md §6). #51 wires it into the step program: with the profile's `accelerator: on`
+every T > 1 GEMV runs on the tile as the predicated variant above T = 1, and the DSpark round on the 8B goes from
+35.8 to 19.9 ms per token on the prompt set (1.80× the shader path, 1.36× plain: math 1.89×, code 1.60×, text
+1.24×, chat 0.99×; the step 94 % bus-bound), tokens equal to the golden (dspark.md §3) — the M6 gate is met on
+math and code on this chip. Speculative decoding targets a **DSpark** drafter, not the MTP head.
+An intermittent model-tier failure (wrong tokens / a hang / an empty generation, never reproducible alone) was three
+out-of-bounds stores found with shader validation (#92): the GDN commit pass wrote its read-out through a 16-byte
+placeholder, the tile's permute wrote a slab's K into a scratch sized by a narrower input, a drafter appended past
+its context cache — fixed, and a `Program` now carries a `context_capacity` the serial ops enforce.
 
 ## Read these, in this order
 
 1. `docs/design/design.md` — the design. §0 is the decision table (D1–D14); §7 answers "warp specialization?" (no) and
    "static megakernel?" (static yes, one kernel no).
 2. `docs/research/apple-gpu-probes.md` — what was measured on real hardware and what each number implies. §1 is the
-   cross-chip table (M3 Pro and M5 Pro filled, M4 empty); §3 is what the M5 Pro confirmed and changed; **§4 is the
-   checklist for continuing on an M4** (hypotheses H1–H10 and the outcomes that would change the design).
+   cross-chip table (M3 Pro and M5 Pro filled); §3 is what the M5 Pro confirmed and changed; §4 is the checklist for
+   a chip not yet measured (hypotheses H1–H10 and the outcomes that would change the design; written for an M4, whose
+   measurement was dropped from the roadmap on 2026-09-25).
 3. `plans/implementation-plan.md` — milestones M0–M9 with exit gates and go/no-go points.
 4. `docs/research/apple-inference-systems.md` — how MLX, llama.cpp and others work; what to reuse; headroom estimates.
 5. `docs/research/dspark.md` — the speculative-decoding method we target, the public drafters for our models, their
    cost on our hardware.
+6. `docs/porting.md` — adding a model, a format, an op, a drafter or a chip: the contracts as they are in the tree,
+   the CI checks, the golden workflow; `docs/research/porting-log.md` is the evidence it was derived from.
 
 ## The design in six lines
 
@@ -65,6 +95,11 @@ kernels and the compiler passes. Speculative decoding targets a **DSpark** draft
   where ranges do not overlap, use paired alternating A/B runs and min-of-N.
 * **Every GPU loop must be bounded.** A running dispatch cannot be cancelled and cannot be relied on to be preempted
   (never on Apple9, only sometimes on Apple10); an unbounded spin freezes the display and can trip the watchdog. Keep any single dispatch under ~1.5 s in probes, far less in the engine.
+* **Every kernel store must be inside its binding, and shader validation is the test for it.** Buffers are separate
+  Metal allocations, so a store past one lands in a neighbour — StepState, a params record, an activation — and
+  shows up later as a wrong token, a hang or an empty generation that never reproduces alone. After a kernel or
+  emitter change run the GPU tiers under `MTL_SHADER_VALIDATION=1 MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1`
+  (porting.md §0); a `Program` carries its `context_capacity` and the serial ops stop at it (`error = 2`).
 * Correctness may depend only on documented Metal semantics (dispatch ordering, ICB barriers, the MSL memory model).
   Threadgroup→core mapping, in-flight limits and sharing behaviour are per-chip *profile values*, measured by the probes.
 * Only bare-metal Macs give meaningful numbers; virtualized macOS (hosted CI runners) exposes a paravirtual GPU.
@@ -80,18 +115,27 @@ kernels and the compiler passes. Speculative decoding targets a **DSpark** draft
 including the MPP tensor ops of `p14`) and saves `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`.
 `./probes/remote_run.sh user@host` does the same over SSH. Geometry is derived from the GPU core count (`GPU_CORES=<n>`
 overrides). Commit every results file. Measured so far: an M3 Pro (2026-09-19, 13 probes) and an M5 Pro (2026-09-22,
-all 16, repeats of `p6`/`p6b`/`p12`); hand-derived profiles are in `profiles/`. `p12`–`p14` have not yet run on the
-M3 Pro. `./probes/build/p13_decode_gemv check` (same for `p14`) compiles every kernel variant without dispatching.
+all 16, repeats of `p6`/`p6b`/`p12`); the M5 Pro's profile is the writer's (`tools/profile_writer.py`), the M3 Pro's
+hand-derived. `p12`–`p14` never ran on the M3 Pro (dropped with the machine, 2026-09-25). `./probes/build/p13_decode_gemv
+check` (same for `p14`) compiles every kernel variant without dispatching.
 
 ## Next steps
 
-0. **Keep building** — the roadmap issues in order (plan §6 PRs 1–5 are in): the M3 kernels (#19–#25) against the
-   layer oracles in `monolith/nn/`, then the compiler passes, CLI and end-to-end gates (#29–#32). Fetch the
-   Apache-2.0 DSpark drafters and run the llama.cpp `draft-dspark` baseline on the M3 Pro (plan M0).
-1. On the M3 Pro: run `p12`–`p14` (they postdate its run) to learn whether the lane-order, parity and T-cost results
-   are Apple10-only. On an M4: run the suite, commit the results, fill the M4 column in the hardware report §1, walk
-   H1–H10 in §4, and update the design where a hypothesis fails (D4, D5, D6, D8, D14 are the chip-sensitive decisions).
-2. Plan M0 remainder: MLX / llama.cpp baselines for the target model (needs the 36 GB M3 Pro — the 24 GB M5 Pro cannot
-   host it), exact NVFP4/FP8 → BF16 dequantizer, HF goldens, the on-screen frame-pacing check.
+0. **Keep building** — what is left on this machine: the staged multi-SIMD-group tile for T ≥ 32 and the K-split
+   for the down projection (decode-kernels.md §6), the attention core's SIMD-group-matrix scoring for the
+   long-context rows. The autotuner at install time is built (#49, `tools/profile_writer.py`: it measures the
+   `engine` block from the kernel harnesses and merges it into `profiles/<chip>-<cores>c.json`; the other chips'
+   profiles wait for the machines). Intra-op stealing (#44) is built, measured and off by
+   default (decode-kernels.md §7). The M3 Pro and M4 tasks (#2, #3, #5, #8, #12's M3 Pro rows, #49's M4 chips) were
+   dropped from the roadmap on 2026-09-25 — this M5 Pro is the only machine. Still open and needing a machine this
+   one is not: the 27B items (#31's 27B rows, #36, #40's 27B rows, #46 — the smallest MoE checkpoint in a format we
+   read, `nvidia/Qwen3-30B-A3B-NVFP4`, is ~18.5 GB resident against this machine's ~18–19 GB GPU working set), #42 (a
+   GPU box), #43 (Max-class parts), #49's other M5 chips and #52 (macOS 27). Doable here: #7, the on-screen
+   frame-pacing check.
+1. A new chip, if one arrives: run the suite, commit the results, fill its column in the hardware report §1, walk
+   H1–H10 in §4, run `tools/profile_writer.py`, and update the design where a hypothesis fails (D4, D5, D6, D8, D14
+   are the chip-sensitive decisions).
+2. Plan M0 remainder on this machine: the on-screen frame-pacing check (#7). The 27B's baselines and goldens wait for
+   a machine that hosts it.
 3. Plan M1 (go/no-go): the NVFP4 decode is the problem (ALU-bound at 59 % of nominal on the M5 Pro; FP8 is at 90 %);
    then the comparison against MLX `qmv` on the same machine.

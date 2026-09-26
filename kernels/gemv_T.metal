@@ -10,7 +10,11 @@
 //
 // Macros: K (columns), R (rows per block), T (tokens), RG (rows per activation reuse group, divides R),
 //         LANE_ORDER (0 contiguous, 1 interleaved16), UNIT_WORDS (16-byte words per lane-row unit),
-//         PAYLOAD_WORDS (weight words per lane-row), SCALE_WORDS (uint4 words holding this row's scale bytes, 0 = none),
+//         PAYLOAD_WORDS (weight words per lane-row; the last one is partial — K_TAIL columns — when K/32 is not
+//         whole words, a ragged stripe), SCALE_W0 / SCALE_UOFF / SCALE_WORDS (the row's scale bytes start SCALE_UOFF
+//         uints into word SCALE_W0, the tail of a partial payload word, and span SCALE_WORDS words; 0 = none),
+//         GROUP_SEG (columns per in-word scale segment: gcd(WPW, K/32, SCALE_GROUP), so a segment never straddles a
+//         scale group even when a lane's stripe starts inside one — LANE_OFF, the stripe's offset in its first group),
 //         OUT_BF16 (1: write bf16 outputs, 0: float), X_PRECONVERT (1: convert the activation chunk to float once
 //         per word and reuse it across the row group; 0: keep it as bf16 words and convert per row — for large T*WPW)
 //
@@ -28,6 +32,9 @@
 #ifndef NORM
 #define NORM 0
 #endif
+#ifndef EPILOGUE_ROUND
+#define EPILOGUE_ROUND 0             // with EPILOGUE=1: round the product to BF16 before the residual add (two roundings, the
+#endif                               // reference's separate linear + add; the fused layers keep the single rounding)
 #ifndef EPILOGUE
 #define EPILOGUE 0
 #endif
@@ -49,18 +56,47 @@
 #ifndef T_STATIC
 #define T_STATIC 0
 #endif
+#ifndef STEP_STATE
+#define STEP_STATE 0                 // 1: T comes from the bound StepState (buffer 15) and the kernel returns at once after `done`
+#endif
+#ifndef T_SRC
+#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step (the target's T), 1 = n_inject (the drafter's context rows), 2 = the T macro (a draft block)
+#endif
+#ifndef T_LO
+#define T_LO 0                       // with T_HI: a predicated per-T variant (design §5.7) — it runs only when T_LO < T_act <= T_HI and
+#endif                               // returns at once otherwise, so a step's ALU work follows its actual T, not the program's T_max
+#ifndef SCALE_BIAS
+#define SCALE_BIAS 0                 // a format with a per-group bias (affine INT4: w = scale·code + bias): acc += bias · Σ x over the group
+#endif
 #define KL (K / 32u)                                   // columns per lane
 #define WPW WEIGHTS_PER_WORD
 #define XW (WPW / 8u)                                  // uint4 words of bf16 activations per weight word
+#define K_TAIL (KL % WPW)                              // valid columns of the last payload word (0: whole words)
+#ifndef SCALE_W0
+#define SCALE_W0 PAYLOAD_WORDS                         // the scale bytes start on the word after the payload …
+#define SCALE_UOFF 0u                                  // … at its first uint (a ragged stripe puts them in the tail word)
+#endif
 #if SCALE_GROUP > 0
-#define GPW ((WPW >= SCALE_GROUP) ? (WPW / SCALE_GROUP) : 1u)     // scale groups (or fraction thereof) per word
-#define WPG ((WPW >= SCALE_GROUP) ? SCALE_GROUP : WPW)            // weights per in-word group
+#ifndef GROUP_SEG
+#define GROUP_SEG ((WPW >= SCALE_GROUP) ? SCALE_GROUP : WPW)
+#endif
+#define WPG GROUP_SEG                                  // weights per in-word scale segment (one group's run of columns)
+#define GPW (WPW / GROUP_SEG)                          // segments per word
+#if (KL % SCALE_GROUP) == 0
+#define LANE_OFF 0u                                    // every lane stripe starts on a group boundary
+#else
+#define LANE_OFF ((lane * KL) % SCALE_GROUP)           // the stripe's start inside its first group (per lane)
+#endif
+#define GROUP_OF(j, g) ((LANE_OFF + (j) * WPW + (g) * WPG) / SCALE_GROUP)   // a segment's group, lane-local index
 #else
 #define GPW 1u
 #define WPG WPW
 #endif
 
-struct GemvParams { uint n_rows; uint n_blocks; uint n_sg; uint t_active; float out_scale; float eps; uint stat_parts; uint pad; };
+// block0: the first slab block of the dispatch — a row range of one slab as its own dispatch (a mixer's gate
+// projection emitted as an un-barriered sibling of the mixer core, design §5.12): rows [block0·R, block0·R + n_rows)
+// of the slab, outputs (and STAT_OUT partials) relative to the range.
+struct GemvParams { uint n_rows; uint n_blocks; uint n_sg; uint t_active; float out_scale; float eps; uint stat_parts; uint block0; };
 
 static inline uint unit_word(uint lane, uint r, uint j) {
 #if LANE_ORDER == 0
@@ -97,22 +133,33 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if STAT_OUT
                    device float* stat_out [[buffer(8)]],
 #endif
+#if STEP_STATE
+                   device const StepState* st [[buffer(15)]],
+#endif
                    uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
-#if T_STATIC
+#if STEP_STATE
+  if (st->done) return;
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T : st->t_this_step);   // dynamic T (≤ the compiled T), design §5.7
+#ifdef T_HI
+  if (T_act > T_HI || T_act <= T_LO) return;
+#endif
+#elif T_STATIC
   const uint T_act = T;                        // compile-time T (plain decode programs, benches)
 #else
-  const uint T_act = p.t_active;               // <= T; tokens beyond it are skipped (dynamic T reads StepState later)
+  const uint T_act = p.t_active;               // <= T; tokens beyond it are skipped
 #endif
 #if NORM
   float rn[T];                                 // the per-token RMSNorm scale, from the statistic's partial sums
   for (uint t = 0; t < T; t++) {
     float ssq = 0.0f;
-    if (t < T_act) for (uint i = 0; i < p.stat_parts; i++) ssq += stat[t * p.stat_parts + i];
+    if (t < T_act) for (uint i = lane; i < p.stat_parts; i += 32u) ssq += stat[t * p.stat_parts + i];
+    ssq = simd_sum(ssq);                       // lane-parallel: a serial loop pays a load latency per partial
     rn[t] = rsqrt(ssq / float(K) + p.eps);
   }
 #endif
-  for (uint b = sg; b < p.n_blocks; b += p.n_sg) {
+  for (uint bb = sg; bb < p.n_blocks; bb += p.n_sg) {
+    const uint b = bb + p.block0;                                    // the slab block; bb the range-relative one
     device const uint4* wb = w + (ulong)b * (R * 32u * UNIT_WORDS);
 #if STAT_OUT
     float ssq_out[T];
@@ -127,23 +174,31 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if SCALE_GROUP > 0
       uint scw[RG][SCALE_WORDS * 4];
       for (uint i = 0; i < RG; i++) for (uint s = 0; s < SCALE_WORDS; s++) {
-        uint4 q = wb[unit_word(lane, r0 + i, PAYLOAD_WORDS + s)];
+        uint4 q = wb[unit_word(lane, r0 + i, SCALE_W0 + s)];
         scw[i][4 * s] = q.x; scw[i][4 * s + 1] = q.y; scw[i][4 * s + 2] = q.z; scw[i][4 * s + 3] = q.w;
       }
 #endif
       for (uint j = 0; j < PAYLOAD_WORDS; j++) {
         const uint col = lane * KL + j * WPW;
+#if K_TAIL
+        const uint nvalid = (j + 1u == PAYLOAD_WORDS) ? K_TAIL : WPW;   // a ragged stripe: the last word is partial
+#else
+        const uint nvalid = WPW;
+#endif
 #if X_PRECONVERT
         // convert the activation chunk once per word and reuse it across the RG rows (T*WPW floats of registers)
         float xf[T][WPW];
 #if NORM
         float nwv[WPW];
-        for (uint e = 0; e < WPW; e += 4) { float4 q = *(device const float4*)(norm_w + col + e); nwv[e] = q.x; nwv[e + 1] = q.y; nwv[e + 2] = q.z; nwv[e + 3] = q.w; }
+        for (uint e = 0; e < WPW; e += 4) {
+          float4 q = (e < nvalid) ? *(device const float4*)(norm_w + col + e) : float4(0.0f);
+          nwv[e] = q.x; nwv[e + 1] = q.y; nwv[e + 2] = q.z; nwv[e + 3] = q.w;
+        }
 #endif
         for (uint t = 0; t < T; t++) {
           if (t < T_act) {
             device const uint4* xp = (device const uint4*)(x + t * K + col);
-            for (uint v = 0; v < XW; v++) { uint4 q = xp[v];
+            for (uint v = 0; v < XW; v++) { uint4 q = (8u * v < nvalid) ? xp[v] : uint4(0u);
               xf[t][8 * v] = bf16lo(q.x); xf[t][8 * v + 1] = bf16hi(q.x); xf[t][8 * v + 2] = bf16lo(q.y); xf[t][8 * v + 3] = bf16hi(q.y);
               xf[t][8 * v + 4] = bf16lo(q.z); xf[t][8 * v + 5] = bf16hi(q.z); xf[t][8 * v + 6] = bf16lo(q.w); xf[t][8 * v + 7] = bf16hi(q.w); }
 #if NORM
@@ -151,14 +206,19 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #endif
           } else { for (uint e = 0; e < WPW; e++) xf[t][e] = 0.0f; }
         }
+#if SCALE_BIAS
+        float xs[T][GPW];                                       // Σ x over each scale group of the word, for the bias term
+        for (uint t = 0; t < T; t++) for (uint g = 0; g < GPW; g++) { float s = 0.0f; for (uint e = 0; e < WPG; e++) s += xf[t][g * WPG + e]; xs[t][g] = s; }
+#endif
 #else
         uint4 xq[T][XW];
         for (uint t = 0; t < T; t++) {
-          if (t < T_act) { device const uint4* xp = (device const uint4*)(x + t * K + col); for (uint v = 0; v < XW; v++) xq[t][v] = xp[v]; }
+          if (t < T_act) { device const uint4* xp = (device const uint4*)(x + t * K + col); for (uint v = 0; v < XW; v++) xq[t][v] = (8u * v < nvalid) ? xp[v] : uint4(0u); }
           else { for (uint v = 0; v < XW; v++) xq[t][v] = uint4(0); }
         }
 #if NORM
         for (uint v = 0; v < XW; v++) {
+          if (8u * v >= nvalid) continue;                             // the padded columns of a partial word stay zero
           float4 n0 = *(device const float4*)(norm_w + col + 8 * v), n1 = *(device const float4*)(norm_w + col + 8 * v + 4);
           for (uint t = 0; t < T; t++) {
             if (t >= T_act) continue;
@@ -169,6 +229,14 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
             q.w = pack_bf16x2(bf16lo(q.w) * rn[t] * n1.z, bf16hi(q.w) * rn[t] * n1.w);
             xq[t][v] = q;
           }
+        }
+#endif
+#if SCALE_BIAS
+        float xs[T][GPW];
+        for (uint t = 0; t < T; t++) for (uint g = 0; g < GPW; g++) {
+          float s = 0.0f;
+          for (uint e = 0; e < WPG; e++) { const uint ee = g * WPG + e; const uint word = xq[t][ee >> 3][(ee >> 1) & 3]; s += (ee & 1u) ? bf16hi(word) : bf16lo(word); }
+          xs[t][g] = s;
         }
 #endif
 #endif
@@ -193,8 +261,11 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
                 part = fma(wv[ee], xv, part);
               }
 #if SCALE_GROUP > 0
-              const float s = decode_scale(scw[i], (j * WPW + g * WPG) / SCALE_GROUP);
+              const float s = decode_scale(scw[i] + SCALE_UOFF, GROUP_OF(j, g));
               acc[i][t] = fma(part, s, acc[i][t]);
+#if SCALE_BIAS
+              acc[i][t] = fma(decode_bias(scw[i] + SCALE_UOFF, GROUP_OF(j, g)), xs[t][g], acc[i][t]);
+#endif
 #else
               acc[i][t] += part;
 #endif
@@ -204,17 +275,21 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
       }
       for (uint i = 0; i < RG; i++) {
         const uint r = r0 + i;
-        const uint row = b * R + r;
-        const float rs = (row < p.n_rows) ? row_scale[row] * p.out_scale : 0.0f;
+        const uint row = b * R + r;                                  // the slab row (weights, row scales)
+        const uint rrow = bb * R + r;                                // the range-relative row (outputs)
+        const float rs = (rrow < p.n_rows) ? row_scale[row] * p.out_scale : 0.0f;
         for (uint t = 0; t < T; t++) {
           float v = simd_sum(acc[i][t]) * rs;
 #if EPILOGUE == 2
           if (r < CHUNK) { gate_v[r][t] = v; continue; }
-          const uint orow = b * CHUNK + (r - CHUNK), n_out = p.n_rows / 2u;
+          const uint orow = bb * CHUNK + (r - CHUNK), n_out = p.n_rows / 2u;
           v = silu_f(gate_v[r - CHUNK][t]) * v;
 #else
-          const uint orow = row, n_out = p.n_rows;
+          const uint orow = rrow, n_out = p.n_rows;
 #if EPILOGUE == 1
+#if EPILOGUE_ROUND
+          v = round_bf16(v);
+#endif
           if (orow < n_out && t < T_act) v += as_type<float>(uint(residual[t * n_out + orow]) << 16);
 #endif
 #endif
@@ -235,7 +310,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
       }
     }
 #if STAT_OUT
-    if (lane == 0) for (uint t = 0; t < T; t++) if (t < T_act) stat_out[t * p.n_blocks + b] = ssq_out[t];
+    if (lane == 0) for (uint t = 0; t < T; t++) if (t < T_act) stat_out[t * p.n_blocks + bb] = ssq_out[t];
 #endif
   }
 }

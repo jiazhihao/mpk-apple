@@ -8,9 +8,10 @@ for speculative decoding (D10, §5.8, [research note](../docs/research/dspark.md
 [`docs/research/apple-inference-systems.md`](../docs/research/apple-inference-systems.md).
 
 First target: `nvidia/Qwen3.8-27B-NVFP4`, **batch-1 decode latency**, M3/M4/M5 families, macOS 26+.
-Bring-up machines: an M3 Pro, 18-core GPU, 36 GB (21 GB of text weights + state fit in its ~28–30 GB working set; the
-only machine on hand that hosts the model) and an M5 Pro, 20-core GPU, **24 GB** (GPU characterization and kernel work
-only: its 19 GB working-set limit cannot host the 27B).
+Bring-up machine: an M5 Pro, 20-core GPU, **24 GB** (GPU characterization, kernels, and models up to ~18 GB resident:
+its 19 GB working-set limit cannot host the 27B). The M3 Pro (18-core GPU, 36 GB, the machine that hosted the 27B)
+and the M4-family measurements were dropped from the roadmap on 2026-09-25; the 27B gates wait for a machine that
+hosts it.
 
 ## 0. Scope
 
@@ -53,31 +54,21 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       value (D8); one threadgroup per core is a default with an autotuned knob (D4); in-dispatch sharing exists but is
       unreliable and command-buffer blocking is the common case (D6); the bus saturates with 6 of 20 cores and the
       ALU-bound sibling must be encoded first (D14); the accelerator path is real from T ≈ 3–8 (§5.6, §5.8).
-* [ ] Run `p12`–`p14` on the M3 Pro (they postdate its run): are "lane order decides bandwidth", "crew geometry =
-      parity" and the T-cost curves Apple10-only?
-* [ ] Baselines on the M3 Pro: `mlx-lm` (NVFP4 mode and affine 4-bit) and `llama.cpp` (Q4_K_M) on Qwen3.8-27B and on a
-      small same-architecture model: tok/s, effective GB/s, CPU utilization, dispatches and command buffers per token.
+* **Dropped 2026-09-25 (no M3 Pro or M4 machine on the roadmap):** `p12`–`p14` on the M3 Pro (#2 — whether the
+      lane-order, parity and T-cost results are Apple10-only stays open), the plain and speculative baselines on the
+      M3 Pro (#3, #5 — the 27B's baselines wait for a machine that hosts it), the M4 measurement (#8 — the hardware
+      report §4 keeps the checklist for any chip not yet measured).
 * [ ] **Drafters.** Fetch the Apache-2.0 DSpark drafters for the target — `DimInfer/Qwen3.8-27B-Dspark-v1` (safetensors
       + GGUF Q8/BF16, trained against the Q4_K_M target) and `gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4` (1.3 GB,
       MLP/o_proj in NVFP4, trained on-policy against an NVFP4 target) — and `Dogacel/Qwen3-8B-DSpark` for model 2.
       Record configs (layers, block size, tapped target layers, Markov rank, dtypes) and licenses in
       `docs/research/dspark.md`; note that `RadixArk/Qwen3.8-27B-DSpark` carries an "other" license and is not used.
-* [ ] **Speculative baseline on the M3 Pro:** llama.cpp `--spec-type draft-dspark` (PR #25173) with the Q8 drafter and
-      the Q4_K_M target: accepted length and tok/s per workload (math, code, chat) at `--spec-draft-n-max` 2–7; DFlash's
-      MLX backend (`dflash generate mlx`) as a second reference. These are the acceptance figures the verify-length rule
-      must beat and the number the M6 gate is measured against.
 * [ ] Reference tooling: exact NVFP4/FP8 → BF16 dequantizer; HF golden scripts (adapt
       `mirage/tests/runtime_python/models/qwen38/hf_golden.py`): full goldens for the small model; per-layer goldens
       for the 27B produced layer-streamed (54 GB of BF16 does not fit in 36 GB) or on a larger machine.
-* [ ] On-screen frame-pacing check: compositor frame times while command buffers of 8 / 16 / 33 / 66 ms run back to
-      back → the default `max_cb_ms`. Moved up: the M5 Pro blocks foreign work for whole command buffers more often
-      than the M3 Pro, so this measurement precedes the host pump (M2).
-* [ ] **Measure M4.** `./probes/remote_run.sh user@host` (or `./probes/run_all.sh` on the machine itself, ~5 min,
-      Command Line Tools only) on a bare-metal M4-family Mac; commit the results files and `profiles/*.json`. M4 / M4 Pro
-      are rentable as AWS EC2 Mac dedicated hosts (`mac-m4.metal` $1.23/h, `mac-m4pro.metal` $1.97/h, 24-hour minimum
-      ≈ $30 / $47). Virtualized macOS runners are useless here (paravirtual GPU). The hypotheses to test and the
-      outcomes that would change the design are in the hardware report §4 (H1–H10, revised after the M5 Pro): chiefly
-      `p12` (which lane order streams, cores to saturate, encode order), `p6`/`p6b` ×4 (sharing), `p10`, `p13`/`p14`.
+* [ ] On-screen frame-pacing check on the M5 Pro: compositor frame times while command buffers of 8 / 16 / 33 / 66 ms
+      run back to back → confirms the default `max_cb_ms` (16 ms from `p6`/`p6b`; the M5 Pro blocks foreign work for
+      whole command buffers in the usual case).
 
 Exit: baseline table (plain and speculative), goldens, drafters on disk with recorded configs, ≥ 1 profile (two
 provisional profiles exist: `profiles/`).
@@ -108,7 +99,7 @@ either way. So the geometry claim is settled at "no worse" and M1's real problem
 
 Exit gate: NVFP4 T = 1 ≥ **1.10×** MLX's kernel throughput on the same machine (M3 Pro, and the M5 Pro where MLX's
 dense 4-bit `qmv` is reported at 266 GB/s), NVFP4 ≥ 80 % of nominal on the M5 Pro, FP8 shapes ≥ **100 GB/s** on the
-M3 Pro; outputs within 2 ULP (BF16) of the oracle.
+M3 Pro; outputs within 2 ULP (BF16) of the oracle. (The M3 Pro rows were dropped with the machine on 2026-09-25.)
 
 **Go/no-go #1, read on the M5 Pro 2026-09-24** (`docs/research/gemv-kernel-study.md` §3c, issues #9–#12):
 FP8 231–291 GB/s (75–95 %) — met. NVFP4 T = 1 with the integer-table decode: 231–274 GB/s (75–89 %) — the 80 %
@@ -185,7 +176,57 @@ against the oracles (≤ 2 ULP; `tests/kernels/`). Measured (gemv-kernel-study.m
 ALU-bound GEMV costs 5–19 %, a `norm_apply` dispatch 0–3 %, so the default step program applies the norm as its
 own dispatch and hoists only the statistic — the row "the norm never costs a separate dispatch" holds for the
 reduction, not for the elementwise scaling. Remaining in M3: `gqa_decode` (#21), `gdn_mixer` (#22), sampling
-beyond argmax (#23), the drafter ops (#24) and the composite tests on the GPU path (#25).
+beyond argmax (#23), the drafter ops (#24) and the composite tests on the GPU path (#25). *(#24 done 2026-09-24, see
+the M6 status.)*
+
+*Status (2026-09-24, #21).* `gqa_decode` + `gqa_merge` v1 (decode-kernels.md §1): (kv head, chunk, row group)
+blocks, q/k norm + permuted-layout RoPE + KV append in the prologue, chunked online softmax with the reference's
+roundings, deterministic merge with the sigmoid gate. Bit-identical runs; caches ≤ 1 ULP and output within 2·10⁻³ of
+the kernel-contract model, 1–2 ULP from the HF-faithful layer oracle. Cost on the M5 Pro for 32/4 heads, D = 256:
+82 µs/layer at 1 K, 245 µs at 4 K, 1.75 ms at 32 K (T = 1; 76 GB/s of KV — compute-bound); T = 4 is 2.5–3× T = 1
+because row groups re-stream K/V. Long context and T > 1 need the v2 structure sketched there (M5, #34 / before M6).
+
+*Status (2026-09-24, #22).* `gdn_mixer` + `gdn_norm` (decode-kernels.md §2): (value head, state-column slice group)
+blocks with the slice's FP32 state in registers, the reference's order and roundings; leaf gates green (conv state
+exact, recurrent state ≤ 8 FP32 ULP, output ≤ 2 BF16 ULP per element) for T = 1/4/8, Hv = Hk and 3·Hk, mixed-format
+a|b, continuation. Cost on the M5 Pro for the 27B's 16/48 heads: 26 µs per layer at T = 1 (state traffic at
+244 GB/s — the floor, ~1.2 ms per token over 48 layers), ~2.2× at T = 4. **Every op kind the model
+lowers to now has a kernel**; the coverage guard passes on both families.
+
+*Status (2026-09-24, compiler v0 and the first end-to-end decode, #29 / #31 (a) / #25).* `monolith.compiler.compile_program`
+turns the lowered graph into a runtime `Program`: one buffer per value, a barrier on every op (until the barrier pass, below), the norm as
+`rmsnorm_stat` → `norm_apply` → plain GEMV, kernels specialized to a static `T`, the pack mapped from the file in
+page-aligned windows, the `advance` op closing the step (ring, pending token, position, EOS). `monolith.generate`
+runs a prefill program (T = P ≤ 8) and a decode program (T = 1) over shared buffers, replayed from one encode.
+**Exit (a) holds on the GPU** for the 0.8B (`tests/models/qwen3_5/test_gpu_golden.py`): the 48 greedy tokens equal
+the HF golden from the ring, every layer's prefill residual stream is at cos ≥ 0.9999 of the oracle (the composite
+bars of #25 on the real weights), host busy 0.1 %. Decode: 7.0 ms per token (143 tok/s) on the M5 Pro for the
+1.4 GB BF16 model against `mlx-lm` 0.31.3's 161 tok/s — 0.88× before any fusion pass, with ~250 dispatches per
+token of which 96 are the standalone norm statistic/scaling (M5's work: `STAT_OUT` hoisting, the sibling overlap,
+and MLX parity). Not yet: chunked prefill (prompts > `t_max`), dynamic T, the 27B on the M3 Pro.
+
+*Status (2026-09-24, the first pass).* `compiler/passes/fuse_norm.py` hoists every norm statistic fed by a
+residual-epilogue GEMV into that GEMV's `STAT_OUT` partials (47 of the 0.8B's 49 statistic dispatches; the
+embedding-fed one keeps its dispatch): 199 instead of 247 dispatches per decode step, 6.97 vs 7.05 ms per token
+(−1.2 %, paired alternating runs, tokens unchanged). Measured on the way: the `STAT_OUT` epilogue itself costs
+0–1 µs per GEMV at the 0.8B's and the 27B's shapes, and a *serial* sum of the partials in the consumer costs a load
+latency per partial (~2 µs for 64) — now lane-parallel with one `simd_sum`.
+
+*Status (2026-09-24, chunked prefill and dynamic T, #30 partial).* Every kernel can read `T` from
+`StepState.t_this_step` (`STEP_STATE=1`, the StepState bound at slot 15, an early return after `done`); the
+compiler emits a **dynamic-T program** (kernels at `t_max`) for prefill, and `Session.generate` feeds a prompt of
+any length in chunks of `t_max` tokens, the host writing each chunk's tokens, length and the new `prefill_left`
+counter (the advance emits a token only after the last chunk), then replays the static T = 1 decode program. The
+same machinery is what the DSpark round needs (T = 1 + L per step, design §5.7). Verified against a second HF golden
+with a 19-token prompt (3 chunks of 8, 8 and 3 tokens).
+
+*Status (2026-09-24, #23 sampling).* Stochastic sampling never leaves the GPU: four dispatches — a histogram of the
+BF16 logits' 65536 codes, a one-SIMD-group threshold select (top-k = the k-th largest value with ties kept, top-p =
+the value at which the descending cumulative softmax mass first reaches p, min-p = max + T·log p; exact for BF16
+logits, no sort), a Gumbel-max pass with a splitmix64 counter hash keyed by (seed, step, position, index), and the
+argmax final. A numpy reference reproduces the kernel's draws bit for bit; thresholds equal the HF warpers' masks on
+tie-free logits; 3,000 draws follow the warped softmax within 4σ; a run is reproducible per seed (`--temperature
+--top-k --top-p --min-p --seed` on the CLI). Greedy stays the two-dispatch argmax.
 
 ### M4 — Compiler and end-to-end decode · 4 ew
 
@@ -213,6 +254,18 @@ tree (`tools/pack_weights.py --model`, 97 slabs + 135 aux tensors + RoPE tables 
 **oracle path**: the model oracle reproduces the HF golden's 48 greedy tokens and every layer's hidden state at
 cos ≥ 0.9997 (`tests/models/qwen3_5/`); the GPU path needs the M3 kernels and the compiler passes (#29–#32).
 
+*Status (2026-09-24, #29).* The barrier pass (`compiler/barriers.py`) sets the ICB flag only where an op reads what
+the ops before it wrote (or writes what they touched), at buffer granularity, with the per-T variants of one GEMV
+joining as one unit and a one-op look-back so a sibling encoded before its core still overlaps it; `barriers="all"`
+keeps v0 for A/Bs. Measured first: the flag on an ICB command orders *that command* behind everything before it
+(the reader's flag is the one that matters), so the field is now `barrier_before` and the concurrent-encoder path
+emits its memory barrier before the dispatch. The predicated per-T variants landed with the round (#38); `program.json`
+and the coverage guard were there from M4's start. Dispatch count: 175 for the 0.8B (24 layers), ≈ 7.3 per layer —
+the design's ~330 for the 27B assumed the norm scaling fused into the GEMV (measured cheaper as its own dispatch,
+gemv-kernel-study.md §3d) and one dispatch per mixer (now core + gate GEMV + merge, measured worth 3.9 %), so the 27B
+extrapolates to ≈ 470 + the round's ~50. Not done: the liveness-based activation arena (one buffer per value costs
+memory only, which is not the constraint on the machines at hand).
+
 ### M5 — Performance pass · 3 ew · **go/no-go #2**
 
 Per-op GPU timestamps → a per-token budget (GB streamed, ms, % of bound) → close the gap: fusion completeness,
@@ -225,7 +278,48 @@ geometry; keep it per chip only where the A/B shows a gain (expected ~2–4 % on
 Exit gate: the plain-decode success metric. *If 1.10× is missed but parity holds:* proceed to M6 — speculation does
 not depend on it — and record why.
 
+
+*Status (2026-09-24, #33).* Per-op GPU timestamps exist: `Queue.profile` (one compute encoder per dispatch with
+timestamp counter samples at the stage boundaries — the granularity Apple GPUs support — correlated to CPU time),
+`Engine.profile`, `monolith.trace` (the per-kind budget table with GB/s for the ops that stream a slab, and a
+Chrome-trace file for Perfetto — no viewer of our own). The 0.8B's decode step budget is in decode-kernels.md §3:
+6.81 ms of op minima against a 4.90 ms streamed-bytes bound; the GEMVs at 78 % of nominal, the lm_head at 97 %,
+the mixers 0.74 ms, the norm dispatches 0.2 ms — the targets of #34.
+
+*Status (2026-09-24, #34 part 1: per-op autotune).* `compiler/autotune.py` times, per distinct GEMV shape of a
+program, RG ∈ {2, 4, 8} × geometry ∈ {crew, 2 threadgroups per core, one block per SIMD-group} and, for a norm-fed
+GEMV, fused scaling vs `norm_apply`; per GDN configuration, the state-slice geometry — with synthetic data of the
+same shape, min-of-N after a warm-up, a 3 % noise margin before leaving the default — and caches the choices next
+to the pack (`autotune.<chip>.json`); the emitter compiles with them. On the 0.8B (M5 Pro, 18 s to tune 14 shapes):
+one block per SIMD-group with RG 4–8 for the small-K GEMVs (−15…−35 % each), the fused norm for the T = 1 norm-fed
+GEMVs (where it lost on the ALU-bound NVFP4 shapes, it wins on these small BF16 ones), SL 4 / SPB 4 for the 16-head
+GDN (−14 %); the `lm_head` keeps its default. **Decode: 6.45 vs 6.91 ms per token (−6.6 %)**, golden tokens unchanged
+— 0.96× `mlx-lm`'s 6.2 ms. Remaining in #34: attention v2 (long context), per-op math modes, barrier minimization.
+*Status (2026-09-24, #35).* The sibling overlap is in: `GQAAttention` and `GatedDeltaNet` emit their gate projection
+as a block-aligned row range of the stacked slab (`[q | k | v | gate]`, `[z | qkv | a | b]`) after the mixer core,
+un-barriered, followed by the merge / gated norm; the profile's `sibling_order` (`bus_first`) swaps the pair. A/B on
+the 0.8B / M5 Pro (paired, 4 rounds, min ms per token): every op barriered 6.848, core first 6.584 (−3.9 %), gate
+first 6.630 — the Apple10 rule holds by ~1 % within noise (decode-kernels.md §3). The M3 Pro row needs that machine.
+
+*Status (2026-09-24, #34).* The attention v2 of §5.6 was built, tested against the same numpy contract (chunk 32 folded
+hierarchically) and the layer oracle, and measured (decode-kernels.md §1): 6–18 % faster at T = 1, 9–24 % *slower* at
+T = 4 below 32 K (a win only at 32 K) — the per-(key, row) cost is the BF16 conversions and loads, not v1's
+reduction, so the order-of-magnitude step is SIMD-group-matrix scoring, the same path as the T ≥ 2 GEMMs (M9); v1
+stays the default, v2 a per-profile option (`engine.attention`). Math modes: the kernels compile in Metal's safe
+mode; fast math buys 1–2 % and breaks bit-identity with the safe run on the 0.8B after 48 tokens — safe stays the
+default, `--math fast` exists. Barrier count: #29. The gate: the 0.8B at 74 % of nominal (6.58 ms vs the 4.90 ms
+bound), the 8B at 76 % — below the 85–90 % ceiling; the account of the remainder (the small-K GEMVs at 78 %, the
+dispatch boundaries, the NVFP4 decode) is in decode-kernels.md §3. Not measured: attention at 8 K / 32 K inside a
+real model on this machine (the 27B is the M3 Pro's; the kernel rows are measured), the M3 Pro rows of every A/B.
+
 ### M6 — DSpark speculative decoding · 4 ew
+
+*Model 2 numbers (2026-09-24).* `nvidia/Qwen3-8B-NVFP4` decodes at 26.7 ms per token (37 tok/s; 6.3 GiB streamed
+per token, 242 GB/s) on the M5 Pro before any 8B-specific tuning; `mlx-lm` 0.31.3 with the same dequantized weights
+re-quantized to its NVFP4 mode (4.3 GB: it quantizes the embedding and lm_head too) decodes at 63 tok/s. The 2 GB
+difference is the BF16 `lm_head` + `embed_tokens` NVIDIA's checkpoint keeps (1.25 GB read per token for the
+lm_head alone, ~5 ms): the comparison at equal weights needs either NVIDIA's mixed checkpoint in MLX or our packer
+quantizing the lm_head — the 27B target's lm_head is NVFP4 in its checkpoint, so its comparison is direct.
 
 Design §5.8. Everything on the GPU; the host only drains tokens.
 
@@ -251,6 +345,94 @@ Exit gate: the speculative-decode success metric (≥ 1.5× our plain decode and
 token-identical). *If acceptance is the problem* (drafter trained against a different target quantization): retrain
 on-policy with the NeMo AutoModel / SpecForge / DeepSpec recipes on a GPU box — a dependency, not engine work.
 
+
+*Status (2026-09-24, #4 + #37).* The three Apache-2.0 drafters are on disk with their configs and tensor
+inventories verified (dspark.md §2): `Dogacel/Qwen3-8B-DSpark` (model 2's; 5 layers, taps [1, 9, 17, 25, 33],
+Markov rank 256, confidence head, block 7 — the checkpoint omits `block_size`; no lm_head: the target's is used),
+`DimInfer/Qwen3.8-27B-Dspark-v1` (taps [1, 16, 31, 46, 61], block 15 at training, 3.7 GB) and
+`gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4` (taps [4, 16, 28, 40, 52], MLP/o_proj NVFP4, **YaRN RoPE** — not
+supported by the layer library yet). `monolith/spec/dspark/` is the drafter as a `Drafter` module: config from
+either config layout, the tree from library modules plus `DraftAttention` (keys = the injected-context KV cache ∪
+the new context features' k/v ∪ the block, queries = the block, no mask), the feature projection, the vanilla
+Markov head, the confidence head, a loader that routes k/v to both claimants. Its torch oracle matches DeepSpec's
+reference on the real 8B drafter: features cos 0.999996, block hidden 0.99994, Markov bias exact, confidences
+within 2·10⁻³, the seven greedy drafts identical, context keys 0.99999 (`tests/spec/`). The IR lowering of the
+round comes with the kernels (#24) and the wiring (#38); of the drafter ops only `draft_attn`, `verify_select` and
+`accept_scan` need new kernels — the feature projection, the Markov bias and the confidence dot products are the
+existing GEMV, embed and norm kernels.
+
+*Status (2026-09-24, #24).* The round's kernels and the drafter's IR lowering exist (decode-kernels.md §4):
+`gqa_decode` gains the `DRAFT` variant (three key sources, no mask, the injected positions appended), `spec_ops.metal`
+holds `tap_concat`, `confidence`, `verify_select` and `accept_scan`, the shared kernels read their row count from the
+StepState field the value's row symbol names (`T` → `t_this_step`, the new `N_INJ` → `n_inject`, a static γ compiled
+in), `embed` reads a block's anchor from StepState, and `gemv_T` can round the product before a residual add (the
+Markov head's two BF16 roundings). The IR gained row views (an op reads or writes a slice of a buffer: the Markov
+chain's per-position logits and tokens), the emitter `emit_program` (a graph → program, the closing op optional) and
+handlers for the five kinds. `DSparkDrafter.lower_draft/lower_select` emit the whole draft pass; the emitted program
+reproduces the drafter oracle on a synthetic drafter (drafts identical, confidences within 2·10⁻², the context caches
+and the verify bookkeeping checked; `tests/kernels/test_draft_program.py`, `tests/contract/test_dspark_lowering.py`).
+`accept_scan` commits the accepted drafts and the bonus token in one op (EOS stops the commit; the last prefill chunk
+is the L = 0 case). Not yet: the round inside the target's step program — the feature taps, `accept_scan` in place of
+`advance`, the checkpoint slots — and the cost-aware verify-length rule (#38); the confident-prefix rule with a fixed
+threshold stands in for it. The measured drafter attention is 1 ms per round for five layers at 1 K of context and
+4 ms at 4 K (v1 row groups re-stream the context, as for the target's attention at T > 1).
+
+*Status (2026-09-24, #38 + the greedy half of #39).* The round runs inside the target's dynamic-T program
+(decode-kernels.md §5): `compile_program(model, pack, profile, dynamic_t=True, drafter=…, drafter_pack=…)` appends
+the accept scan, the recurrent-state commit passes, the drafter's draft pass on the model's tapped residual streams
+(`Model.tap_values`, `Drafter.tap_layers`) and the verify select; the program maps the target's and the drafter's
+packs and is replayed for prefill chunks and decode alike (`Session(model, pack, drafter=…)`, `python -m
+monolith.generate --drafter … --drafter-pack …`, `tools/pack_weights.py --drafter-kind dspark`). The verify length
+comes from the cost-aware rule of §5.8 with the profile's cost table (the confident-prefix rule at 0.5 without one);
+the target's GEMVs are predicated per-T variants (T = 1, 2, 4, 8) so a step's ALU work follows its verify length;
+the pump stops on a token count; a per-step accept log feeds the statistics. The GDN states are double-buffered by
+step parity — the step's pass reads one slot and writes the other, which also removes a latent in-dispatch race on
+the conv window — and a speculative program's commit pass (`gdn_commit`, the same kernel with `COMMIT=1`)
+recomputes the recurrence for the committed positions so a rejected draft never reaches the state. Correctness:
+greedy speculative decode is token-identical to plain greedy decode on Qwen3-8B with its public drafter (both verify
+rules, `tests/models/qwen3/test_spec_golden.py`), on the hybrid 0.8B with a random drafter that forces a rollback at
+every step (`tests/models/qwen3_5/test_spec_rollback.py`), and on the synthetic hybrid target (`tests/kernels/`);
+the GPU's drafts equal the oracle's on the golden's real target features; the host is idle during decode. Speed on
+the M5 Pro: **not the gate yet** — 37.5 ms per token on a story prompt (1.05 accepted of 7), 27.1 ms = parity with
+plain decode on a chat-template code prompt (2.14 accepted); the round's fixed cost is the draft pass, 33 ms on the
+shader GEMV path (the drafter's BF16 layers and the `lm_head` at T = 7 run at ~110 GB/s), and each verified draft
+costs the NVFP4 table's ×1.28–×1.79. The exit gate therefore rests on the T ≥ 2 GEMM path (M9, #51) and on the
+drafter's weights in a narrower format, as §5.8 anticipated. Remaining in #40: the acceptance histograms on the
+prompt set, STS calibration and the gate table (the 27B on the M3 Pro).
+
+*Status (2026-09-24, #39).* Sampling with a drafter is exact speculative sampling without a sampling mode in the
+accept scan: the drafts are greedy (a point-mass proposal), so the rejection rule `min(1, p_t/q)` reduces to
+"draw `y_k ~ p_t(· | prefix, d_1 … d_k)` at every position with the ordinary GPU sampler, accept `d_{k+1}` exactly
+when `y_k` equals it; the first mismatch's `y_k` is the correction, `y_L` the bonus" — which is what the accept scan
+already does with the sampled tokens. Every committed token is a sample of the target's conditional. Verified on
+the synthetic hybrid target (`tests/kernels/test_spec_rollback.py`): the empirical distributions of the 2nd and 3rd
+generated tokens over 1 000 seeds agree with plain sampling's (TV < 0.15, every token within 4.5 σ), the same seed
+gives the same draws while drafts are rejected, and a near-zero temperature reproduces the greedy sequence. Sampled
+(non-greedy) drafts, which need `q(d_k)` in the accept rule, are an extension for when acceptance measurements ask
+for them.
+
+*Status (2026-09-24, #40 on the M5 Pro).* `tools/bench/spec_bench.py` (plain vs the cost-aware rule, the confident
+prefix, fixed L = 1 / 2 / 3 / 7 over 11 prompts — code, math, chat with the chat template, plain text — with the
+accepted-length histogram per prompt) and `tools/bench/sts_calibrate.py` (per-position temperatures fitted against
+the measured acceptance from the program's confidence and accept logs) exist; `--sts` feeds the temperatures back.
+The gate table (dspark.md §3): plain 27.0 ms per token; the cost-aware rule **36.2 ms** (2.28 tokens per step, 1.28
+accepted, L̄ 1.8 — the best speculative configuration, matching fixed L = 3's 36.9 while adapting per prompt); the
+confident prefix at 0.5 46.0; fixed L = 1 / 2 / 7: 42.6 / 40.6 / 78.1. Every run's greedy tokens equal plain
+decode's. STS: the drafter's confidence head is calibrated as shipped (ECE 0.05–0.07, τ 0.67–1.27), the calibrated
+bench identical within noise. **Go / no-go on this chip: no-go on the shader-FMA GEMV path** — the round's fixed cost
+(the draft pass, 33 ms) plus ×1.28–×1.79 per verified draft cannot reach 1.5× plain at 0.62–0.72 acceptance per
+position; the same acceptance on the T ≥ 2 GEMM path (M9, #50/#51: the draft pass at bandwidth ≈ 9 ms, the verify
+pass at ~×1.1) projects to ≈ 17 ms per token, the gate. The exit gate for the 27B on the M3 Pro (and the llama.cpp
+`draft-dspark` comparison) needs that machine.
+
+*#41, decided by the numbers (2026-09-24).* The three optional optimizations of the round: (a) **INT8 `W₂` — not
+worth it now**: the Markov chain is 3 ms of a 70 ms round on the 8B (7 × 78 MB of BF16 `W₂` at T = 1, bandwidth-
+bound); INT8 would save ~1.5 ms per step (2 %) — the drafter's layers (19 ms) and the block's `lm_head` (11 ms) are
+the cost, and both are the T ≥ 2 GEMM path's job. (b) **Top-M bias pruning — not worth it, and only conditionally
+exact**: with `|bias(x)| ≤ ‖W₂[x]‖·‖W₁[prev]‖ ≤ B`, restricting the argmax of `U + bias` to the top-M base logits is
+exact only when the (M+1)-th base logit lies more than 2B below the top — a per-step check whose M grows with the
+flatness of `U`; it would save part of the 3 ms above at the price of a data-dependent argmax. (c) **The accelerator
+verify path** is #51 (M9): the measurement above is its justification.
 ### M7 — In-kernel runtime re-evaluation and intra-op stealing · 1.5 ew · time-boxed, off the critical path
 
 On the M3 Pro a dispatch boundary (1.8 µs) beats every in-kernel barrier we built (2.6–5.4 µs), and on the M5 Pro
@@ -258,6 +440,12 @@ by a wider margin (1.4 vs 2.0–2.5 / 4.3–4.8 µs; *done* 2026-09-22), so mult
 This milestone (a) re-runs `p10`/`p6b` on Max-class parts and on small models, where the ratio could differ, and (b)
 adds *own-slice + steal* to ops with uneven blocks (long-context attention, MoE
 experts) if per-op traces show tail skew.
+
+**(b) built and measured (#44, decode-kernels.md §7):** `kernels/common/steal.metal` (p10's mode 2 as a helper),
+the attention core's `STEAL` variant, the exactly-once test under missing and surplus SIMD-groups, and a paired A/B
+on the target's attention shape: 4–6 % faster at ≥ 8K context with T ≥ 4 and at 32K (16 K blocks: the cores'
+uneven progress, not uneven blocks), 10–22 % slower below 8K — under 1 % of a step either way, so it is off by
+default and stays in the toolbox for the MoE experts (#46). (a) needs a Max-class part.
 
 Exit: a short written result per chip; stealing enabled only for ops where it gains ≥ 2 %.
 
@@ -269,20 +457,45 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
 * Model 3, new ops (a Qwen3.5-MoE-class model: router + expert GEMV indexed by GPU-resident expert ids) — exercises the
   new-op path and data-dependent indexing inside a static program. The survey shows this is where an overhead-free
   engine has the most headroom (today's engines reach only 36–55 % of the bound on 3B-active MoE).
-* Format 2 (MXFP4 or affine INT4 groups) — exercises the format-plugin path.
-* Porting guide written from the three logs (time-to-port recorded).
+* Format 2 — **built (#47): affine INT4 groups** (`formats/int4_affine`, the MLX / AWQ / GPTQ family; mlx 0.32's
+  quantizer reproduced bit-exactly). The plugin path held for the decode contract, but the port needed four
+  engine-side extensions the first formats had not exercised — a per-group **bias** hook (`decode_bias`, the GEMV's
+  `bias · Σx` term), the **quantized embedding** gather (mlx_lm quantizes `embed_tokens`, tied to the head), **ragged
+  lane stripes** (K = 3584: 3.5 words per lane, stripes starting mid-group; the unit's scale bytes follow the raw
+  payload, `LANE_OFF` / `GROUP_SEG`), and a package-declared **value adapter** beside the name map (mlx_lm folds the
+  `1 +` of the zero-centered norms into the stored tensor). The MLX 4-bit 0.8B decodes token-identical to its oracle
+  (`tests/models/qwen3_5/test_mlx_int4.py`); M1-harness numbers in gemv-kernel-study.md §2; the port's account in
+  porting-log.md.
+* Porting guide — **written (#48): `docs/porting.md`**, from the three logs (model 2: ~1 h, zero engine edits;
+  drafter 1: ~1.5 h for the module; format 2: ~6 h, four engine-side extensions and a converter-convention hunt),
+  with the contracts as they are in the tree, the CI checks, the golden workflow and the checklists.
 
-### M9 — M4/M5 family tuning · 3 ew · hardware-dependent
+### M9 — M5 family tuning · 3 ew · hardware-dependent
 
-Profiles + autotune on M4 Pro/Max, M5, M5 Pro/Max (Ultra if available); MPP TensorOps block for `T > 1` on M5 —
+Profiles + autotune on M5, M5 Pro/Max (Ultra if available; the M4 family was dropped 2026-09-25) — **the autotuner at install time is built
+(#49, `tools/profile_writer.py`)**: it measures the `engine` block from the kernel harnesses (lane order, threadgroups
+per core, `cost_T` per format, the tile's rows and the accelerator decision, the attention kernel) and merges it into
+the chip's profile; the other chips' profiles wait for the machines. MPP TensorOps block for `T > 1` on M5 —
 validated on the M5 Pro by `probes/p14_tensor_ops` (dequantize a [64 × 64] tile into threadgroup memory →
 `tensor_inline` → `matmul2d<…, execution_simdgroups<S>>` → cooperative-tensor accumulate; 8 tokens for 1.5× a T = 1
-pass in FP8 and NVFP4, 32 tokens for 1.7–1.8×; compiles from the Command Line Tools at MSL 4.0). Remaining: tile
-tuning, the cooperative right-input fill (no threadgroup staging; reference: MLX `steel/gemm/nax.h`, `quantized_nax.h`),
-and the one pipelining experiment that is M5-only — dequantize tile n+1 on the shader ALUs while the neural
-accelerator multiplies tile n (design §5.12); the accelerator **verify path** for T = 1 + L ≥ 5 wired into the
-dynamic-T program as the predicated variant; MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1). Exit: per-chip
-results table next to each chip's bound, including tokens/s with DSpark.
+pass in FP8 and NVFP4, 32 tokens for 1.7–1.8×; compiles from the Command Line Tools at MSL 4.0). **#50 built
+(`kernels/gemm_tile.metal`, decode-kernels.md §6):** the cooperative right-input fill from the pack words (one
+SIMD-group per 16 × 256 tile, the reduction index permuted so a thread decodes consecutive pack columns, block
+scales cached), measured over tile shapes, loop orders and geometries on the M1 harness with the CPU reference:
+NVFP4 177 GB/s, FP8 253, INT4 204 at 8 or 16 tokens — 0.9–1.1× a T = 1 shader pass, 34–49 % above `p14` — and
+below `p14` at 32 tokens (the un-overlapped fill and the activation traffic; a multi-SIMD-group staged variant is
+the T ≥ 32 follow-up). The M5-only pipelining experiment (dequantize tile n+1 while the accelerator multiplies
+tile n) is answered by the measurement: within a SIMD-group the fill and the matmul serialize, and the operand
+registers cannot hold a second tile. **#51 built:** with the profile's `accelerator: on` every T > 1 GEMV — the
+target's verify pass, the drafter's block pass, the prompt chunks — runs on the tile as the predicated variant above
+T = 1 (the per-T shader variants collapse into one tile dispatch fed by a shared normalize-and-permute), the verify
+cost table takes the tile's rows, and the round on Qwen3-8B NVFP4 + its DSpark drafter goes from 35.8 to 19.9 ms
+per token on the prompt set (1.80× the shader path, 1.36× plain decode: math 1.89×, code 1.60×, text 1.24×, chat
+0.99×) with the whole block verified every step, the step 94 % bus-bound; the greedy tokens still equal the golden
+(dspark.md §3, decode-kernels.md §5). The M6 gate (≥ 1.5× plain) is met on math and code on this chip.
+Remaining: MSL 4.1 on macOS 27 (the M5 Pro here runs 26.5.1); the staged multi-SIMD-group tile for T ≥ 32 and a
+K-split for the down projection (§6 of decode-kernels.md). Exit: per-chip results table next to each chip's bound,
+including tokens/s with DSpark.
 
 ### Backlog (post-v1)
 

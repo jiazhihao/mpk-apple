@@ -1,0 +1,46 @@
+{"heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 136, "ms": 0.0817, "kv_gbps": 51.4, "us_per_layer": 81.7, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 544, "ms": 0.2015, "kv_gbps": 20.9, "us_per_layer": 201.5, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 520, "ms": 0.245, "kv_gbps": 68.5, "us_per_layer": 245.0, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 2080, "ms": 0.6901, "kv_gbps": 24.3, "us_per_layer": 690.1, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 1032, "ms": 0.4618, "kv_gbps": 72.7, "us_per_layer": 461.8, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 4128, "ms": 1.44, "kv_gbps": 23.3, "us_per_layer": 1440.0, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 4104, "ms": 1.7549, "kv_gbps": 76.5, "us_per_layer": 1754.9, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 16416, "ms": 5.507, "kv_gbps": 24.4, "us_per_layer": 5507.0, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 136, "ms": 0.0815, "kv_gbps": 51.5, "us_per_layer": 81.5, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 544, "ms": 0.202, "kv_gbps": 20.8, "us_per_layer": 202.0, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 520, "ms": 0.2507, "kv_gbps": 66.9, "us_per_layer": 250.7, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 2080, "ms": 0.6879, "kv_gbps": 24.4, "us_per_layer": 687.9, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 1032, "ms": 0.4586, "kv_gbps": 73.2, "us_per_layer": 458.6, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 4128, "ms": 1.431, "kv_gbps": 23.5, "us_per_layer": 1431.0, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 4104, "ms": 1.7621, "kv_gbps": 76.2, "us_per_layer": 1762.1, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 16416, "ms": 5.5069, "kv_gbps": 24.4, "us_per_layer": 5506.9, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 8, "kv": 2, "d": 256, "ctx": 1024, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 34, "ms": 0.0819, "kv_gbps": 25.6, "us_per_layer": 81.9, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 8, "kv": 2, "d": 256, "ctx": 1024, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 136, "ms": 0.081, "kv_gbps": 26.0, "us_per_layer": 81.0, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 8, "kv": 2, "d": 256, "ctx": 4096, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 130, "ms": 0.0941, "kv_gbps": 89.1, "us_per_layer": 94.1, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 8, "kv": 2, "d": 256, "ctx": 4096, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 520, "ms": 0.2395, "kv_gbps": 35.1, "us_per_layer": 239.5, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 8, "kv": 2, "d": 256, "ctx": 8192, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 258, "ms": 0.1824, "kv_gbps": 92.0, "us_per_layer": 182.4, "chip": "Apple M5 Pro", "cores": 20}
+{"heads": 8, "kv": 2, "d": 256, "ctx": 8192, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 1032, "ms": 0.4242, "kv_gbps": 39.6, "us_per_layer": 424.2, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 1, "chunk": 32, "rb": 4, "n_blocks": 264, "ms": 0.137, "kv_gbps": 30.6, "us_per_layer": 137.0, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 4, "chunk": 32, "rb": 4, "n_blocks": 1056, "ms": 0.2198, "kv_gbps": 19.2, "us_per_layer": 219.8, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 1, "chunk": 32, "rb": 4, "n_blocks": 1032, "ms": 0.2334, "kv_gbps": 71.9, "us_per_layer": 233.4, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 4, "chunk": 32, "rb": 4, "n_blocks": 4128, "ms": 0.8384, "kv_gbps": 20.0, "us_per_layer": 838.4, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 1, "chunk": 32, "rb": 4, "n_blocks": 2056, "ms": 0.5154, "kv_gbps": 65.1, "us_per_layer": 515.4, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 4, "chunk": 32, "rb": 4, "n_blocks": 8224, "ms": 1.8888, "kv_gbps": 17.8, "us_per_layer": 1888.8, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 1, "chunk": 32, "rb": 4, "n_blocks": 8200, "ms": 1.4641, "kv_gbps": 91.7, "us_per_layer": 1464.1, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v2", "heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 4, "chunk": 32, "rb": 4, "n_blocks": 32800, "ms": 5.1276, "kv_gbps": 26.2, "us_per_layer": 5127.6, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1", "heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 136, "ms": 0.2558, "kv_gbps": 16.4, "us_per_layer": 255.8, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1", "heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 544, "ms": 0.2015, "kv_gbps": 20.9, "us_per_layer": 201.5, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1", "heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 520, "ms": 0.2511, "kv_gbps": 66.8, "us_per_layer": 251.1, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1", "heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 2080, "ms": 0.6718, "kv_gbps": 25.0, "us_per_layer": 671.8, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1", "heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 1032, "ms": 0.4562, "kv_gbps": 73.6, "us_per_layer": 456.2, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1", "heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 4128, "ms": 1.4306, "kv_gbps": 23.5, "us_per_layer": 1430.6, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1", "heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 4104, "ms": 1.7508, "kv_gbps": 76.7, "us_per_layer": 1750.8, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1", "heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 16416, "ms": 5.4934, "kv_gbps": 24.4, "us_per_layer": 5493.4, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1-steal", "heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 136, "ms": 0.1493, "kv_gbps": 28.1, "us_per_layer": 149.3, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1-steal", "heads": 32, "kv": 4, "d": 256, "ctx": 1024, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 544, "ms": 0.2677, "kv_gbps": 15.7, "us_per_layer": 267.7, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1-steal", "heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 520, "ms": 0.3032, "kv_gbps": 55.3, "us_per_layer": 303.2, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1-steal", "heads": 32, "kv": 4, "d": 256, "ctx": 4096, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 2080, "ms": 0.7263, "kv_gbps": 23.1, "us_per_layer": 726.3, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1-steal", "heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 1032, "ms": 0.4997, "kv_gbps": 67.2, "us_per_layer": 499.7, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1-steal", "heads": 32, "kv": 4, "d": 256, "ctx": 8192, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 4128, "ms": 1.3768, "kv_gbps": 24.4, "us_per_layer": 1376.8, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1-steal", "heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 1, "chunk": 64, "rb": 4, "n_blocks": 4104, "ms": 1.7217, "kv_gbps": 78.0, "us_per_layer": 1721.7, "chip": "Apple M5 Pro", "cores": 20}
+{"kernel": "v1-steal", "heads": 32, "kv": 4, "d": 256, "ctx": 32768, "t": 4, "chunk": 64, "rb": 4, "n_blocks": 16416, "ms": 5.2136, "kv_gbps": 25.7, "us_per_layer": 5213.6, "chip": "Apple M5 Pro", "cores": 20}

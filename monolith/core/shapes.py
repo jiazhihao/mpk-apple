@@ -24,7 +24,13 @@ Dim = Union[int, Sym]
 Shape = Tuple[Dim, ...]
 
 T = Sym("T")        # tokens in this step: 1 for plain decode, 1 + L when verifying L drafts, ≤ T_max
+N_INJ = Sym("n_inject")   # rows the drafter injects this step (the committed positions: accepted + 1, or a prefill chunk), ≤ T_max
 CTX = Sym("ctx")    # committed context length (KV length)
+
+
+def step_bindings(t_max: int) -> "dict":
+    """The memory planner's bindings: every per-step row symbol at its maximum."""
+    return {T: t_max, N_INJ: t_max}
 
 
 def is_static(shape: Iterable[Dim]) -> bool:

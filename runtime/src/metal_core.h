@@ -75,7 +75,7 @@ struct Dispatch {
   std::vector<std::pair<uint32_t, uint32_t>> threadgroup_memory;   // (index, length)
   uint32_t grid[3] = {1, 1, 1};        // threadgroups
   uint32_t threadgroup[3] = {1, 1, 1}; // threads per threadgroup
-  bool barrier_after = false;          // concurrent encoders only
+  bool barrier_before = false;         // this dispatch waits for every dispatch before it (ICBs, concurrent encoders)
 };
 
 struct RunResult { double gpu_ms; double wall_ms; std::string error; };
@@ -87,6 +87,11 @@ class Queue {
   // one command buffer holding `dispatches` in order (serial encoder, or concurrent with explicit barriers),
   // committed and waited for; returns GPU time from the command buffer timestamps
   RunResult run(const std::vector<Dispatch>& dispatches, bool concurrent);
+  // per-dispatch GPU time: one compute encoder per dispatch with timestamp counter samples at its start and end
+  // (MTLCounterSamplingPointAtStageBoundary, the granularity Apple GPUs support); returns (start_ms, end_ms) per
+  // dispatch relative to the first start. The encoder boundaries add ~µs gaps that do not exist in the ICB replay.
+  std::vector<std::pair<double, double>> profile(const std::vector<Dispatch>& dispatches);
+  bool supports_profiling() const;
   std::shared_ptr<QueueImpl> impl;
 };
 
@@ -100,8 +105,10 @@ struct RunnerImpl;
 
 class Icb {
  public:
-  // `ops` in program order; a barrier after an op orders everything after it behind it (ICB commands are concurrent
-  // otherwise). Buffer offsets must fit 32 bits (Metal's ICB limit) — slabs are mapped so that they do.
+  // `ops` in program order; an op's barrier makes it wait for every command before it in the buffer — measured
+  // (tools/bench, 2026-09-24): `setBarrier` on an ICB command orders that command behind all preceding ones, and
+  // commands without it may start while their predecessors run. Buffer offsets must fit 32 bits (Metal's ICB limit)
+  // — slabs are mapped so that they do.
   Icb(const Device& d, const std::vector<Dispatch>& ops);
   ~Icb();
   size_t count() const;
@@ -131,7 +138,9 @@ class Runner {
   // Replays the step program up to `max_steps` times: `steps_per_cb` steps per command buffer (the max_cb_ms
   // control), `in_flight` command buffers queued ahead. `reencode` = the fallback path (fresh encoder per step,
   // same ops) instead of ICB replay. Blocks until done / max_steps; tokens are collected as buffers complete.
-  RunnerStats run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode);
+  // `max_tokens` > 0 stops submitting once that many tokens have been drained during this call (a speculative
+  // program commits several tokens per step, so a step count over-runs); the buffers already queued still complete.
+  RunnerStats run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode, uint64_t max_tokens = 0);
   // Tokens drained so far (in ring order); cleared by the call.
   std::vector<int32_t> drain();
   std::shared_ptr<RunnerImpl> impl;

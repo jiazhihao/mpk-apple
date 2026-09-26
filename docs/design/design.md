@@ -31,7 +31,7 @@ spec/documentation; **[R]** third-party report; **[H]** hypothesis the plan must
 | D6 | **Short dispatches *and* short command buffers.** Other GPU clients never get in during a dispatch on Apple9 and only sometimes on Apple10; between dispatches they usually get in on the M3 Pro, but the worst case — and on the M5 Pro the usual case behind a long buffer — is a wait for our whole in-flight command buffer. Command buffers carry ≤ ~16–33 ms of work while a display is attached (a tunable; more when headless). | A small dispatch on a second queue waited 1.2–1.4 s behind one long dispatch; behind 800 short dispatches in one command buffer it waited 0.3–0.5 ms in 5 of 6 trials and the full 1.13 s in the other; 130–140 ms outliers behind ~155 ms buffers **[M]**. M5 Pro: behind the same 800-dispatch buffer it waited the whole 1.04–1.05 s in 3 of 4 runs, and behind a single 1.25 s dispatch it got in immediately in only 2 of 12 trials; ~15 ms buffers keep it under 1.5 ms **[M]** |
 | D7 | **Self-advancing steps.** Everything that varies per step (positions, KV length, T, RNG counter, accept counts, done flag) lives in a GPU `StepState` updated by a serial op at the end of each step. The same ICB is replayed unchanged; the host only keeps the queue non-empty and drains a token ring. | Removes the CPU↔GPU sync (0.13 ms each **[M]**, plus the pipeline bubble) from sampling and from every speculative-decoding round |
 | D8 | **Weights are re-laid-out at load time into a block-lane-major (BLM) pack** — the role MPK's TMA "swizzle" layouts play. A SIMD-group sweeps ~16–64 KB blocks; the order of the 32 lanes *inside* the block is a per-chip profile value: on Apple10 the lanes' k-th 16-byte words are adjacent (one load instruction covers 512 contiguous bytes), on Apple9 that order and lane-contiguous sub-ranges tie. | M3 Pro: 124–134 GB/s (81–87 % of nominal), vs 59–60 GB/s for far-apart lane stripes and 106–126 GB/s for the best conventional geometry. M5 Pro: lane-interleaved 286–295 GB/s (93–96 %) and 275 GB/s (90 %) in a real FP8 GEMV, while lane-contiguous caps at 200–219 raw and 238 in the GEMV whatever the load width, unrolling, occupancy or block size **[M]** |
-| D9 | **Inside an op, SIMD-groups take static slices.** *Own-slice + steal* is available per op for uneven blocks or perturbed cores. | Stealing is exactly-once and as fast as static slicing even with half the crew missing **[M]**; static slices need no atomics and rely only on Metal's dispatch semantics |
+| D9 | **Inside an op, SIMD-groups take static slices.** *Own-slice + steal* is available per op for uneven blocks or perturbed cores (`kernels/common/steal.metal`, the attention core's `STEAL` variant — #44). | Stealing is exactly-once and as fast as static slicing even with half the crew missing **[M]**; static slices need no atomics and rely only on Metal's dispatch semantics. On the attention core it gains 4–6 % at ≥ 8K context with T ≥ 4 (the cores' uneven progress) and loses 10–22 % below — under 1 % of a step either way, so it is off by default (decode-kernels.md §7) **[M]** |
 | D10 | **Speculative decoding with a DSpark drafter**, fully on the GPU: a DFlash-style block drafter conditioned on the target's hidden states (KV injection) proposes γ tokens in one pass, a serial Markov head chains them, a confidence head scores each position, and a serial op picks the verify length from the confidence chain and the chip's measured cost-per-T table. The checkpoint's MTP head is not used in v1; drafters are plugins behind one `Drafter` contract (§5.14). | Decode reads 17.6 GB/token; the bandwidth bound is ~7–9 tok/s on an M3 Pro, ~16 on an M5 Pro. Verifying several tokens per weight pass is the only lever past it, and DSpark is the strongest public drafter for this target: Apache-2.0 drafters for Qwen3.8-27B exist (1.0–1.9 B parameters, 5 layers, block 7), report accepted lengths of 2.7–4.1 and 1.7–2.5× at batch 1 under llama.cpp **[R]**, and cost 7–21 % of a target pass per round. The measured cost of a T-token verify pass (M5 Pro: FP8 ×1.08 / ×1.11 / ×3.6, NVFP4 ×1.28 / ×1.79 / ×5.3 for T = 2 / 4 / 8 on the shader ALUs; ×1.5 for T = 8 on the accelerators **[M]**) is what the verify-length rule optimizes against |
 | D11 | **Numerics contract = weight-only dequantization (W4A16 / W8A16)**, BF16 residual stream, FP32 accumulators and recurrent state, one rounding per op output. Reference = HF model on the *dequantized* weights. | Apple GPUs have no FP4/FP8 arithmetic; the checkpoint's `input_scale`s are a Blackwell throughput feature, not a semantic requirement |
 | D12 | **Profiling = per-op GPU timestamps** (every op is already its own dispatch) into MPK's `.mpktrace` format and viewer; a *clock SIMD-group* is available for intra-op traces. | MSL has no in-kernel clock; a free-running atomic tick counter gives ~48 ns ticks ±1 % **[M]** |
@@ -296,7 +296,11 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   the next round's anchor, append to the **token ring** (shared memory — the CPU reads it without a copy; each 8-byte
   slot carries the token and its sequence number in one store, because the host drains while later command buffers
   are still running and cannot trust a head counter it reads from an in-flight buffer), check stop conditions (EOS set,
-  max length, stop-token table), advance positions and `step`.
+  max length, stop-token table), advance positions and `step`. It also guards the caches: a `Program` carries its
+  `context_capacity` (the smallest KV cache of the target and, with a drafter, of its context less the block it
+  appends after it), the verify-length select clamps L to the target's rows, and a step whose first position would
+  reach the capacity sets `error = 2` and `done` — no kernel ever indexes past a cache (`error = 1` is the token ring
+  overflowing). The host refuses a request that cannot fit before it starts; the guard catches the pump's over-run.
 * **Host pump.** The host keeps a few command buffers in flight (≈ 50–100 ms of queued work), each replaying one
   bounded range of the step ICB (§5.1). A completion handler drains the token ring and enqueues more. When `done` is set, steps already queued return at their first
   instruction (~2 µs per dispatch). The host never waits on the GPU to decide what runs next, so host latency is off
@@ -321,8 +325,13 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   depending on whether §5.12's sibling overlap is enabled for the chip. R, stripe order and scale placement are
   autotuned per chip.
 * **Formats** are plugins: `unpack(checkpoint tensors) → pack` plus an MSL `decode` snippet used by the GEMV
-  template. v1: NVFP4 (E2M1 LUT × E4M3 block scale × FP32 tensor scale), FP8-E4M3 per-tensor (256-entry LUT), BF16.
-  Next: MXFP4, affine INT4/INT8 groups (MLX/AWQ/GPTQ), GGUF K-quants.
+  template. v1: NVFP4 (E2M1 LUT × E4M3 block scale × FP32 tensor scale), FP8-E4M3 per-tensor (256-entry LUT), BF16;
+  built since: INT8 groups and **affine INT4 groups** (`int4_affine`, the MLX / AWQ / GPTQ family, `w = scale·code +
+  bias`, mlx 0.32's quantizer reproduced bit-exactly): the decode contract grew a per-group bias hook (`decode_bias`,
+  the GEMV adds `bias · Σx` per group), a quantized table can be gathered as the embedding (`EMBED_DEQUANT`), and a
+  lane stripe may be *ragged* — not whole words, starting inside a scale group (K = 3584): the unit is
+  `[payload | scales | pad]` with the scale bytes in the partial tail word, and the kernels index a stripe's groups
+  from its offset (`LANE_OFF`, `GROUP_SEG`). Next: MXFP4, GGUF K-quants.
 * **State.** KV cache per attention layer (BF16 in v1; FP8/INT8 later — at long context KV traffic overtakes the
   weights); GDN recurrent state FP32 `[48,128,128]` + conv state, each with `γ+1` checkpoint slots for speculative
   rollback; the drafter's injected-context KV (5 layers × 8 KV heads × 128 × K and V ≈ 20 KB per committed token,
@@ -347,16 +356,19 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
 | `verify_select` | SERIAL | L = argmax over l ≤ γ of E[accepted ∣ c₁…c_l] / cost(1 + l) from the chip profile's T-cost table (§5.8); writes `T_this_step` |
 | `accept_scan` | SERIAL | chain verify (greedy match or rejection sampling), GDN checkpoint choice, KV advance, anchor — MPK's `mtp_verify_strict` semantics |
 
-M5 path **[M]** (`p14`): for T > 1 (verify, prompt chunks) the GEMM block dequantizes a [64 × 64] weight tile into
-threadgroup memory with ordinary loads, wraps it in a `tensor_inline` and calls `matmul2d<desc,
-execution_simdgroups<S>>`, accumulating in a cooperative tensor that is stored once — all from the Command Line
-Tools' runtime compiler at MSL 4.0. On the M5 Pro it verifies 8 tokens for 1.5× a T = 1 pass (FP8 186 GB/s, NVFP4
-119 GB/s useful) and 32 tokens for 1.7–1.8×, beating the shader kernels from T ≈ 5–8 (FP8) and T ≈ 3 (NVFP4) and
-losing below, so the autotuner picks the path per op and T. Its own streaming ceiling is 65–68 % of nominal (half
-weights read directly), which is why it is not a T = 1 path. Untested refinements: filling a cooperative right-input
-tensor instead of staging through threadgroup memory, and overlapping the next tile's dequantization with the
-current `matmul2d` (§5.12). Apple's native quantized tensor types (macOS 27: FP4/FP8 with E8M0 block-32 scales) do not match NVFP4's
-E4M3 block-16 + tensor scale, so NVFP4 stays on our decode path.
+M5 path **[M]** (`p14`, then `gemm_tile` — #50, decode-kernels.md §6): for T > 1 (verify, prompt chunks) the GEMM
+block multiplies weight tiles through `matmul2d` from the Command Line Tools' runtime compiler at MSL 4.0. `p14`
+staged a dequantized [64 × 64] tile in threadgroup memory (8 tokens for 1.5× a T = 1 pass). The built kernel fills a
+**cooperative right-input tensor straight from the pack words** — one SIMD-group per [16 × 256] tile (input
+cooperative tensors take the single-SIMD-group scope only), the reduction index permuted so each thread decodes
+TK/4 consecutive pack columns of its rows with the format snippet, a row piece one cache line, the block-scale
+words cached across a lane group's words — and streams NVFP4 at 177 GB/s, FP8 at 253, INT4 at 204 for 8 *or* 16
+tokens (the accelerator's 16-row minimum): **0.9–1.1× a T = 1 shader pass**, 34–49 % above the staged tile. At 32
+tokens the un-overlapped fill and the activation traffic leave it below the staged tile (a multi-SIMD-group staged
+variant is the T ≥ 32 follow-up). The autotuner picks the path per op and T; for NVFP4 the accelerator path even
+beats the ALU-bound shader GEMV at T = 1 (0.283 vs 0.319 ms). Apple's native quantized tensor types (macOS 27:
+FP4/FP8 with E8M0 block-32 scales) do not match NVFP4's E4M3 block-16 + tensor scale, so NVFP4 stays on our decode
+path.
 
 ### 5.7 Compiler
 
@@ -372,10 +384,14 @@ E4M3 block-16 + tensor scale, so NVFP4 stays on our decode path.
   GEMV inner loops if the layer gates hold.
 * **Chip profiles.** `{cores, full-speed SIMD-groups per core, GB/s, lane order, threadgroups per core, block sizes,
   R, T_max, γ, cost(T) per format, sibling-order rule, max_cb_ms}` — produced by the probe suite and an autotuner at
-  install time, never hard-coded (`profiles/` holds the hand-derived first cut).
+  install time, never hard-coded. The autotuner is `tools/profile_writer.py` (#49): the kernel harnesses measure the
+  lane order, the threadgroups per core, `cost_T` per format at the best geometry per T, the tile's rows and the
+  accelerator switch, and the attention kernel; the probes' values (sibling order, `max_cb_ms`) carry over from the
+  hand-derived record. Decisions follow the autotuner's noise rule (3 %; a tie keeps the file's value).
 * **Dynamic T.** With DSpark the verify length changes every round, so `T_this_step` is read from `StepState` by every
   kernel (T_max = 1 + γ fixed at compile time; the crew geometry never changes). Where the best kernel differs by T —
-  shader-ALU verify for T ≤ 4, the accelerator path for larger T on Apple10 — both variants are encoded and the one
+  the shader GEMV at T = 1, the tensor-ops tile above it on Apple10 (the profile's `accelerator_min_t`, 2 on the
+  M5 Pro for every format; #51) — both variants are encoded and the one
   not selected returns at its first instruction (a predicated dispatch costs ~1.4 µs **[M]**); `executeCommandsIn
   Buffer:indirectBuffer:`, which lets the GPU choose the ICB range, is the optimization if those µs ever matter.
 
@@ -405,22 +421,26 @@ acceptance probability so the verifier can choose how many draft tokens to verif
    calibration, STS, shipped with the drafter or fitted once), choose
    `L = argmax_{0≤l≤γ} (1 + Σᵢ≤ₗ aᵢ) / cost(1 + l)`, where `cost(T)` is the profile's measured cost of a T-token target
    pass in units of a T = 1 pass (M5 Pro shader ALUs: FP8 1 / 1.08 / – / 1.11 / … / 3.6, NVFP4 1 / 1.28 / – / 1.79 /
-   … / 5.3 for T = 1 / 2 / 3 / 4 / … / 8; accelerator path 1.5 at T = 8 **[M]**). This is DSpark's hardware-aware
+   … / 5.3 for T = 1 / 2 / 3 / 4 / … / 8; the tensor-ops tile 1.03 / 1.09 (NVFP4 / FP8) for any T ≤ 16 **[M]**, so
+   with the accelerator on the table is the shader's row at T = 1 and the tile's above — #51). This is DSpark's hardware-aware
    scheduler reduced to batch 1: the confidence chain supplies the expected acceptance, the chip profile the cost.
    Write `T_this_step = 1 + L`.
 5. *Target verify pass* at T = 1 + L (the ordinary step program with dynamic T), tapping features for the next round.
-6. *Accept scan* (`SERIAL`): greedy match, or rejection sampling with `min(1, pₜ(xₖ)/p_d(xₖ))`; commit the accepted
-   prefix plus the target's bonus/corrected token; keep GDN checkpoint `accepted`, advance the KV by `accepted + 1`,
-   set the next anchor, append tokens to the ring, check stop conditions.
+6. *Accept scan* (`SERIAL`): greedy match, or rejection sampling with `min(1, pₜ(xₖ)/p_d(xₖ))` — with greedy
+   drafts (a point-mass `p_d`) this is exactly "sample `yₖ ~ pₜ` at every position with the ordinary sampler and
+   accept `xₖ` iff `yₖ = xₖ`", so the scan compares the sampled tokens with the drafts and needs no mode of its own;
+   commit the accepted prefix plus the target's bonus/corrected token; commit the recurrent states of the accepted
+   prefix, advance the KV by `accepted + 1`, set the next anchor, append tokens to the ring, check stop conditions.
 
 **Cost model.** Per round: drafter weights once (1.3–3.7 GB), `lm_head` at T = γ (0.72 GB), γ × W₂ (0.9 GB in BF16,
-0.45 in INT8), plus the verify pass at `cost(1 + L)`. The `cost(T)` table measured so far is for shader-FMA kernels;
-MLX's SIMD-group-matrix path streams NVFP4 at 85–91 % of nominal at T = 2–4 on the M5 Pro
-([kernel study](../research/gemv-kernel-study.md) §3c), so with such a verify kernel `cost(4)` should be ~1.1, not
-1.8 — the T > 1 GEMM is a `simdgroup_multiply_accumulate` (Apple7+) or MPP kernel, not a wider FMA loop. Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify)`.
+0.45 in INT8), plus the verify pass at `cost(1 + L)`. The shader-FMA `cost(T)` table (×1.8 at T = 4 for NVFP4) was
+the reason the round could not pay for itself on the M5 Pro; the tensor-ops tile (§5.6, #50/#51) makes every T ≤ 16
+cost 1.03–1.09 of a T = 1 pass — and the drafter's BF16 block pass at T = γ streams at 274 GB/s instead of ~110 —
+which is what turned the M6 gate on this chip (dspark.md §3). On a chip without the accelerator the T > 1 GEMM
+would be a `simdgroup_multiply_accumulate` kernel (Apple7+), not a wider FMA loop. Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify)`.
 With the public drafters' reported accepted lengths (2.7–4.1 on math/code/chat at n-max 4 **[R]**) and the M5 Pro's
 cost table, L = 3–4 on the shader path pays for FP8 layers but is marginal for the NVFP4 MLPs (×1.79 at T = 4), which
-is exactly why the accelerator verify path (§5.6, ×1.5 at T = 8) and the per-chip choice matter. On an M3 Pro
+is exactly why the accelerator verify path (§5.6, ×1.03–1.09 up to 16 tokens) and the per-chip choice matter. On an M3 Pro
 (no accelerator, T-costs unmeasured) L will be smaller. Every number here is re-measured in plan M6; the gate is
 tokens/s, not acceptance.
 
@@ -428,6 +448,13 @@ tokens/s, not acceptance.
 own engine, then the HF golden); sampling verification must preserve the target distribution (rejection sampling;
 distribution tests). The drafter's block is checked against the DeepSpec reference implementation on the same anchor and
 context (draft tokens identical in greedy mode, confidences within 1e-3).
+
+**Measured (M5 Pro, 2026-09-24; decode-kernels.md §5) [M].** The round as built: with the cost-aware rule and the
+shader-FMA GEMVs, Qwen3-8B NVFP4 + its public drafter decodes at 37.5 ms per token on a plain story prompt (1.05
+drafts accepted of 7) and at 27.1 ms — parity with plain decode (26.8) — on a chat-template prompt (2.14 accepted);
+the draft pass costs 33 ms because BF16 at T = 7 runs ALU-bound at ~110 GB/s, and each verified draft costs the
+cost table's ×1.28–×1.79, so L is capped at 3. The token-identity gate holds; the speed gate waits for the T ≥ 2
+GEMM path (§5.6, M9) — the prediction two paragraphs up, now with numbers.
 
 **Drafter provenance.** Public drafters were trained against a *particular* target quantization (Q4_K_M or NVFP4 W4A4)
 by capturing that target's hidden states; our W4A16 target is close but not identical, so acceptance is measured, not
@@ -449,7 +476,12 @@ possible second `Drafter` plugin — the contract (§5.14) is drafter-agnostic �
 ### 5.10 Profiling and debugging
 
 * Every op is its own dispatch, so per-op GPU timestamps come straight from counter sample buffers (one encoder per
-  op in profiling builds), and Xcode GPU capture and shader validation work normally.
+  op in profiling builds), and Xcode GPU capture and shader validation work normally. Shader validation
+  (`MTL_SHADER_VALIDATION=1`) is the test for out-of-bounds stores **[M]**: it works on the ICB replay path (the first
+  violation per kernel) and per dispatch with re-encoding, and it found the three writes behind an intermittent
+  wrong-token / hang / empty-generation failure of the speculative programs (the GDN commit pass storing its
+  read-out through a 16-byte placeholder output, the tile's input permute of a value narrower than the slab's K, a
+  drafter's context appends past its cache) that no numerical test could see until the corrupted neighbour mattered.
 * For intra-op detail a **clock SIMD-group** free-runs an atomic tick counter; workers stamp block begin/end. Ticks
   are calibrated against the command buffer's `GPUStartTime/GPUEndTime`. Compile-time switch only (PR #278: a runtime
   profiling flag cost 0.4–0.5 ms/step).
@@ -501,6 +533,13 @@ is a bus-bound GEMV that the core does not depend on —
 Expected value **[H]**: the mixer core is a few percent of a layer, so ~2–4 % of a step on the M3 Pro. It is a compiler
 rule (do not stack a projection whose only consumer sits behind an ALU-bound op), costs +64 un-barriered dispatches, and
 is enabled per chip by measurement.
+
+*Built and measured (2026-09-24, #29/#35).* The layer library emits every mixer as core → gate GEMV → merge / gated
+norm with the gate rows a block-aligned range of the stacked slab, and the compiler's barrier pass keeps an ICB
+barrier only where an op touches what the ops before it wrote (the flag orders the flagged command behind all
+preceding ones — measured, `decode-kernels.md` §3). On the 0.8B / M5 Pro the pass frees the 24 gate GEMVs and the
+step drops from 6.85 to 6.58 ms per token (−3.9 %) with the core encoded first, 6.63 with the gate first — the
+`sibling_order` rule holds by ~1 % within noise. The M3 Pro row is unmeasured.
 
 **M5 Pro — measured; M4 — projected.** What matters is how over-provisioned the cores are relative to the bus. The
 projection below assumed that a core streams ~18 GB/s on every chip; the M5 Pro's cores stream 29 GB/s with the M3
@@ -614,7 +653,11 @@ registries and the IR; the runtime consumes only `program.json`, the pack manife
 * *Adding a drafter* = `spec/<name>/` implementing `Drafter`; the verify/accept ops, the dynamic-T program and the
   StepState fields are shared. DSpark is the first; an MTP-head or EAGLE-style drafter would be a second package.
 * *Adding a format* = `formats/<name>/`; the GEMV template is parameterized by the decode snippet and the pack layout,
-  and the pack ↔ checkpoint round-trip test is generic.
+  and the pack ↔ checkpoint round-trip test is generic. A checkpoint written by another tool is a package matter,
+  not an engine one: a package may declare two **checkpoint adapters** — a name map (`checkpoint_rename`) and a
+  value map (`checkpoint_adapt`, stored values → the convention the package declares, e.g. mlx_lm folding the
+  `1 +` of a zero-centered norm into the tensor) — applied by the safetensors reader for the packer and the oracle
+  alike, so the engine never learns a convention.
 * *A layer library, not per-model kernels.* Qwen3.8's attention layers and the DSpark drafter's attention layers are the
   same `GQAAttention` module with different configs and KV sources; the drafter's MLP is the same `GatedMLP`. Kernel
   variants are selected by (op, format, profile), never by model name.

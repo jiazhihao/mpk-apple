@@ -86,8 +86,9 @@ def table_requests(model: Model) -> List[TableRequest]:
 
 
 def pack_model(model: Model, ckpt_dir: str, out_dir: str, layout: PackLayout, *, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Write ``weights.pack`` + ``manifest.json`` for a bound module tree."""
-    pk = Packer(ckpt_dir, out_dir)
+    """Write ``weights.pack`` + ``manifest.json`` for a bound module tree (``model.checkpoint_rename`` maps the
+    checkpoint's tensor names and ``model.checkpoint_adapt`` its stored values when a package sets them)."""
+    pk = Packer(ckpt_dir, out_dir, rename=getattr(model, "checkpoint_rename", None), adapt=getattr(model, "checkpoint_adapt", None))
     for req in slab_requests(model, layout):
         pk.add_slab(req)
     for req in aux_requests(model):
@@ -104,20 +105,21 @@ def dequantized_tensors(model: Module, ckpt: SafetensorsDir) -> Iterator[Tuple[s
     would produce it (quantized groups through their format plugin)."""
     groups, dtypes = checkpoint_groups(ckpt)
     shapes = {n: tuple(ckpt.info(n).shape) for n in ckpt.names()}
-    for hf_name, (mod, local, spec) in model.full_weight_map().items():
+    for key, (mod, local, spec) in model.full_weight_map().items():
+        hf_name = spec.hf_name                     # the map's key may carry a '#<module>' suffix when a tensor is claimed twice
         g = groups.get(hf_name[: -len(".weight")]) if hf_name.endswith(".weight") else None
         if g is not None and g.format not in ("bf16", "f32", ""):
             tensors = {"weight": ckpt.get(g.weight), **{side: ckpt.get(full) for side, full in g.sides.items()}}
             shape = logical_shape(g, shapes)
             fmt = FORMATS.get(g.format)
-            yield hf_name, np.asarray(fmt.dequantize(fmt.unpack(tensors, shape=(int(shape[0]), int(shape[1])))), dtype=np.float32), g.format
+            yield key, np.asarray(fmt.dequantize(fmt.unpack(tensors, shape=(int(shape[0]), int(shape[1])))), dtype=np.float32), g.format
             continue
         info = ckpt.info(hf_name)
         arr = ckpt.get(hf_name)
         if info.dtype == "BF16":
-            yield hf_name, bf16_to_f32(arr), "bf16"
+            yield key, bf16_to_f32(arr), "bf16"
         elif info.dtype in ("F32", "F16"):
-            yield hf_name, np.asarray(arr, dtype=np.float32), "f32"
+            yield key, np.asarray(arr, dtype=np.float32), "f32"
         else:
             raise ValueError(f"{hf_name}: cannot load dtype {info.dtype} for the oracle")
 
@@ -126,7 +128,7 @@ def load_oracle_weights(model: Module, ckpt_dir: str, *, device: Any = None) -> 
     """Load the tree's parameters as BF16 torch tensors (the reference model's ``dtype=bfloat16`` semantics)."""
     import torch
 
-    ckpt = SafetensorsDir(ckpt_dir)
+    ckpt = SafetensorsDir(ckpt_dir, rename=getattr(model, "checkpoint_rename", None), adapt=getattr(model, "checkpoint_adapt", None))
 
     def stream():
         for name, arr, _fmt in dequantized_tensors(model, ckpt):

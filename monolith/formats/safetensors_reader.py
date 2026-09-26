@@ -43,9 +43,12 @@ def read_header(path: str | Path) -> Tuple[Dict[str, TensorInfo], Mapping[str, s
 
 
 class SafetensorsDir:
-    """All shards of a checkpoint directory (or one file); tensors are memory-mapped on access."""
+    """All shards of a checkpoint directory (or one file); tensors are memory-mapped on access. ``rename`` maps
+    the stored names to the names the model package expects (a checkpoint written by another tool); ``adapt``
+    (``(name, array, info) → array``, applied by ``get`` under the package's names) maps stored values to the
+    package's convention (a tool that folds a constant into a tensor), keeping the stored dtype."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, rename=None, adapt=None) -> None:
         p = Path(path)
         files: List[Path]
         if p.is_file():
@@ -62,8 +65,11 @@ class SafetensorsDir:
         self.infos: Dict[str, TensorInfo] = {}
         for f in files:
             infos, _ = read_header(f)
+            if rename is not None:
+                infos = {rename(k): v for k, v in infos.items()}
             self.infos.update(infos)
         self._maps: Dict[Path, np.memmap] = {}
+        self._adapt = adapt
 
     def names(self) -> List[str]:
         return sorted(self.infos)
@@ -80,7 +86,8 @@ class SafetensorsDir:
         """The tensor as a numpy view of the file (BF16 → uint16, F8_E4M3 → uint8)."""
         t = self.infos[name]
         raw = self._mm(t.file)[t.start: t.end]
-        return raw.view(_NP[t.dtype]).reshape(t.shape)
+        arr = raw.view(_NP[t.dtype]).reshape(t.shape)
+        return arr if self._adapt is None else self._adapt(name, arr, t)
 
     def __iter__(self) -> Iterator[Tuple[str, np.ndarray]]:
         for name in self.names():

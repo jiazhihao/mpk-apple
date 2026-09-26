@@ -79,7 +79,7 @@ def _norm_inputs(rng, t, scale=1.0):
     return h, nw, stat, x_ref
 
 
-@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8"])
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
 @pytest.mark.parametrize("t", [1, 4])
 def test_norm_input_matches_reference_norm(dev, fmt, t):
     g = Gemv(dev, fmt, 100, 16, t)
@@ -92,7 +92,7 @@ def test_norm_input_matches_reference_norm(dev, fmt, t):
     # T*WPW > 64 takes the word path (NVFP4 T=4 above already does); the preconvert path is BF16/FP8 T ≤ 8
 
 
-@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3"])
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
 def test_residual_epilogue(dev, fmt):
     t, n = 3, 96
     g = Gemv(dev, fmt, n, 16, t)
@@ -105,7 +105,7 @@ def test_residual_epilogue(dev, fmt):
     assert chk.ok() and chk.max_ulp_elementwise <= 1, chk
 
 
-@pytest.mark.parametrize("fmt,rows", [("nvfp4", 16), ("fp8_e4m3", 16), ("bf16", 8), ("int8", 16)])
+@pytest.mark.parametrize("fmt,rows", [("nvfp4", 16), ("fp8_e4m3", 16), ("bf16", 8), ("int8", 16), ("int4_affine", 16)])
 @pytest.mark.parametrize("t", [1, 2])
 def test_silu_mul_epilogue(dev, fmt, rows, t):
     n = 8 * rows                                                          # 8 blocks, chunk = rows/2 outputs each
@@ -158,3 +158,59 @@ def test_dynamic_t_with_fusions(dev):
     assert check_against_oracle(y[:2], ref[:2]).ok()
     assert np.all(y[2:] == 0) and np.all(so[2:] == 0)                    # untouched beyond t_active
     assert np.allclose(so[:2].sum(-1), (ref[:2].astype(np.float64) ** 2).sum(-1), rtol=1e-5)
+
+
+def test_autotuner_picks_and_caches(dev, tmp_path):
+    """The autotuner times the GEMV and GDN variants of a shape, returns a valid choice (never slower than the
+    default by more than the noise margin) and round-trips its cache."""
+    from monolith.compiler.autotune import Autotuner, Choice
+    from monolith.formats import FORMATS, PackLayout
+
+    cache = tmp_path / "autotune.json"
+    tuner = Autotuner(dev, dev.info().gpu_cores, str(cache), reps=2, warmup_ms=5.0)
+    rng = np.random.default_rng(1)
+    _, info, _ = pack_spec(random_spec("bf16", 512, K, rng), PackLayout(rows=16))
+    c = tuner.tune_gemv(info, 1, "residual", False)
+    assert isinstance(c, Choice) and c.ms > 0 and c.ms <= c.default_ms * 1.001 and c.grid_mode in ("crew", "crew2", "block")
+    cn = tuner.tune_gemv(info, 1, None, True)
+    assert cn.ms > 0 and isinstance(cn.fuse_norm, bool)
+    g = tuner.tune_gdn(4, 4, 128, 128, 4, 1)
+    assert g.ms > 0 and g.macros["SL"] in ("4u", "8u", "16u")
+    m = tuner.tune_gemm(info, 8, "residual")                                # the tensor-ops tile: one or two threadgroups per core
+    assert m.ms > 0 and m.grid_mode in ("crew", "crew2") and m.ms <= m.default_ms * 1.001
+    tuner.save("test-chip")
+    again = Autotuner(dev, dev.info().gpu_cores, str(cache))
+    assert again.tune_gemv(info, 1, "residual", False).macros == c.macros and len(again.choices) == 4
+    assert again.tune_gemm(info, 8, "residual").grid_mode == m.grid_mode
+
+
+def test_row_range_equals_the_slice_of_the_whole(dev):
+    """A dispatch over blocks [block0, block0 + n) of a slab writes the same outputs as the whole-slab dispatch's slice,
+    with the residual epilogue, the input norm and the STAT_OUT partials relative to the range (design §5.12: a
+    mixer's gate rows as their own dispatch)."""
+    rng = np.random.default_rng(17)
+    fmt, n, rows, t = "nvfp4", 512, 16, 2
+    gm = Gemv(dev, fmt, n, rows, t, seed=17)
+    x = f32_to_bf16(rng.standard_normal((t, K)).astype(np.float32))
+    residual = f32_to_bf16(rng.standard_normal((t, n)).astype(np.float32))
+    stat = np.array([float((bf16_to_f32(x[i]).astype(np.float64) ** 2).sum()) for i in range(t)], np.float32)
+    nw = rbf(1.0 + rng.standard_normal(K) * 0.1)
+    full, full_stat = gm.run(x, norm=(stat, 1, nw), epilogue="residual", residual=residual, stat_out=True)
+    start, count = 128, 256                                                    # blocks 8 .. 24 of 32
+    b0, nb = start // rows, count // rows
+    macros = kernels.gemv_macros(gm.info, t=t, norm=True, epilogue="residual", stat_out=True, out_bf16=True)
+    pso = nt.Pipeline(nt.Library(dev, kernels.gemv_source(fmt), macros), "gemv_T")
+    y = nt.Buffer(dev, t * count * 2); y.fill(0)
+    so = nt.Buffer(dev, t * nb * 4); so.fill(0)
+    d = (nt.Dispatch().pipeline(pso).buffer(0, gm.wbuf).buffer(1, gm.rsbuf).buffer(2, nt.Buffer(dev, x.tobytes())).buffer(3, y)
+         .bytes(4, kernels.gemv_params(count, nb, gm.n_sg, t, eps=EPS, stat_parts=1, block0=b0))
+         .buffer(5, nt.Buffer(dev, stat.tobytes())).buffer(6, nt.Buffer(dev, nw.astype(np.float32).tobytes()))
+         .buffer(7, nt.Buffer(dev, np.ascontiguousarray(residual[:, start: start + count]).tobytes())).buffer(8, so)
+         .grid(-(-(gm.n_sg * 32) // 384)).threadgroup(384))
+    r = nt.Queue(dev).run([d])
+    assert not r.error, r.error
+    got = bf16_to_f32(np.frombuffer(y.read(0, t * count * 2), dtype=np.uint16)).reshape(t, count)
+    assert np.array_equal(got, full[:, start: start + count])
+    parts = np.frombuffer(so.read(0, t * nb * 4), dtype=np.float32).reshape(t, nb)
+    assert np.array_equal(parts, full_stat[:, b0: b0 + nb])
+

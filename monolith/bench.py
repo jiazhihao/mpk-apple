@@ -29,6 +29,11 @@ def random_spec(fmt: str, n: int, k: int, rng: np.random.Generator) -> DequantSp
         codes = rng.integers(-127, 128, size=(n, k), dtype=np.int8)
         scales = (rng.uniform(0.5, 2.0, size=(n, k // 32)) * 0.02 / 127).astype(np.float16)
         return DequantSpec(fmt, (n, k), {"weight": codes, "weight_scale": scales}, {"group": 32})
+    if fmt == "int4_affine":
+        codes = rng.integers(0, 256, size=(n, k // 2), dtype=np.uint8)
+        scales = (rng.uniform(0.5, 2.0, size=(n, k // 64)) * 0.02 / 7.5).astype(np.float32)
+        biases = (-7.5 * scales * rng.uniform(0.8, 1.2, size=scales.shape)).astype(np.float32)
+        return DequantSpec(fmt, (n, k), {"weight": codes, "scales": scales, "biases": biases}, {"group": 64})
     raise KeyError(fmt)
 
 
@@ -68,9 +73,15 @@ class OracleCheck:
     max_ulp_at_rms: float
     max_ulp_elementwise: int
     max_rel_err: float          # max |y - y_ref| / max |y_ref| (float32 accumulation noise is ~1e-6)
+    max_ulp_at_scale: float = 0.0   # max |y - y_ref| / ulp_bf16(max(|y_ref|, rms(y_ref))): the element's own ULP, floored at the RMS
 
     def ok(self) -> bool:
         return self.max_ulp_at_rms <= 2.0 and self.max_rel_err < 1e-4
+
+    def ok_rounded(self) -> bool:
+        """The gate for BF16 outputs that went through a chain of roundings (mixers, norms): every element within 2
+        ULP of its own magnitude (floored at the RMS, so near-zero elements do not count their noise as ULPs)."""
+        return self.max_ulp_at_scale <= 2.0 and self.max_rel_err < 1e-2
 
 
 def bf16_ulp_of(magnitude: float) -> float:
@@ -83,7 +94,10 @@ def check_against_oracle(y: np.ndarray, y_ref: np.ndarray) -> OracleCheck:
     err = np.abs(y - y_ref)
     rms = float(np.sqrt(np.mean(y_ref ** 2)))
     denom = max(float(np.abs(y_ref).max()), 1e-30)
-    return OracleCheck(float(err.max() / bf16_ulp_of(rms)), int(bf16_ulp_diff(y, y_ref).max()), float(err.max() / denom))
+    mags = np.maximum(np.abs(y_ref), rms)
+    ulps = 2.0 ** (np.floor(np.log2(np.maximum(mags, 1e-30))) - 7)
+    return OracleCheck(float(err.max() / bf16_ulp_of(rms)), int(bf16_ulp_diff(y, y_ref).max()), float(err.max() / denom),
+                       float((err / ulps).max()))
 
 
 def profile_for_device(gpu_cores: int, apple_family: int) -> Optional[Profile]:

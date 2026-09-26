@@ -4,6 +4,10 @@ and the layers' weight maps generate the slabs, aux tensors and tables):
 
     python tools/pack_weights.py --model <ckpt dir> --out <pack dir> [--max-context 4096] [--lane-order interleaved16 --rows 16]
 
+or a drafter checkpoint through its ``Drafter`` plugin (its own pack, used next to the target's):
+
+    python tools/pack_weights.py --model <drafter dir> --out <pack dir> --drafter-kind dspark [--max-context 4096]
+
 or from an explicit plan file (kernel studies, partial packs):
 
     python tools/pack_weights.py --model <ckpt dir> --out <pack dir> --plan plan.json [--lane-order interleaved16 --rows 16]
@@ -68,17 +72,34 @@ def pack_from_model(a, layout) -> int:
     return 0
 
 
+def pack_from_drafter(a, layout) -> int:
+    from monolith.nn.pack_plan import pack_model
+    from monolith.spec import DRAFTERS
+
+    cls = DRAFTERS.resolve(a.drafter_kind)
+    if cls is None:
+        print(f"no drafter plugin registered as {a.drafter_kind!r}")
+        return 1
+    drafter = cls.from_checkpoint(a.model, target_lm_head=None, max_context=a.max_context)
+    manifest = pack_model(drafter, a.model, a.out, layout, extra={"drafter": a.drafter_kind, "options": {"max_context": a.max_context}})
+    print(f"packed {len(manifest['slabs'])} slabs, {len(manifest['aux'])} aux tensors, {manifest['nbytes'] / 2**30:.2f} GiB -> {a.out}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--plan", default=None, help="explicit plan file; omit to pack from the model package")
+    ap.add_argument("--drafter-kind", default=None, help="pack a drafter checkpoint through this Drafter plugin (e.g. dspark)")
     ap.add_argument("--max-context", type=int, default=4096)
     ap.add_argument("--num-layers-override", type=int, default=None)
     ap.add_argument("--lane-order", default="interleaved16", choices=["contiguous", "interleaved16"])
     ap.add_argument("--rows", type=int, default=16)
     a = ap.parse_args(argv)
     layout = PackLayout(rows=a.rows, lane_order=a.lane_order)
+    if a.drafter_kind is not None:
+        return pack_from_drafter(a, layout)
     if a.plan is None:
         return pack_from_model(a, layout)
     with open(a.plan) as f:

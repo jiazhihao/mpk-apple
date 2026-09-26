@@ -114,8 +114,8 @@ RunResult Queue::run(const std::vector<Dispatch>& dispatches, bool concurrent) {
       for (auto& b : d.buffers) [en setBuffer:b.buffer->impl->buf offset:b.offset atIndex:b.index];
       for (auto& b : d.bytes) [en setBytes:b.bytes.data() length:b.bytes.size() atIndex:b.index];
       for (auto& t : d.threadgroup_memory) [en setThreadgroupMemoryLength:t.second atIndex:t.first];
+      if (concurrent && d.barrier_before) [en memoryBarrierWithScope:MTLBarrierScopeBuffers];   // the same semantics as the ICB flag
       [en dispatchThreadgroups:MTLSizeMake(d.grid[0], d.grid[1], d.grid[2]) threadsPerThreadgroup:MTLSizeMake(d.threadgroup[0], d.threadgroup[1], d.threadgroup[2])];
-      if (concurrent && d.barrier_after) [en memoryBarrierWithScope:MTLBarrierScopeBuffers];
     }
     [en endEncoding];
     [cb commit];
@@ -125,6 +125,66 @@ RunResult Queue::run(const std::vector<Dispatch>& dispatches, bool concurrent) {
     r.wall_ms = now_ms() - t0;
     if (cb.error) r.error = [cb.error.localizedDescription UTF8String];
     return r;
+  }
+}
+
+bool Queue::supports_profiling() const {
+  id<MTLDevice> dev = impl->q.device;
+  return [dev supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary] && dev.counterSets.count > 0;
+}
+
+std::vector<std::pair<double, double>> Queue::profile(const std::vector<Dispatch>& dispatches) {
+  @autoreleasepool {
+    std::vector<std::pair<double, double>> out;
+    if (dispatches.empty()) return out;
+    id<MTLDevice> dev = impl->q.device;
+    id<MTLCounterSet> ts = nil;
+    for (id<MTLCounterSet> cs in dev.counterSets)
+      if ([cs.name isEqualToString:MTLCommonCounterSetTimestamp]) ts = cs;
+    if (!ts || ![dev supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary])
+      throw std::runtime_error("timestamp counter sampling at stage boundaries is not supported on this device");
+    MTLCounterSampleBufferDescriptor* desc = [[MTLCounterSampleBufferDescriptor alloc] init];
+    desc.counterSet = ts;
+    desc.storageMode = MTLStorageModeShared;
+    desc.sampleCount = 2 * dispatches.size();
+    NSError* err = nil;
+    id<MTLCounterSampleBuffer> samples = [dev newCounterSampleBufferWithDescriptor:desc error:&err];
+    if (!samples) throw std::runtime_error(std::string("counter sample buffer: ") + (err ? [err.localizedDescription UTF8String] : "?"));
+    MTLTimestamp cpu0 = 0, gpu0 = 0, cpu1 = 0, gpu1 = 0;
+    [dev sampleTimestamps:&cpu0 gpuTimestamp:&gpu0];
+    id<MTLCommandBuffer> cb = [impl->q commandBuffer];
+    for (size_t i = 0; i < dispatches.size(); i++) {
+      const Dispatch& d = dispatches[i];
+      MTLComputePassDescriptor* pass = [MTLComputePassDescriptor computePassDescriptor];
+      MTLComputePassSampleBufferAttachmentDescriptor* att = pass.sampleBufferAttachments[0];
+      att.sampleBuffer = samples;
+      att.startOfEncoderSampleIndex = 2 * i;
+      att.endOfEncoderSampleIndex = 2 * i + 1;
+      id<MTLComputeCommandEncoder> en = [cb computeCommandEncoderWithDescriptor:pass];
+      [en setComputePipelineState:d.pipeline->impl->pso];
+      for (auto& b : d.buffers) [en setBuffer:b.buffer->impl->buf offset:b.offset atIndex:b.index];
+      for (auto& b : d.bytes) [en setBytes:b.bytes.data() length:b.bytes.size() atIndex:b.index];
+      for (auto& t : d.threadgroup_memory) [en setThreadgroupMemoryLength:t.second atIndex:t.first];
+      [en dispatchThreadgroups:MTLSizeMake(d.grid[0], d.grid[1], d.grid[2]) threadsPerThreadgroup:MTLSizeMake(d.threadgroup[0], d.threadgroup[1], d.threadgroup[2])];
+      [en endEncoding];
+    }
+    [cb commit];
+    [cb waitUntilCompleted];
+    [dev sampleTimestamps:&cpu1 gpuTimestamp:&gpu1];
+    if (cb.error) throw std::runtime_error([cb.error.localizedDescription UTF8String]);
+    NSData* data = [samples resolveCounterRange:NSMakeRange(0, 2 * dispatches.size())];
+    if (!data || data.length < 2 * dispatches.size() * sizeof(MTLCounterResultTimestamp))
+      throw std::runtime_error("counter samples could not be resolved");
+    const MTLCounterResultTimestamp* r = (const MTLCounterResultTimestamp*)data.bytes;
+    // GPU ticks -> ms through the CPU/GPU timestamp correlation (both sampled around the run)
+    const double scale = (gpu1 > gpu0) ? double(cpu1 - cpu0) / double(gpu1 - gpu0) : 1.0;   // ns per GPU tick
+    const uint64_t base = r[0].timestamp;
+    for (size_t i = 0; i < dispatches.size(); i++) {
+      const uint64_t a = r[2 * i].timestamp, b = r[2 * i + 1].timestamp;
+      if (a == MTLCounterErrorValue || b == MTLCounterErrorValue) { out.push_back({-1.0, -1.0}); continue; }
+      out.push_back({double(a - base) * scale * 1e-6, double(b - base) * scale * 1e-6});
+    }
+    return out;
   }
 }
 
@@ -149,7 +209,7 @@ static void encode_icb_command(id<MTLIndirectComputeCommand> c, const Dispatch& 
   for (auto& t : d.threadgroup_memory) [c setThreadgroupMemoryLength:t.second atIndex:t.first];
   [c concurrentDispatchThreadgroups:MTLSizeMake(d.grid[0], d.grid[1], d.grid[2])
               threadsPerThreadgroup:MTLSizeMake(d.threadgroup[0], d.threadgroup[1], d.threadgroup[2])];
-  if (d.barrier_after) [c setBarrier];
+  if (d.barrier_before) [c setBarrier];                                  // the command waits for all commands before it
 }
 
 Icb::Icb(const Device& d, const std::vector<Dispatch>& ops) : impl(std::make_shared<IcbImpl>()) {
@@ -190,6 +250,7 @@ Runner::Runner(const Device& d, const Icb& icb, const std::vector<Dispatch>& ops
   impl->icb = icb.impl; impl->ops = ops;
   for (auto* r : resources) impl->resources.push_back(r->impl->buf);
   impl->state = step_state.impl->buf; impl->done_off = done_offset; impl->head_off = ring_head_offset; impl->tail_off = ring_tail_offset;
+  impl->tail = *(volatile uint32_t*)((char*)impl->state.contents + impl->tail_off);   // resume where a previous runner over the same StepState/ring stopped
   impl->ring = ring.impl->buf; impl->cap = ring_capacity;
   if (ring.nbytes() < (size_t)ring_capacity * 8) throw std::runtime_error("ring buffer needs 8 bytes per slot (token + sequence)");
 }
@@ -219,12 +280,14 @@ static void drain_ring(RunnerImpl& r) {
   *(volatile uint32_t*)((char*)r.state.contents + r.tail_off) = r.tail;
 }
 
-RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode) {
+RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_flight, bool reencode, uint64_t max_tokens) {
+  impl->tail = *(volatile uint32_t*)((char*)impl->state.contents + impl->tail_off);   // the ring tail lives in StepState: resume (or restart after a reset) from it
   RunnerImpl& r = *impl;
   RunnerStats st;
   if (steps_per_cb == 0 || in_flight == 0) throw std::runtime_error("steps_per_cb and in_flight must be >= 1");
   double t0 = now_ms(), c0 = cpu_ms_now();
   std::deque<id<MTLCommandBuffer>> pending;
+  size_t tokens_seen = 0;
   auto observe = [&](id<MTLCommandBuffer> cb) {
     [cb waitUntilCompleted];
     st.gpu_ms += (cb.GPUEndTime - cb.GPUStartTime) * 1e3;
@@ -232,8 +295,9 @@ RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_f
     if (cb.error && st.error.empty()) st.error = [cb.error.localizedDescription UTF8String];
     drain_ring(r);
     st.done = *(volatile uint32_t*)((char*)r.state.contents + r.done_off) != 0;
+    { std::lock_guard<std::mutex> lk(r.mu); tokens_seen = r.tokens.size(); }   // drained since the last drain(): this call's tokens
   };
-  while (st.steps_submitted < max_steps && !st.done && st.error.empty()) {
+  while (st.steps_submitted < max_steps && !st.done && st.error.empty() && (max_tokens == 0 || tokens_seen < max_tokens)) {
     @autoreleasepool {
       uint32_t n = std::min<uint64_t>(steps_per_cb, max_steps - st.steps_submitted);
       id<MTLCommandBuffer> cb = [r.q commandBuffer];

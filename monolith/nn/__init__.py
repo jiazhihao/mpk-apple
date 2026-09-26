@@ -9,10 +9,10 @@ from .gdn import GatedDeltaNet
 from .linear import Linear, Part, Projection, SlabGroup
 from .lm_head import LMHead
 from .mlp import GatedMLP
-from .module import LowerContext, Model, Module, StateEntry, StateSpec, WeightSpec
+from .module import LowerContext, Model, Module, StateEntry, StateSpec, WeightSpec, state_shape
 from .norm import NormInput, RMSNorm
-from .sampler import GreedySampler
+from .sampler import GreedySampler, StochasticSampler
 
 __all__ = ["GQAAttention", "DecoderLayer", "Embedding", "GatedDeltaNet", "Linear", "Part", "Projection", "SlabGroup",
-           "LMHead", "GatedMLP", "LowerContext", "Model", "Module", "StateEntry", "StateSpec", "WeightSpec",
-           "NormInput", "RMSNorm", "GreedySampler"]
+           "LMHead", "GatedMLP", "LowerContext", "Model", "Module", "StateEntry", "StateSpec", "WeightSpec", "state_shape",
+           "NormInput", "RMSNorm", "GreedySampler", "StochasticSampler"]

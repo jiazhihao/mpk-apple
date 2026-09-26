@@ -26,11 +26,25 @@ class StepReport:
 
 
 class Engine:
-    def __init__(self, program: Program, device: Optional[nt.Device] = None) -> None:
+    """``buffers`` lets several programs share device buffers by name (a prefill program at T = P and a decode
+    program at T = 1 over the same weights, states and StepState)."""
+
+    def __init__(self, program: Program, device: Optional[nt.Device] = None, buffers: Optional[Dict[str, nt.Buffer]] = None,
+                 fast_math: bool = False) -> None:
+        """``fast_math``: compile the kernels with Metal's fast math mode (the default is the safe mode)."""
         self.program = program
+        self.fast_math = fast_math
         self.dev = device or nt.Device()
         self.buffers: Dict[str, nt.Buffer] = {}
         for name, spec in program.buffers.items():
+            if buffers is not None and name in buffers and buffers[name].nbytes >= spec.nbytes:
+                self.buffers[name] = buffers[name]           # shared (weights, states, StepState, ring, arena values)
+                continue
+            if buffers is not None and name in buffers and spec.role in ("state", "step_state", "ring", "weights"):
+                raise ValueError(f"shared buffer {name}: {buffers[name].nbytes} bytes, program needs {spec.nbytes}")
+            if spec.file is not None:
+                self.buffers[name] = nt.Buffer.from_file(self.dev, spec.file, spec.file_offset, spec.nbytes)
+                continue
             if spec.init is not None:
                 if len(spec.init) > spec.nbytes:
                     raise ValueError(f"buffer {name}: init larger than nbytes")
@@ -43,11 +57,11 @@ class Engine:
             self.buffers[name] = buf
         self.pipelines: Dict[str, nt.Pipeline] = {}
         for key, k in program.kernels.items():
-            lib = nt.Library(self.dev, k.source, k.macros)
+            lib = nt.Library(self.dev, k.source, k.macros, k.language_version, fast_math)
             self.pipelines[key] = nt.Pipeline(lib, k.function, True)
         self.ops = []
         for o in program.ops:
-            d = nt.Dispatch().pipeline(self.pipelines[o.kernel]).grid(*o.grid).threadgroup(*o.threadgroup).barrier(o.barrier_after)
+            d = nt.Dispatch().pipeline(self.pipelines[o.kernel]).grid(*o.grid).threadgroup(*o.threadgroup).barrier(o.barrier_before)
             for index, bname, off in o.bindings:
                 d.buffer(index, self.buffers[bname], off)
             for index, length in o.threadgroup_memory:
@@ -61,11 +75,20 @@ class Engine:
         self.runner = nt.Runner(self.dev, self.icb, self.ops, list(self.buffers.values()), self.buffers[program.step_state],
                                 lay.offset("done"), lay.offset("ring_head"), lay.offset("ring_tail"), ring, program.ring_capacity)
 
-    def run(self, max_steps: int, *, steps_per_cb: int = 8, in_flight: int = 3, reencode: bool = False) -> StepReport:
-        st = self.runner.run(max_steps, steps_per_cb, in_flight, reencode)
+    def run(self, max_steps: int, *, steps_per_cb: int = 8, in_flight: int = 3, reencode: bool = False, max_tokens: int = 0) -> StepReport:
+        """Replay up to ``max_steps`` steps (``max_tokens`` > 0: stop submitting once that many tokens arrived; the
+        queued buffers still complete, so a few more steps may run)."""
+        st = self.runner.run(max_steps, steps_per_cb, in_flight, reencode, max_tokens)
         if st.error:
             raise RuntimeError(st.error)
         return StepReport(st.steps_submitted, st.command_buffers, st.gpu_ms, st.wall_ms, st.host_busy_ms, st.done, self.runner.drain())
+
+    def profile(self, steps: int = 3) -> List[List[Tuple[float, float]]]:
+        """Per-dispatch GPU (start, end) ms for ``steps`` re-encoded steps (one encoder per op with timestamp counter
+        samples, so the numbers carry encoder-boundary gaps the ICB replay does not have — use them for the shares
+        and the per-op durations, not for the step total)."""
+        q = nt.Queue(self.dev)
+        return [q.profile(self.ops) for _ in range(steps)]
 
     def state(self) -> Dict[str, object]:
         buf = self.buffers[self.program.step_state]

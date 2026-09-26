@@ -59,14 +59,16 @@ NB_MODULE(_native, m) {
            nb::arg("x"), nb::arg("y") = 1, nb::arg("z") = 1, nb::rv_policy::reference_internal)
       .def("threadgroup", [](Dispatch& d, uint32_t x, uint32_t y, uint32_t z) -> Dispatch& { d.threadgroup[0] = x; d.threadgroup[1] = y; d.threadgroup[2] = z; return d; },
            nb::arg("x"), nb::arg("y") = 1, nb::arg("z") = 1, nb::rv_policy::reference_internal)
-      .def("barrier", [](Dispatch& d, bool on) -> Dispatch& { d.barrier_after = on; return d; }, nb::arg("on") = true, nb::rv_policy::reference_internal);
+      .def("barrier", [](Dispatch& d, bool on) -> Dispatch& { d.barrier_before = on; return d; }, nb::arg("on") = true, nb::rv_policy::reference_internal);
 
   nb::class_<RunResult>(m, "RunResult")
       .def_ro("gpu_ms", &RunResult::gpu_ms).def_ro("wall_ms", &RunResult::wall_ms).def_ro("error", &RunResult::error);
 
   nb::class_<Queue>(m, "Queue")
       .def(nb::init<const Device&>(), nb::arg("device"))
-      .def("run", &Queue::run, nb::arg("dispatches"), nb::arg("concurrent") = false);
+      .def("run", &Queue::run, nb::arg("dispatches"), nb::arg("concurrent") = false)
+      .def("profile", &Queue::profile, nb::arg("dispatches"))
+      .def("supports_profiling", &Queue::supports_profiling);
 
   nb::class_<Icb>(m, "Icb")
       .def(nb::init<const Device&, const std::vector<Dispatch>&>(), nb::arg("device"), nb::arg("ops"), nb::keep_alive<1, 3>())
@@ -84,7 +86,7 @@ NB_MODULE(_native, m) {
            nb::arg("device"), nb::arg("icb"), nb::arg("ops"), nb::arg("resources"), nb::arg("step_state"), nb::arg("done_offset"),
            nb::arg("ring_head_offset"), nb::arg("ring_tail_offset"), nb::arg("ring"), nb::arg("ring_capacity"),
            nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 10>())
-      .def("run", &Runner::run, nb::arg("max_steps"), nb::arg("steps_per_cb") = 8, nb::arg("in_flight") = 3, nb::arg("reencode") = false,
+      .def("run", &Runner::run, nb::arg("max_steps"), nb::arg("steps_per_cb") = 8, nb::arg("in_flight") = 3, nb::arg("reencode") = false, nb::arg("max_tokens") = 0,
            nb::call_guard<nb::gil_scoped_release>())
       .def("drain", &Runner::drain);
 }

@@ -3,6 +3,7 @@ on:
   push:
     branches: [main, "roadmap/**"]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 jobs:
   contract:

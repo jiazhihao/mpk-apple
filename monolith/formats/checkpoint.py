@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
-SIDE_KEYS = ("weight_scale", "weight_scale_2", "input_scale")
+SIDE_KEYS = ("weight_scale", "weight_scale_2", "input_scale", "scales", "biases")
 
 
 @dataclass
@@ -14,7 +14,7 @@ class TensorGroup:
     base: str                                   # e.g. "model.language_model.layers.0.mlp.gate_proj"
     weight: str                                 # the "<base>.weight" key
     sides: Dict[str, str] = field(default_factory=dict)   # side key -> full name
-    format: str = ""                            # "nvfp4" | "fp8_e4m3" | "bf16" | "f32" | ""
+    format: str = ""                            # "nvfp4" | "fp8_e4m3" | "int4_affine" | "bf16" | "f32" | ""
 
 
 def group_tensors(names: Iterable[str], dtypes: Mapping[str, str]) -> Dict[str, TensorGroup]:
@@ -42,6 +42,8 @@ def detect_format(g: TensorGroup, dtypes: Mapping[str, str]) -> str:
         return "nvfp4"
     if wd == "F8_E4M3" and "weight_scale" in g.sides and dtypes.get(g.sides["weight_scale"]) == "F32":
         return "fp8_e4m3"
+    if wd == "U32" and "scales" in g.sides and "biases" in g.sides and dtypes.get(g.sides["scales"]) in ("F16", "BF16"):
+        return "int4_affine"                      # MLX / AWQ affine 4-bit groups (the group size comes from the shapes)
     if wd == "BF16":
         return "bf16"
     if wd == "F32":
@@ -54,4 +56,6 @@ def logical_shape(g: TensorGroup, shapes: Mapping[str, Tuple[int, ...]]) -> Opti
     sh = tuple(shapes[g.weight])
     if g.format == "nvfp4":
         return sh[:-1] + (sh[-1] * 2,)
+    if g.format == "int4_affine":
+        return sh[:-1] + (sh[-1] * 8,)
     return sh

@@ -62,10 +62,15 @@ class Projection:
 
 class Linear(Module):
     def __init__(self, in_features: int, parts: Sequence[Part], *, prefix: str = "", row_perm: Optional[np.ndarray] = None,
-                 epilogue: Optional[str] = None, chunk: Optional[int] = None) -> None:
+                 epilogue: Optional[str] = None, chunk: Optional[int] = None, round_residual: bool = False) -> None:
+        """``round_residual``: with the residual epilogue, round the product to BF16 before the add (the reference's
+        separate linear + BF16 add, two roundings) instead of the fused single rounding."""
         super().__init__(prefix=prefix)
         if epilogue not in EPILOGUES:
             raise ValueError(f"Linear: epilogue must be one of {EPILOGUES}, got {epilogue!r}")
+        if round_residual and epilogue != "residual":
+            raise ValueError("Linear: round_residual needs the residual epilogue")
+        self.round_residual = bool(round_residual)
         self.k = in_features
         self.parts = tuple(parts)
         self.n = sum(p.rows for p in self.parts)
@@ -112,6 +117,8 @@ class Linear(Module):
         if self.epilogue == "residual":
             if residual is None:
                 raise ValueError("Linear with a residual epilogue needs the residual")
+            if self.round_residual:
+                acc = acc.to(x.dtype).to(torch.float32)
             acc = acc + residual.to(torch.float32)
         elif self.epilogue == "silu_mul":
             half = self.n // 2
@@ -119,30 +126,55 @@ class Linear(Module):
         return acc.to(x.dtype)
 
     # ---- IR -----------------------------------------------------------------------------------------------------
-    def lower(self, g: Graph, x: Value, *, norm=None, residual: Optional[Value] = None, name: Optional[str] = None) -> Projection:
+    def lower(self, g: Graph, x: Value, *, norm=None, residual: Optional[Value] = None, name: Optional[str] = None,
+              rows: Optional[Tuple[int, int]] = None, groups: Optional[Sequence[int]] = None, sibling: bool = False) -> Projection:
+        """One ``gemv`` op per format group. ``rows = (start, count)`` restricts the first group to that row range
+        (its own dispatch over the slab — a mixer emits its q|k|v rows, its core, then the gate rows as an
+        un-barriered ``sibling``, design §5.12); ``groups`` selects which format groups to emit (all by default)."""
         if (self.epilogue == "residual") != (residual is not None):
             raise ValueError(f"Linear {self.prefix}: residual epilogue and residual input must go together")
+        if rows is not None and self.epilogue == "silu_mul":
+            raise ValueError(f"Linear {self.prefix}: a row range cannot cut a silu_mul projection")
         t = x.shape[0]
         proj = Projection([])
-        for i, grp in enumerate(self.slab_groups()):
+        all_groups = self.slab_groups()
+        which = list(range(len(all_groups))) if groups is None else list(groups)
+        for i, gi in enumerate(which):
+            grp = all_groups[gi]
             w = self.weight_value(g, grp.name, (grp.rows, grp.k), grp.format)
             ins = [x, w]
             if norm is not None:
                 ins += [norm.stat, norm.weight]
             if residual is not None:
                 ins.append(residual)
-            n_out = grp.rows // 2 if self.epilogue == "silu_mul" else grp.rows
-            out_name = name if (name and len(self.slab_groups()) == 1) else f"{grp.name}.y"
+            ranged = rows is not None and gi == 0
+            start, count = (int(rows[0]), int(rows[1])) if ranged else (0, grp.rows)
+            if start < 0 or count <= 0 or start + count > grp.rows:
+                raise ValueError(f"Linear {self.prefix}: row range {rows} outside the slab's {grp.rows} rows")
+            n_out = count // 2 if self.epilogue == "silu_mul" else count
+            out_name = name if (name and len(which) == 1) else f"{grp.name}.y" + (f".r{start}" if ranged else "")
             y = g.value(out_name, (t, n_out), DType.BF16)
-            attrs: Dict[str, Any] = dict(norm=norm is not None, epilogue=self.epilogue, segments=grp.segments, format=grp.format)
+            attrs: Dict[str, Any] = dict(norm=norm is not None, epilogue=self.epilogue, format=grp.format)
+            if self.round_residual:
+                attrs["round_residual"] = True
             if norm is not None:
                 attrs["eps"] = norm.eps
             if self.epilogue == "silu_mul":
                 attrs["chunk"] = self.chunk
-            g.op("gemv", ins, [y], domain=BlockDomain("rows", grp.rows), klass=OpClass.MAP, **attrs)
-            proj.values.append(y)
+            if ranged:
+                attrs["row_range"] = (start, count)
+            if sibling:
+                attrs["sibling"] = True
+            segs = []
             col = 0
-            for local, rows in grp.segments:
-                proj.segments[local] = (i, col, rows)
-                col += rows
+            for local, nrows in grp.segments:
+                lo, hi = col, col + nrows
+                if hi > start and lo < start + count:
+                    off = max(lo, start) - start
+                    segs.append((local, min(hi, start + count) - max(lo, start)))
+                    proj.segments[local] = (i, off, min(hi, start + count) - max(lo, start))
+                col += nrows
+            attrs["segments"] = segs
+            g.op("gemv", ins, [y], domain=BlockDomain("rows", count), klass=OpClass.MAP, **attrs)
+            proj.values.append(y)
         return proj
