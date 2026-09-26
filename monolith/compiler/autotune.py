@@ -107,14 +107,18 @@ class Autotuner:
         variants: List[Tuple[str, Dict[str, Any]]] = []
         rgs = [r for r in (2, 4, 8) if r <= info.rows and info.rows % r == 0]
         for rg, mode in itertools.product(rgs, ("crew", "crew2", "block")):
-            variants.append(("apply", {"rg": rg, "mode": mode, "fuse": False}))
-            if norm_fed:
-                variants.append(("fused", {"rg": rg, "mode": mode, "fuse": True}))
+            # the row splits (RSPLIT > 1) only where the blocks alone leave SIMD-groups idle or end in a short last wave
+            for rs in kernels.gemv_rsplits(info.rows, rg, epilogue):
+                if rs > 1 and (mode == "block" or pinfo.n_blocks >= 4 * self.grid(mode, pinfo.n_blocks)[0]):
+                    continue
+                variants.append(("apply", {"rg": rg, "mode": mode, "fuse": False, "rsplit": rs}))
+                if norm_fed:
+                    variants.append(("fused", {"rg": rg, "mode": mode, "fuse": True, "rsplit": rs}))
         results = []
         default_ms = None
         for _, v in variants:
             try:
-                macros = kernels.gemv_macros(pinfo, t=t, rg=v["rg"], epilogue=epilogue, norm=v["fuse"], out_bf16=True)
+                macros = kernels.gemv_macros(pinfo, t=t, rg=v["rg"], epilogue=epilogue, norm=v["fuse"], out_bf16=True, rsplit=v["rsplit"])
             except ValueError:
                 continue
             n_sg, grid, tg = self.grid(v["mode"], pinfo.n_blocks)
@@ -135,17 +139,21 @@ class Autotuner:
                     d.buffer(7, res)
                 ds.append(d)
             ms = self._time(ds) / copies
-            is_default = v["rg"] == int(kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)["RG"]) and v["mode"] == "crew" and not v["fuse"]
+            is_default = (v["rg"] == int(kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)["RG"]) and v["mode"] == "crew"
+                          and not v["fuse"] and v["rsplit"] == 1)
             if is_default:
                 default_ms = ms
             results.append((ms, v, macros))
         results.sort(key=lambda r: r[0])
         best_ms, bv, bmacros = results[0]
         if default_ms is not None and best_ms > default_ms * (1 - NOISE_MARGIN):
-            bv = {"rg": int(kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)["RG"]), "mode": "crew", "fuse": False}
+            bv = {"rg": int(kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)["RG"]), "mode": "crew", "fuse": False, "rsplit": 1}
             bmacros = kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)
             best_ms = default_ms
-        choice = Choice({"RG": bmacros["RG"]}, bv["mode"], bv["fuse"], best_ms, default_ms or best_ms)
+        cmac = {"RG": bmacros["RG"]}
+        if "RSPLIT" in bmacros:
+            cmac["RSPLIT"] = bmacros["RSPLIT"]
+        choice = Choice(cmac, bv["mode"], bv["fuse"], best_ms, default_ms or best_ms)
         self.choices[key] = {"macros": choice.macros, "grid_mode": choice.grid_mode, "fuse_norm": choice.fuse_norm, "ms": choice.ms,
                              "default_ms": choice.default_ms, "variants": [(round(ms, 4), v) for ms, v, _ in results]}
         return choice

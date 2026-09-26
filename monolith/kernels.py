@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 import struct
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence, Tuple
+from typing import List, Dict, Mapping, Optional, Sequence, Tuple
 
 from .formats import FORMATS
 from .formats.blm import PackInfo
@@ -91,9 +91,16 @@ def unit_words(info: PackInfo) -> str:
     return str(info.payload_words)
 
 
+def gemv_rsplits(rows: int, rg: int, epilogue: Optional[str]) -> List[int]:
+    """The row splits a slab geometry admits: ``RSPLIT`` divides the rows per block (silu_mul: the gate rows) and
+    leaves at least one row group per item."""
+    share = rows // 2 if epilogue == "silu_mul" else rows
+    return [s for s in (1, 2, 4, 8, 16) if share % s == 0 and (share // s) % rg == 0]
+
+
 def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool = False, norm: bool = False,
                 epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False,
-                pairs: Optional[Tuple[int, int, bool]] = None) -> Dict[str, str]:
+                pairs: Optional[Tuple[int, int, bool]] = None, rsplit: int = 1) -> Dict[str, str]:
     """The compile-time specialization of gemv_T for one slab geometry, token count and set of fusions
     (``norm``: RMSNorm scaling on the input; ``epilogue``: ``residual`` | ``silu_mul``; ``stat_out``: per-block
     partial sums of squares of the outputs for the next norm; ``round_before_residual``: the product is rounded to
@@ -126,6 +133,12 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
         if epilogue != "residual":
             raise ValueError("gemv_T: round_before_residual needs the residual epilogue")
         macros["EPILOGUE_ROUND"] = "1"
+    if rsplit != 1:
+        # the work items split a block's rows (design §5.5): a narrow slab's blocks alone leave most of the crew idle —
+        # the 0.6B's 1024-row projections are 64 blocks over the M5 Pro's 240 SIMD-groups (decode-kernels.md §10)
+        if rsplit not in gemv_rsplits(info.rows, rg, epilogue) or pairs is not None:
+            raise ValueError(f"gemv_T: RSPLIT={rsplit} does not fit R={info.rows}, RG={rg}, epilogue {epilogue!r}")
+        macros["RSPLIT"] = f"{rsplit}u"
     if pairs is not None:
         # the MoE expert mode (ops/moe.py): (top_k, blocks per expert, the input is per (token, slot) row); T = 1 per item
         top_k, expert_blocks, x_slot = pairs
@@ -321,7 +334,9 @@ def embed_source(fmt: Optional[str] = None) -> str:
 def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None) -> Dict[str, str]:
     """``info`` = the slab a tied lm_head streams (gather from the pack: a BF16 slab, or a quantized one decoded on
     the fly — a format with block scales and a per-tensor scale of 1), None = a row-major BF16 table.
-    ``ids="block"``: a draft block — row 0 reads the token at ``tokens[0]`` (the anchor), the other rows the mask id."""
+    ``ids="block"``: a draft block — row 0 reads the token at ``tokens[0]`` (the anchor), the other rows the mask id.
+    ``ids="ingest"``: an LM drafter's ingest — row t reads the committed token ``tokens[checkpoint_index − n_inject + t]``
+    (the last ``n_inject`` of the step's pending tokens); ``ids="ingest_anchor"``: those rows, then the anchor (its first chain step)."""
     if info is None:
         macros = {"EMBED_PACKED": "0"}
     elif info.format == "bf16":
@@ -337,10 +352,10 @@ def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None) 
             raise ValueError(f"embed: sub-word units (K={info.k}) are the shader GEMV's; the gather reads whole-word units")
         macros = {"EMBED_PACKED": "1", "EMBED_DEQUANT": "1", "R": str(info.rows), "UNIT_WORDS": unit_words(info),
                   "K": str(info.k), "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1", **unit_geometry(info, f)}
-    if ids not in (None, "block"):
+    if ids not in (None, "block", "ingest", "ingest_anchor"):
         raise ValueError(f"embed: unknown ids mode {ids!r}")
-    if ids == "block":
-        macros["EMBED_IDS"] = "1"
+    if ids is not None:
+        macros["EMBED_IDS"] = {"block": "1", "ingest": "2", "ingest_anchor": "3"}[ids]
     return macros
 
 
@@ -390,12 +405,21 @@ def gqa_source(v2: bool = False, steal: bool = False) -> str:
     return src + template("gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
 
 
-def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4, steal: bool = False, steal_hits: bool = False) -> Dict[str, str]:
+def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4, steal: bool = False, steal_hits: bool = False,
+               lm_mode: int = 0, chain_i: int = 0) -> Dict[str, str]:
     """Measured on the M5 Pro (docs/research/decode-kernels.md §1): RBMAX = 4 query rows per pass is 13× faster than
-    8 (register spills above 4 rows) and CH = 64 keys per chunk is the best chunk from 1 K to 32 K of context."""
+    8 (register spills above 4 rows) and CH = 64 keys per chunk is the best chunk from 1 K to 32 K of context.
+    ``lm_mode`` (an LM drafter's attention, design §5.8): 1 = the ingest pass (``n_inject`` rows ending at
+    ``position``), 2 = chain step ``chain_i`` (``n_chain`` rows at ``position + chain_i``)."""
     if head_dim % 32 or chunk % 32 or rb_max < 1:
         raise ValueError("gqa_decode: head_dim and chunk must be multiples of 32")
+    if lm_mode not in (0, 1, 2, 3) or chain_i < 0 or (chain_i and lm_mode != 2):
+        raise ValueError(f"gqa_decode: lm_mode must be 0, 1 or 2 and chain_i belongs to mode 2 (got {lm_mode}, {chain_i})")
     m = {"D": str(head_dim), "CH": f"{chunk}u", "RBMAX": f"{rb_max}u"}
+    if lm_mode:
+        m["LM_MODE"] = str(lm_mode)
+        if lm_mode == 2:
+            m["CHAIN_I"] = f"{chain_i}u"
     if steal:
         m["STEAL"] = "1"
         if steal_hits:
@@ -541,25 +565,27 @@ CONF_LOG_WIDTH = 16
 
 
 def select_params(gamma: int, threshold: float, t_max: int, mode: int = 0, cost: Optional[Sequence[float]] = None, log_cap: int = 0,
-                  ctx_cap: int = 0) -> bytes:
+                  ctx_cap: int = 0, lm: bool = False) -> bytes:
     """The ``SelectParams`` record: mode 0 = the confident-prefix rule (``threshold``), 1 = the cost-aware rule with
     ``cost[l]`` = the relative cost of a (1 + l)-token target pass for l = 0 … γ (≤ 16 entries; cost[0] = 1),
     2 = a fixed verify length (``threshold`` = L). ``log_cap`` > 0 logs the block's confidences per step; ``ctx_cap``
-    > 0 (the target's KV rows) clamps L so the verify rows stay inside the caches."""
+    > 0 (the target's KV rows) clamps L so the verify rows stay inside the caches. ``lm``: an LM drafter (design §5.8):
+    the select records the drafter's context length as the position it ingested plus the chain's γ rows."""
     c = list(cost or [])
     if mode == 1 and (len(c) < 1 or len(c) > 16 or abs(c[0] - 1.0) > 1e-6 or any(x <= 0 for x in c)):
         raise ValueError("select_params: the cost rule needs 1..16 positive costs relative to cost[0] = 1")
     c = c + [1.0] * (16 - len(c))
-    return struct.pack("<IfII16fIIII", gamma, threshold, t_max, mode, *c, log_cap, ctx_cap, 0, 0)
+    return struct.pack("<IfII16fIIII", gamma, threshold, t_max, mode, *c, log_cap, ctx_cap, 1 if lm else 0, 0)
 
 
 ACCEPT_LOG_CAP = 65536
 
 
-def accept_params(ring_cap: int, eos: int, log_cap: int = 0, ctx_cap: int = 0) -> bytes:
+def accept_params(ring_cap: int, eos: int, log_cap: int = 0, ctx_cap: int = 0, lm: bool = False) -> bytes:
     """``ctx_cap`` > 0: the program's context capacity — the scan stops the program (error 2) at a step whose first
-    position would reach it (see kernels/spec_ops.metal)."""
-    return struct.pack("<IiII", ring_cap, eos, log_cap, ctx_cap)
+    position would reach it (see kernels/spec_ops.metal). ``lm``: an LM drafter — ``n_inject`` becomes the committed
+    rows the drafter has not ingested (``position − drafter_ctx_len``) and ``n_chain`` says whether the step drafts."""
+    return struct.pack("<IiIIIIII", ring_cap, eos, log_cap, ctx_cap, 1 if lm else 0, 0, 0, 0)
 
 
 def draft_attn_params(*, heads: int, kv_heads: int, gamma: int, ctx_len: int, n_new: int, n_sg: int, q_off: int, k_off: int, v_off: int,

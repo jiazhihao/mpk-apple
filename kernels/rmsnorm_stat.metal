@@ -22,7 +22,7 @@ kernel void rmsnorm_stat(device const ushort* h [[buffer(0)]], device float* sta
                          uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
 #if STEP_STATE
-  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))) return;
+  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))))) return;
 #else
   if (t >= p.t_active) return;
 #endif

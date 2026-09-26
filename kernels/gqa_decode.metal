@@ -57,7 +57,15 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
   const uint T = p.t_active;                                   // the block size γ (static)
 #elif STEP_STATE
   if (st->done) return;
+#if LM_MODE == 1
+  const uint T = st->n_inject, position = st->position - st->n_inject, n_new = 0u;   // an LM drafter's ingest: the committed rows it has not seen yet
+#elif LM_MODE == 2
+  const uint T = st->n_chain, position = st->position + CHAIN_I, n_new = 0u;         // an LM drafter's chain step i: one row at position + i
+#elif LM_MODE == 3
+  const uint T = st->n_inject + st->n_chain, position = st->position - st->n_inject, n_new = 0u;   // its first step: the ingest rows, then the anchor
+#else
   const uint T = st->t_this_step, position = st->position, n_new = 0u;
+#endif
 #else
   const uint T = p.t_active, position = p.position, n_new = 0u;
 #endif
@@ -149,24 +157,32 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
     float d_c[RBMAX], o[RBMAX][DL];
     for (uint r = 0; r < RBMAX; r++) { d_c[r] = 0.0f; for (uint e = 0; e < DL; e++) o[r][e] = 0.0f; }
     for (uint g = 0; g < CH / 32u; g++) {
-      for (uint kk = 0; kk < 32u; kk++) {
-        const uint key = k0 + g * 32u + kk;
-        if (key >= k1) break;
-        float vf[DL];
-        if (key < position) load_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, vf);
+      for (uint kk = 0; kk < 32u; kk += PV_UNROLL) {
+        // the values of PV_UNROLL keys are requested before any is consumed: the loads overlap instead of each
+        // waiting its turn (a short context at T = 1 is this pass's latency chain: 38 → 12 µs per layer on the M5 Pro)
+        float vf[PV_UNROLL][DL];
+        for (uint u = 0; u < PV_UNROLL; u++) {
+          const uint key = k0 + g * 32u + kk + u;
+          if (key >= k1) { for (uint e = 0; e < DL; e++) vf[u][e] = 0.0f; }
+          else if (key < position) load_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, vf[u]);
 #if DRAFT
-        else if (key < qpos0) load_dl(kvp + (key - position) * p.pad1 + p.kv_heads * D + j * D + lane * DL, vf);
-        else load_dl(qkvg + (key - qpos0) * p.in_stride + p.v_off + j * D + lane * DL, vf);
+          else if (key < qpos0) load_dl(kvp + (key - position) * p.pad1 + p.kv_heads * D + j * D + lane * DL, vf[u]);
+          else load_dl(qkvg + (key - qpos0) * p.in_stride + p.v_off + j * D + lane * DL, vf[u]);
 #else
-        else load_dl(qkvg + (key - position) * p.in_stride + p.v_off + j * D + lane * DL, vf);
+          else load_dl(qkvg + (key - position) * p.in_stride + p.v_off + j * D + lane * DL, vf[u]);
 #endif
-        for (uint r = 0; r < RBMAX; r++) {
-          if (r < nr) {
-            const float sc = simd_shuffle(s_keep[g][r], ushort(kk));
-            const float pr = (sc == -INFINITY) ? 0.0f : exp(sc - m_c[r]);
-            d_c[r] += pr;
-            const float pb = round_bf16(pr);
-            for (uint e = 0; e < DL; e++) o[r][e] = fma(pb, vf[e], o[r][e]);
+        }
+        for (uint u = 0; u < PV_UNROLL; u++) {
+          const uint key = k0 + g * 32u + kk + u;
+          if (key >= k1) break;
+          for (uint r = 0; r < RBMAX; r++) {
+            if (r < nr) {
+              const float sc = simd_shuffle(s_keep[g][r], ushort(kk + u));
+              const float pr = (sc == -INFINITY) ? 0.0f : exp(sc - m_c[r]);
+              d_c[r] += pr;
+              const float pb = round_bf16(pr);
+              for (uint e = 0; e < DL; e++) o[r][e] = fma(pb, vf[u][e], o[r][e]);
+            }
           }
         }
       }
@@ -198,7 +214,15 @@ kernel void gqa_merge(device const float* part_o [[buffer(0)]], device const flo
 #endif
 #elif STEP_STATE
   if (st->done) return;
+#if LM_MODE == 1
+  const uint T = st->n_inject, ctx = st->position;                                   // the ingest rows end at the new anchor's position
+#elif LM_MODE == 2
+  const uint T = st->n_chain, ctx = st->position + CHAIN_I + T;
+#elif LM_MODE == 3
+  const uint T = st->n_inject + st->n_chain, ctx = st->position + st->n_chain;
+#else
   const uint T = st->t_this_step, ctx = st->position + T;
+#endif
 #else
   const uint T = p.t_active, ctx = p.position + T;
 #endif

@@ -22,18 +22,20 @@ from .weights import PREFIX, bind_checkpoint_formats
 @register_model("Qwen3ForCausalLM")
 class Qwen3Model(Model):
     def __init__(self, config: Qwen3Config, *, max_context: int = 4096, pack_rows: int = 16,
-                 num_layers_override: int | None = None) -> None:
-        super().__init__(prefix="")
+                 num_layers_override: int | None = None, prefix: str = "") -> None:
+        """``prefix``: in front of every slab, aux entry, table, state and activation name — a tree that lives beside
+        another in one program (the LM drafter of design §5.8 builds its model with ``prefix="draft."``)."""
+        super().__init__(prefix=prefix)
         self.config = config
         self.max_context = max_context
         c = config
         h, eps, d = c.hidden_size, c.rms_norm_eps, c.head_dim
         self.n_layers = c.num_hidden_layers if num_layers_override is None else num_layers_override
-        p = PREFIX
-        self.embed_tokens = Embedding(c.vocab_size, h, f"{p}embed_tokens.weight", prefix="embed_tokens.")
+        p, ap = PREFIX, prefix
+        self.embed_tokens = Embedding(c.vocab_size, h, f"{p}embed_tokens.weight", prefix=f"{ap}embed_tokens.")
         self.blocks: List[DecoderLayer] = []
         for i in range(self.n_layers):
-            lp, hp = f"layers.{i}.", f"{p}layers.{i}."
+            lp, hp = f"{ap}layers.{i}.", f"{p}layers.{i}."
             mixer: Module = GQAAttention(h, c.num_attention_heads, c.num_key_value_heads, d, d, c.rope_theta, eps,
                                          hf_prefix=f"{hp}self_attn.", prefix=f"{lp}self_attn.", max_context=max_context,
                                          gate=False, norm_one_plus=False)
@@ -41,12 +43,12 @@ class Qwen3Model(Model):
                 i, RMSNorm(h, eps, f"{hp}input_layernorm.weight", prefix=f"{lp}input_norm.", one_plus=False), mixer,
                 RMSNorm(h, eps, f"{hp}post_attention_layernorm.weight", prefix=f"{lp}post_norm.", one_plus=False),
                 GatedMLP(h, c.intermediate_size, hf_prefix=f"{hp}mlp.", prefix=f"{lp}mlp.", chunk=pack_rows // 2), prefix=lp))
-        self.norm = RMSNorm(h, eps, f"{p}norm.weight", prefix="norm.", one_plus=False)
+        self.norm = RMSNorm(h, eps, f"{p}norm.weight", prefix=f"{ap}norm.", one_plus=False)
         if c.tie_word_embeddings:
-            self.lm_head = LMHead(h, c.vocab_size, tied=self.embed_tokens, prefix="lm_head.")
+            self.lm_head = LMHead(h, c.vocab_size, tied=self.embed_tokens, prefix=f"{ap}lm_head.")
         else:
-            self.lm_head = LMHead(h, c.vocab_size, hf_name="lm_head.weight", prefix="lm_head.")
-        self.sampler = GreedySampler(prefix="sampler.")
+            self.lm_head = LMHead(h, c.vocab_size, hf_name="lm_head.weight", prefix=f"{ap}lm_head.")
+        self.sampler = GreedySampler(prefix=f"{ap}sampler.")
         self.tap_values: Dict[int, Value] = {}
 
     @classmethod
@@ -70,7 +72,7 @@ class Qwen3Model(Model):
     def tables(self) -> Dict[str, Tuple[str, Any]]:
         d = self.config.head_dim
         cos, sin = rope_tables_permuted(self.config.rope_theta, d, d, self.max_context)      # full RoPE: identity permutation
-        return {"rope_cos": ("BF16", f32_to_bf16(cos)), "rope_sin": ("BF16", f32_to_bf16(sin))}
+        return {f"{self.prefix}rope_cos": ("BF16", f32_to_bf16(cos)), f"{self.prefix}rope_sin": ("BF16", f32_to_bf16(sin))}
 
     def forward(self, ids: Any, state: Dict[str, Any], pos: int) -> Tuple[Any, List[Any], Dict[str, Any]]:
         h = self.embed_tokens.forward(ids)
@@ -85,8 +87,8 @@ class Qwen3Model(Model):
         ctx = LowerContext(t=tokens.shape[0])
         for e in self.state_spec().entries:
             ctx.states[e.name] = g.state(e.name, state_shape(e), e.dtype)
-        for name, (dtype, arr) in self.tables().items():
-            ctx.consts[name] = g.const(name, tuple(int(x) for x in np.asarray(arr).shape), DType.parse(dtype.lower()))
+        for name, (dtype, arr) in self.tables().items():                                  # the layers read the tables by their bare names
+            ctx.consts[name[len(self.prefix):]] = g.const(name, tuple(int(x) for x in np.asarray(arr).shape), DType.parse(dtype.lower()))
         h = self.embed_tokens.lower(g, tokens, ctx)
         self.tap_values = {-1: h}
         for blk in self.blocks:

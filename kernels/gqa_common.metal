@@ -23,6 +23,17 @@
 #endif
 #define DL (D / 32u)
 
+#ifndef LM_MODE
+#define LM_MODE 0                    // an LM drafter's attention (design §5.8): 1 = its ingest pass (T = n_inject rows ending at position),
+#endif                               // 2 = chain step CHAIN_I (T = n_chain rows at position + CHAIN_I), 3 = the first chain step
+                                     // (n_inject ingest rows then the anchor: T = n_inject + n_chain from position - n_inject); 0 = the target's
+#ifndef CHAIN_I
+#define CHAIN_I 0u
+#endif
+#ifndef PV_UNROLL
+#define PV_UNROLL 8u                 // keys whose values the P·V pass loads ahead of consuming them (divides 32)
+#endif
+
 struct GqaParams {
   uint heads; uint kv_heads; uint t_active; uint position;
   uint n_sg; uint q_off; uint gate_off; uint k_off;

@@ -96,6 +96,9 @@ class GatedDeltaNet(Module):
     def lower(self, g: Graph, h: Value, norm, ctx: LowerContext) -> Value:
         """qkv|a|b rows → the mixer core (the FP32 read-out) ‖ the z rows as an un-barriered sibling → the gated norm
         (design §5.12: the ALU-bound core is encoded first, the bus-bound gate GEMV hides under it)."""
+        if ctx.mixer_attrs:
+            raise NotImplementedError(f"GatedDeltaNet {self.prefix}: the GDN kernels have no LM-drafter modes ({sorted(ctx.mixer_attrs)}); "
+                                      "an LM drafter must be an attention-only model")
         vd = self.value_dim
         n0 = self.in_proj.slab_groups()[0].rows                          # z | qkv (| a | b when one format)
         main = self.in_proj.lower(g, h, norm=norm, rows=(vd, n0 - vd))

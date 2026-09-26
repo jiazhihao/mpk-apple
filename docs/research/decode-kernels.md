@@ -693,3 +693,98 @@ structural lever is acceptance: the 0.6B LM draft takes 4.17 tokens per step at 
 3.06, and our engine would run a draft token of it for ~2 ms (mlx-lm pays 3.7) — an autoregressive-LM drafter
 plugin projects to 8.5–8.7 ms per token at N = 5–7, 6–8 % under mlx-lm's best, at the cost of a second model's
 step program inside the round.
+
+## 10. The LM drafter and the small-model step (#103, 2026-09-26) — `apple-m5-pro-20c_spec_vs_mlx.jsonl`
+
+The second drafter plugin (`monolith/spec/lm`, design §5.8) runs a registered model package as the draft model of
+classical speculative decoding — mlx-lm's `draft_model`, here the same `mlx-community/Qwen3-0.6B-4bit` mlx-lm uses,
+packed with `tools/pack_weights.py --drafter-kind lm`. Per round: a first chain step over the committed rows the
+drafter has not seen plus the anchor (`n_inject + n_chain` rows: the whole chunk in prefill, in decode one row — the
+last draft — after a full acceptance, else just the anchor), then γ − 1 single-row chain steps, each through the 28
+layers and the head to an argmax; the drafter's KV caches are written by the chain itself and overwritten past the
+accepted prefix (the rows of a chain step attend to keys at or before their position, so the stale rows are never
+read). Everything is one step program: the target's verify pass, the accept scan, the chain, the select — 1373
+dispatches for γ = 5 on the 8B (the DSpark round: 387).
+
+**Correctness [M].** Greedy speculative decode with the LM drafter is token-identical to plain decode on the 8B with
+the accelerator off (96 tokens of the hash-map prompt) and on the synthetic targets (`tests/kernels/test_lm_drafter.py`:
+the hybrid target with the GDN commit, prompts in one, two and three chunks); a dense synthetic model drafting for
+itself accepts every draft and its caches equal the target's over the committed positions. Its acceptance on the real
+pair is mlx-lm's: on the hash-map prompt at N = 5 ours 2.00–2.09 accepted per step (33 steps), mlx-lm 1.84 (32); our
+0.6B decodes the same 64 greedy tokens as mlx-lm's.
+
+**Cost [M].** The chain step is a whole 0.6B decode step, and our engine ran the 0.6B (plain program, T = 1) at
+**4.61 ms per token where mlx-lm runs it at 2.09** (generation_tps 477; 2.7 wall). The per-op trace of one chain
+step (28 layers, int4_affine, ctx ≈ 100):
+
+| op | dispatches | before | after | note |
+|---|---|---|---|---|
+| gemv qkv 4096×1024 | 28 | 19.9 µs | 18.9 | fused norm; RSPLIT 8, crew2 |
+| gemv o_proj 1024×2048 | 28 | 22.1 | **9.8** | 64 blocks over 240 SIMD-groups → RSPLIT 8 |
+| gemv gate\|up 6144×1024 (silu·mul) | 28 | 24.6 | 27.5 | the tuner's pick (block geometry) measured faster in isolation, slower in the step |
+| gemv down 1024×3072 | 28 | 29.6 | **14.2** | RSPLIT 8, crew2 |
+| gqa_decode (T = 1) | 28 | 38.3 | **25.5** | the P·V pass loads 8 keys' values ahead |
+| gqa_merge | 28 | 3.9 | 3.9 | |
+| lm_head 151936×1024 | 1 | 407 | 407 | 117 MB at 283 GB/s — at the bus |
+| gaps between dispatches | 172 | 3.9 µs each | 3.9 | 0.66 ms per chain step |
+| **the 0.6B step** | 174 | **4.61 ms** | **4.10** | mlx-lm 2.09 |
+
+Two engine changes came out of it, both general:
+
+* **Row-split GEMV items** (`RSPLIT`, `gemv_T.metal`; an autotuner candidate): a work item is a share of a block's
+  rows (silu·mul: the gate rows with their up partners) instead of a whole block, so a 1024-row slab is 512 items
+  over the crew's 240–480 SIMD-groups instead of 64 blocks — o_proj 2.2× and down 2.1× faster at T = 1. The
+  outputs are bit-identical to the unsplit kernel (the same per-row arithmetic); STAT_OUT writes one partial per
+  item. The 8B's 4096-row projections are 256 blocks — 1.07 waves of the crew, two rounds for 16 SIMD-groups — and
+  take the split too (the re-tuned plain decode is in the table below).
+* **The attention's P·V pass** requests the values of `PV_UNROLL` (8) keys before consuming any: 38 → 25.5 µs per
+  layer at T = 1 over a short context, bit-identical. The same treatment on the score pass measured slower (29 µs)
+  and was not kept.
+
+The round with γ = 5 on the 8B (the hash-map prompt) as first built: **15.0 ms per token** GPU — the step 45 ms:
+the target's pass at T = 6 21.3 (295 dispatches, its GEMVs at the bus), a separate ingest pass costing 3.0 of no-op
+dispatches when nothing was to ingest (394 × 7.6 µs) and 5.6 after a full acceptance, and the five chain steps at
+4.85 each. The ingest is folded into the first chain step since (`n_inject + n_chain` rows, row source 4; the
+argmax of the last row): 14.5, then **11.3 with the row split and the stat fixes below** (26 steps, 3.73 tokens
+per step: the same chain is cheaper and, with its context intact, accepts more).
+
+Two defects the row split exposed, both caught by shader validation (`MTL_SHADER_VALIDATION=1`, CLAUDE.md's rule)
+and by a gate run whose acceptance collapsed to 1.0–1.1 tokens per step: (1) a hoisted RMSNorm statistic was
+allocated `T_max × n_blocks` partials, but the first chain step has `T_max + 1` rows (a prompt whose last chunk is
+full) and a row-split producer writes `n_blocks × RSPLIT` partials per row — stores past the buffer into a
+neighbour; the buffer is sized where the producer's partial count is decided now (`_size_stat`). (2) A GEMV with
+both a tuned T = 1 shader variant (RSPLIT 8) and a tile (T > 1) wrote two different partial counts into one
+statistic while its consumer read one: the rows a prefill chunk sent through the tile got garbage norms, so the
+drafter's context was wrong from the prompt on. The writers of a statistic agree now (RSPLIT = 1 beside a tile; the
+smallest common split otherwise); `test_lm_drafter.py` has the T_max + 1 prompts and a tuner stub for it.
+
+Against mlx-lm's 9.24 the LM drafter's arithmetic — `(target(1 + N) + N · chain) / tokens per step` — needs the
+chain step at ≤ ~2.5 ms (N = 5) to come under; it is 4.1 (mlx-lm's 0.6B step: 2.1). What separates the two is the
+small-model regime the M1 study never measured: K = 1024 slabs whose lane stripe is a single payload word (per-block
+fixed costs, the fused norm's partial-sum fold — 512 partials per token from a row-split producer), the attention
+core's serial score pass at T = 1, and 174 dispatch boundaries at ~3.9 µs (0.66 ms) where MLX's ~300 kernels cost it
+less. That is the layer-level comparison against MLX (the next task): per layer the 0.6B takes us 146 µs and MLX 75.
+
+The gate, the §8 protocol (11 prompts × 128 tokens, wall ms per token, best of 2 reps; N = the drafts per step):
+
+| engine / mode | all | chat | code | math | text | tokens / step |
+|---|---|---|---|---|---|---|
+| ours LM drafter, whole chain (γ = 5) | 13.11 | 17.51 | 11.33 | 8.11 | 16.70 | 3.73 |
+| ours LM drafter, N = 3 | 12.83 | 15.61 | 11.68 | 9.56 | 15.30 | 2.89 |
+| ours LM drafter, N = 5 | 13.12 | 17.53 | 11.34 | 8.12 | 16.71 | 3.73 |
+| ours LM drafter, N = 7 | 14.38 | 20.15 | 12.03 | 7.89 | 18.97 | 4.30 |
+| ours plain | 21.02 | 21.02 | 21.06 | 21.11 | 20.83 | 1.00 |
+| mlx-lm draft N = 3 (4-bit 0.6B) | 9.26 | 11.29 | 8.30 | 7.11 | 10.89 | 2.94 |
+| mlx-lm draft N = 5 (4-bit 0.6B) | 11.37 | 15.03 | 9.85 | 7.31 | 14.28 | 3.69 |
+| mlx-lm draft N = 7 (4-bit 0.6B) | 13.28 | 18.55 | 10.84 | 7.81 | 17.22 | 4.17 |
+| mlx-lm plain | 15.94 | 15.94 | 15.95 | 15.96 | 15.93 | 1.00 |
+
+The acceptance is the same model's: ours 2.89 / 3.73 / 4.30 tokens per step at N = 3 / 5 / 7, mlx-lm's 2.94 / 3.69
+/ 4.17 (the target streams differ by the tile's rounding). The cost is not: **ours 12.83 (N = 3) against mlx-lm's
+9.26 — 1.386×**, and at every N ours is 1.1–1.4× theirs, the gap growing with N as the chain steps do. Our LM round
+beats our own plain decode (0.61×) and mlx-lm's plain (0.80×), and it beats mlx-lm's *same-N* rounds nowhere — on
+math at N = 7 it is 7.89 to their 7.81. The DSpark round (§9: 9.56–9.75) remains the best speculative path on this
+chip. Also in this run: the re-tuned plain decode of the 8B is 21.02 (§9: 20.62) — the tuner took the row split on
+the 4096-row projections (RSPLIT 8, crew2: 0.036 vs 0.081 ms in isolation for o_proj, cold and streamed) and the
+step did not follow; the autotuner's isolated timings are a follow-up of their own (the same blind spot as the
+gate|up pick above). The rows are in `apple-m5-pro-20c_spec_vs_mlx.jsonl` with `"drafter": "lm"`.

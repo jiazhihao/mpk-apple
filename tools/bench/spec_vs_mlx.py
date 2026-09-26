@@ -44,6 +44,7 @@ def main() -> int:
     ap.add_argument("--drafter", required=True)
     ap.add_argument("--drafter-pack", required=True)
     ap.add_argument("--drafter-kind", default="dspark")
+    ap.add_argument("--draft-gamma", type=int, default=None, help="an LM drafter's chain length in the cost mode (default 5); a fixed:N mode chains N")
     ap.add_argument("--mlx-draft", default=None, help="mlx-lm's draft model (a small same-tokenizer LM); without it only plain mlx-lm runs")
     ap.add_argument("--ns", default="1,2,3,4,5,7")
     ap.add_argument("-n", "--max-new-tokens", type=int, default=128)
@@ -79,13 +80,16 @@ def main() -> int:
         if mode == "plain":
             return load_session(a.model, a.pack, max_context=a.max_context, eos=-1)
         opts = {"verify": "cost"} if mode == "cost" else {"verify": "fixed", "verify_length": int(mode.split(":")[1])}
+        dopts = None
+        if a.drafter_kind == "lm":                                                 # an LM drafter chains exactly what the mode verifies
+            dopts = {"gamma": int(mode.split(":")[1]) if mode != "cost" else (a.draft_gamma or 5)}
         return load_session(a.model, a.pack, max_context=a.max_context, eos=-1, drafter_dir=a.drafter, drafter_pack=a.drafter_pack,
-                            drafter_kind=a.drafter_kind, sts_path=a.sts, **opts)
+                            drafter_kind=a.drafter_kind, sts_path=a.sts, drafter_options=dopts, **opts)
 
     best = {}
     ids0 = tok.encode(prompts[0][2], add_special_tokens=False).ids
     out = a.out or str(Path(__file__).parent / "results" / f"{info.name.lower().replace(' ', '-')}-{info.gpu_cores}c_spec_vs_mlx.jsonl")
-    print(f"{info.name}: ours (DSpark) vs mlx-lm ({'draft ' + a.mlx_draft if mlx_draft is not None else 'plain only'}), {len(prompts)} prompts × {a.reps} reps, {a.max_new_tokens} tokens")
+    print(f"{info.name}: ours ({a.drafter_kind} drafter) vs mlx-lm ({'draft ' + a.mlx_draft if mlx_draft is not None else 'plain only'}), {len(prompts)} prompts × {a.reps} reps, {a.max_new_tokens} tokens")
     for rep in range(a.reps):
         for eng, mode in (modes if rep % 2 == 0 else modes[::-1]):
             sess = our_session(mode) if eng == "ours" else None

@@ -323,7 +323,10 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   rows are interleaved so one pass yields `silu(g)·u`; `q|k|v` and `in_proj_qkv|a|b` are row-stacked into single ops.
   The mixer's gate projection (`in_proj_z`; the gate half of `q_proj`) is stacked with them or packed as its own op,
   depending on whether §5.12's sibling overlap is enabled for the chip. R, stripe order and scale placement are
-  autotuned per chip.
+  autotuned per chip. A GEMV's work item is a block or a *share of a block's rows* (`RSPLIT`, autotuned): a
+  1024-row slab is 64 blocks — a quarter of the M5 Pro's 240 SIMD-groups — and 512 items of two rows fill the crew
+  (o_proj and down 2.1–2.2× faster at T = 1 on the 0.6B; the 8B's 4096-row slabs are 256 blocks, 1.07 waves, and
+  split too); the arithmetic per row is the same, so the outputs are bit-identical (decode-kernels.md §10).
 * **Formats** are plugins: `unpack(checkpoint tensors) → pack` plus an MSL `decode` snippet used by the GEMV
   template. v1: NVFP4 (E2M1 LUT × E4M3 block scale × FP32 tensor scale), FP8-E4M3 per-tensor (256-entry LUT), BF16;
   built since: INT8 groups and **affine INT4 groups** (`int4_affine`, the MLX / AWQ / GPTQ family, `w = scale·code +
@@ -406,7 +409,8 @@ path.
   `executeCommandsInBuffer:indirectBuffer:`, which lets the GPU choose the ICB range, is the optimization if those
   µs ever matter. Variants a program can never take are not encoded: under the cost-aware or a fixed L ≥ 1 rule a
   decode step runs at T = 1 + L ≥ 2, so the step's T = 1 variants are pruned and the next variant's range starts
-  at 0 (a prefill chunk of one token runs on it); the injection's variants (`n_inject` can be 1) and the threshold
+  at 0 (a prefill chunk of one token runs on it); the injection's variants (`n_inject` can be 1), an LM drafter's
+  chain rows (`n_chain`, one variant; its first step's `n_inject + n_chain` rows, bound to T_max + 1) and the threshold
   rule's (L = 0 is possible) stay. A tile's input is read in `x_permute`'s order; when the input is un-normed and
   the GEMV runs on the tile alone, its producer writes that order itself (`PERM_OUT`: the attention merge for
   `o_proj`, the gate|up tile's silu·mul epilogue for `down`) into the tile's scratch and the permute dispatch is not
@@ -465,6 +469,22 @@ tokens/s, not acceptance.
 own engine, then the HF golden); sampling verification must preserve the target distribution (rejection sampling;
 distribution tests). The drafter's block is checked against the DeepSpec reference implementation on the same anchor and
 context (draft tokens identical in greedy mode, confidences within 1e-3).
+
+**The LM drafter (the second plugin, `spec/lm`).** The classical draft model — a small causal LM with the target's
+tokenizer (mlx-lm's `draft_model`) — is any registered model package built with a `prefix` (its slabs, aux entries,
+tables, states and activations beside the target's), run inside the round: a *first chain step* over the committed
+positions the drafter has not processed plus the anchor (`StepState.n_inject + n_chain` rows from `position −
+n_inject`: the prompt chunk in prefill; in decode the last draft after a full acceptance, else the anchor alone; the
+argmax of the last row is the first draft), then γ − 1 single-row chain steps, each appending its k/v; the rows past
+the accepted prefix are stale and are overwritten by the next chain, whose rows attend only to keys at or before
+their own position. The same layer modules are lowered once per pass under a graph *activation scope*
+(`Graph.scope`: sources keep their names, activations take the pass's prefix), the mixers take the pass's mode
+from the lowering context (`LowerContext.mixer_attrs` → `LM_MODE`, `CHAIN_I`), and the row counts are the step
+state's (`n_chain`, `n_inject + n_chain`: row sources 3 and 4). No confidences: the whole chain is verified (or a
+fixed length); `drafter_ctx_len` records the chain's end, the accept scan derives the ingest rows from it. Measured
+on the M5 Pro (decode-kernels.md §10): token-identical to plain decode, acceptance equal to mlx-lm's with the same
+0.6B, and a chain step of 4.1 ms where mlx-lm's 0.6B step is 2.1 — the round costs more than mlx-lm's until the
+small-model step is at MLX's speed per layer.
 
 **Measured (M5 Pro, 2026-09-24; decode-kernels.md §5) [M].** The round as built: with the cost-aware rule and the
 shader-FMA GEMVs, Qwen3-8B NVFP4 + its public drafter decodes at 37.5 ms per token on a plain story prompt (1.05

@@ -317,7 +317,7 @@ def model_accept(state, tokens, ring_cap, eos, ctx_cap=0):
         return s, writes
     t = s["t_this_step"]
     if s["prefill_left"] > 0:
-        s["position"] += t; s["step"] += 1; s["n_inject"] = t; s["checkpoint_index"] = t
+        s["position"] += t; s["step"] += 1; s["n_inject"] = t; s["checkpoint_index"] = t; s["n_chain"] = 0
         if ctx_cap and s["position"] >= ctx_cap:
             s["error"] = 2; s["done"] = 1
         return s, writes
@@ -339,10 +339,9 @@ def model_accept(state, tokens, ring_cap, eos, ctx_cap=0):
         if eos >= 0 and tok == eos:
             stop = True
             break
-    s["ring_head"] = head; s["accepted"] = acc; s["anchor"] = last
-    s["pending_tokens"] = [last] + list(s["pending_tokens"][1:])
+    s["ring_head"] = head; s["accepted"] = acc; s["anchor"] = last          # pending_tokens keeps the step's rows (an LM drafter's ingest reads them)
     s["position"] += base + committed; s["step"] += 1; s["verify_len"] = 0; s["t_this_step"] = 1
-    s["n_inject"] = s["checkpoint_index"] = base + committed
+    s["n_inject"] = s["checkpoint_index"] = base + committed; s["n_chain"] = 1
     if stop:
         s["done"] = 1
     if ctx_cap and s["position"] >= ctx_cap:

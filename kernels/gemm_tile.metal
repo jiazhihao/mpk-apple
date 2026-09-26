@@ -44,7 +44,7 @@ using namespace mpp::tensor_ops;
 #define STEP_STATE 0                 // 1: the row count comes from StepState (buffer 15) and the dispatch is a per-T variant
 #endif
 #ifndef T_SRC
-#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step, 1 = n_inject, 2 = the T_STATIC_ROWS macro
+#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step, 1 = n_inject, 2 = the T_STATIC_ROWS macro, 3 = n_chain, 4 = n_inject + n_chain
 #endif
 #ifndef T_STATIC_ROWS
 #define T_STATIC_ROWS 1u
@@ -190,7 +190,8 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
 #if STEP_STATE
   if (st->done) return;                                                     // uniform over the threadgroup: no barrier is skipped
-  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step)));
+  if (T_act == 0u) return;                                                  // no rows this step (an LM drafter's chain in a prefill chunk)
 #ifdef T_HI
   if (T_act > T_HI || T_act <= T_LO) return;
 #endif
@@ -451,7 +452,8 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
   if (t >= p.tm) return;
 #if STEP_STATE
   if (st->done) return;
-  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step)));
+  if (T_act == 0u) return;                                                  // no rows this step (an LM drafter's chain in a prefill chunk)
 #ifdef T_HI
   if (T_act > T_HI || T_act <= T_LO) return;
 #endif

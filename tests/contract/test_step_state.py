@@ -7,13 +7,14 @@ GOLDEN_OFFSETS_8_7 = {
     "step": 0, "position": 4, "kv_len": 8, "t_this_step": 12, "pending_tokens": 16, "rng_lo": 48, "rng_hi": 52,
     "anchor": 56, "gamma": 60, "draft_tokens": 64, "confidence": 92, "verify_len": 120, "accepted": 124,
     "checkpoint_index": 128, "drafter_ctx_len": 132, "done": 136, "error": 140, "ring_head": 144, "ring_tail": 148, "prefill_left": 152, "n_inject": 156, "stop_at": 160,
+    "n_chain": 164,
 }
 
 
 def test_layout_is_the_golden():
     L = StepStateLayout(t_max=8, gamma_max=7)
     assert L.offsets == GOLDEN_OFFSETS_8_7
-    assert L.size == 176 and L.size % 16 == 0   # stop_at (#103) is the last field
+    assert L.size == 176 and L.size % 16 == 0   # n_chain (the LM drafter) is the last field
     assert L.field("draft_tokens").count == 7 and L.field("pending_tokens").count == 8
 
 
