@@ -11,7 +11,7 @@ Nothing here knows a model: names, shapes, transforms and permutations all come 
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -35,9 +35,16 @@ def checkpoint_groups(ckpt: SafetensorsDir):
     return group_tensors(names, dtypes), dtypes
 
 
-def bind_formats(model: Module, ckpt: SafetensorsDir) -> Dict[str, str]:
-    """Bind every slab tensor's storage format from the checkpoint; returns ``{hf_name: format}``."""
+def bind_formats(model: Module, ckpt: SafetensorsDir, *, requantize: Optional[str] = None, keep: Sequence[str] = ()) -> Dict[str, str]:
+    """Bind every slab tensor's storage format from the checkpoint; returns ``{hf_name: format}``. ``requantize``
+    names a format the BF16 / F32 matrices are quantized into at pack time instead (a BF16 drafter packed as NVFP4:
+    the packer runs the format's quantizer); ``keep`` lists tensor-name substrings that stay as stored, and a matrix
+    whose K the format cannot pack (``pack_k_multiple``) stays as stored too."""
     groups, _ = checkpoint_groups(ckpt)
+    if requantize is not None and (FORMATS.resolve(requantize) is None or not hasattr(FORMATS.get(requantize), "quantize")):
+        raise ValueError(f"requantize: {requantize!r} is not a format plugin with a quantizer")
+    k_multiple = FORMATS.get(requantize).pack_k_multiple if requantize is not None else 1
+    shapes = {n: tuple(ckpt.info(n).shape) for n in ckpt.names()} if requantize is not None else {}
     bound: Dict[str, str] = {}
     for _, mod in model.named_modules():
         for local, spec in mod.weight_map().items():
@@ -49,10 +56,32 @@ def bind_formats(model: Module, ckpt: SafetensorsDir) -> Dict[str, str]:
             fmt = g.format
             if fmt == "f32":
                 fmt = "bf16"                     # a float32 matrix is packed as the BF16 the reference model holds
+            if requantize is not None and fmt == "bf16" and not any(k in spec.hf_name for k in keep) \
+                    and int(logical_shape(g, shapes)[1]) % k_multiple == 0:
+                fmt = requantize
             if FORMATS.resolve(fmt) is None:
                 raise ValueError(f"{spec.hf_name}: storage format {g.format!r} has no format plugin")
             mod.set_format(local, fmt)
             bound[spec.hf_name] = fmt
+    return bound
+
+
+def bind_pack_formats(model: Module, pack: Any) -> Dict[str, str]:
+    """Bind the module tree's slab formats from a pack's manifest (what its slabs actually are — a re-quantized pack
+    differs from the checkpoint the tree was built from); returns ``{slab: format}``."""
+    formats = {s["name"]: s["format"] for s in pack.manifest["slabs"]}
+    bound: Dict[str, str] = {}
+    for _, mod in model.named_modules():
+        groups = getattr(mod, "slab_groups", None)
+        if groups is None:
+            continue
+        for grp in groups():
+            fmt = formats.get(grp.name)
+            if fmt is None or fmt == grp.format:
+                continue
+            for local, _spec in grp.parts:
+                mod.set_format(local, fmt)
+            bound[grp.name] = fmt
     return bound
 
 

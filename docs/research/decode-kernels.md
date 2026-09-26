@@ -465,3 +465,35 @@ shape gate|up 9.03 ms (2.26 GB, 251 GB/s), down 5.57 (1.06 GB, 190), qkv 2.52 (0
 0.26: the pack's bytes (#101: 1.11× the weights at K = 4096, 8 % of the step at the measured rates), the 4096-row
 shapes' occupancy (down and o_proj at 182–190 GB/s against 244–251 on the wide ones, §3e) and the 2.2 ms of
 non-GEMV time (#102).
+
+**The speculative round on the same pack (#103, 2026-09-26 [M]).** The round of §5 re-measured on the MLX 8B pack
+with the public DSpark drafter (`tools/bench/spec_bench.py`: the cost-aware rule, the STS temperatures, 128 tokens,
+the eleven prompts; ms per token, token-weighted):
+
+| drafter pack (decode) | plain | cost-aware | fixed L = 3 | fixed L = 7 | cost-aware: math / code / chat / text |
+|---|---|---|---|---|---|
+| BF16, 3.6 GB (V2) | 24.4 | 18.4 | 21.0 | 18.4 | 13.5 / 15.7 / 24.5 / 20.8 |
+| BF16 (V3) | 21.5 | 14.6 | 16.7 | 14.6 | 10.3 / 12.7 / 19.4 / 16.7 |
+| NVFP4 at pack time, 0.67 GB streamed per round (V3) | — | **12.6** | 14.4 | 12.7 | 8.9 / 11.0 / 16.6 / 14.5 |
+
+The NVFP4 drafter is the BF16 checkpoint re-quantized when packed (`tools/pack_weights.py --quantize nvfp4
+--quantize-keep embed_tokens,markov`: the format's own quantizer at pack time, the gathered tables kept; the
+session binds the tree to the pack's formats) — 3.05 tokens per step and the same acceptance as the BF16 drafter
+on the prompt set, the greedy tokens still equal plain decode's (`test_speculative_equals_plain_greedy_with_a_requantized_drafter`).
+Against mlx-lm's plain 15.9 ms per token: 0.79 (math 0.56, code 0.69, chat 1.05, text 0.91) — the chat prompts,
+where the drafter accepts 0.7–1.2 per step, stay at plain's speed. mlx-lm's own speculative decoding (a Qwen3 draft
+model, `--num-draft-tokens`) is the gate's other side and is not measured yet: the draft checkpoint is not on this
+machine. The round's trace (`python -m monolith.trace --drafter …`, 615 dispatches, min of 5 steps, the verify
+length 7 → T = 8 on the tile):
+
+| item | ms | note |
+|---|---|---|
+| the target's verify pass: 144 GEMVs at T = 8 on the tile | 22.0 | gate\|up 9.16 (247 GB/s), down 7.51 (141), qkv 2.76 (205), o_proj 2.57 (147) |
+| `lm_head` × 2 (the target's verify rows, the drafter's block) | 2.8 | 1.39 each, 280 GB/s |
+| the drafter: 5 layers at T = 7 and `fc`, NVFP4 on the tile | 3.7 | its down projection 138 GB/s, `fc` (K = 20480) 124 |
+| the drafter's Markov head: 7 × 151936×256 BF16 | 1.9 | one GEMV per draft position (a chain); K = 256 is under NVFP4's pack multiple, and an INT4 unit at K = 256 would be all padding |
+| attention at T = 8, the permutes, the serial ops, the predicated-off variants | 3.8 | `gqa_decode` 1.4, `x_permute` 1.3, the 144 shader variants that return at once 0.4 |
+| step span (busy 34.1) | 36.3 | 3.05 tokens per step on the prompt set → 12.6 ms per token |
+
+The tile's occupancy on the 4096-row shapes is the round's largest lever (down and o_proj at 141–147 GB/s: ~4 ms of
+the step at the wide shapes' rate), then the fixed cost of the drafter's block and head passes.
