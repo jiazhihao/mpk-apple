@@ -376,6 +376,31 @@ variant for T ≥ 32. On the lm_head shape every format is within 5 % of its wid
 Profile rows (`profiles/apple-m5-pro-20c.json`, relative to `p13`'s T = 1 pass as the shader rows are):
 `accelerator_nvfp4` 8: 1.03, 16: 1.04, 32: 2.32; `accelerator_fp8` 8: 1.09, 16: 1.16, 32: 2.10.
 
+**The K-split (2026-09-26 [M], #103).** `KSPLIT = S` in `gemm_tile`: one row tile per threadgroup of S SIMD-groups,
+each streaming a contiguous K / S slice of the tile (whole lane groups, so the scale cache still fills at a lane
+group's first word), the partial destination tiles reduced through threadgroup memory — slices 1 … S−1 write
+their registers, one `threadgroup_barrier`, slice 0 adds them into its own (the same element order in every
+SIMD-group) and runs the epilogue alone; a second barrier orders the next tile's writes behind the reads. Both
+barriers sit behind the uniform early returns (`done`, the per-T predicate), so no thread skips one. The autotuner
+times `ksplit2` / `ksplit4` beside the crew geometries per (shape, TM, epilogue) and the emitter dispatches the
+choice (`gemm_geometry`). On the 8B's shapes with the V3 decode (`gemm_bench.py --ksplit`, ms per matrix, min-of-3):
+
+| shape | TM | crew | crew ×2 | K-split 2 | K-split 4 |
+|---|---|---|---|---|---|
+| gate\|up 24576×4096 | 8 | 0.244 (232 GB/s) | 0.256 | **0.231** (245) | 0.230 (246) |
+| down 4096×12288 | 8 | 0.200 (142) | 0.199 | **0.118** (239) | 0.124 (229) |
+| qkv 6144×4096 | 8 | 0.069 (205) | 0.072 | 0.063 (223) | **0.062** (226) |
+| o_proj 4096×4096 | 8 | 0.066 (142) | 0.065 | **0.043** (218) | 0.046 (205) |
+| lm_head 151936×4096 | 8 | 1.405 (249) | 1.487 | **1.363** (257) | 1.380 (254) |
+| down / qkv / o_proj | 16 | — | 0.204 / 0.072 / 0.065 | **0.120 / 0.064 / 0.044** | 0.127 / 0.064 / 0.047 |
+
+The 4096-row shapes gain 1.5–1.7× (256 tiles over 480 SIMD-groups → 512 SIMD-groups, two per tile, all busy), the
+wide ones 3–6 % (more SIMD-groups in flight per core); the split's reduction is free at this size (128 floats per
+thread through threadgroup memory once per tile). Against the T = 1 shader pass the tile is now 1.00× on gate|up,
+0.94× on down, 1.07× on qkv, 0.96× on o_proj and 1.02× on lm_head — the verify pass costs a plain pass. The
+tests: every format × TM with a partial last tile, the residual epilogue with the statistic output, a row range
+and the per-T predicate (`test_gemm_tile.py`, shader validation clean).
+
 ## 7. Intra-op stealing (#44) — own slice + steal on the attention core
 
 `kernels/common/steal.metal` is `p10`'s claim protocol (mode 2) as a helper a kernel's block loop opts into with
@@ -495,5 +520,29 @@ length 7 → T = 8 on the tile):
 | attention at T = 8, the permutes, the serial ops, the predicated-off variants | 3.8 | `gqa_decode` 1.4, `x_permute` 1.3, the 144 shader variants that return at once 0.4 |
 | step span (busy 34.1) | 36.3 | 3.05 tokens per step on the prompt set → 12.6 ms per token |
 
-The tile's occupancy on the 4096-row shapes is the round's largest lever (down and o_proj at 141–147 GB/s: ~4 ms of
-the step at the wide shapes' rate), then the fixed cost of the drafter's block and head passes.
+The tile's occupancy on the 4096-row shapes was the round's largest lever (down and o_proj at 141–147 GB/s: ~4 ms
+of the step at the wide shapes' rate), then the fixed cost of the drafter's block and head passes.
+
+**With the K-split (§6, the same day).** The autotuner picks `ksplit2` for gate|up, down, o_proj, `fc` and both
+`lm_head` passes (the crew for qkv); the round on the same packs and prompts:
+
+| verify rule | chat | code | math | text | **all** | tokens / step |
+|---|---|---|---|---|---|---|
+| cost-aware | 14.3 | 9.5 | 7.5 | 12.6 | **10.8 ms** | 3.07 |
+| fixed L = 7 | 14.4 | 9.5 | 7.6 | 12.6 | 10.9 ms | 3.07 |
+
+— 12.6 → 10.8 ms per token, **0.68× mlx-lm's plain** (math 0.47, code 0.59, text 0.79, chat 0.90); the greedy
+tokens equal plain decode's (a 40-token generation under shader validation, no reports). The step: 31.4 ms span,
+29.3 busy — the verify pass 17.9 ms (gate|up 8.58 at 264 GB/s, down 4.64 at 228, qkv 2.77 at 204, o_proj 1.87 at
+202), `lm_head` × 2 2.7, the drafter 5.1 (its Markov head 1.9), the attention 1.3, `x_permute` 168 × 8 µs = 1.4,
+the 144 shader variants that return at once 0.4, the dispatch boundaries ~2 ms.
+
+**Two dispatch-count knobs (the same day, paired A/B on the bench, three baselines 10.85 / 10.88 / 10.73 ms).**
+(1) `x_permute` with 16 SIMD-groups per token row instead of 4 (`GEMM_PERM_SG`): 8 → 5 µs per permute, 10.65 ms per
+token against 10.85 / 10.88 (8 SIMD-groups: 10.73). (2) The programs under the cost-aware or a fixed L ≥ 1 rule
+never run a decode step at T = 1, so the compiler no longer emits the step's T = 1 shader variants (design §5.7;
+the tile's range starts at 0, a one-token prefill chunk runs on it; the injection's variants stay): 615 → 469
+dispatches. Together the round is at **10.4 ms per token** (math 7.3, code 9.2, chat 13.4, text 12.2), the step
+29.9 ms span, 28.2 busy — 0.65× mlx-lm's plain. What is left, in order: the Markov head's BF16 bytes (a compact
+unit for K = 256, #101), the permutes (writing the consumer's order from the producer's epilogue), the attention
+core (#102), and the target's bytes themselves (#101).
