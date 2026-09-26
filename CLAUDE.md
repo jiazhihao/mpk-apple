@@ -43,8 +43,11 @@ every T > 1 GEMV runs on the tile as the predicated variant above T = 1, and the
 math and code on this chip. Speculative decoding targets a **DSpark** drafter, not the MTP head.
 Go/no-go #2 (#36) is read on this machine: plain decode of the 8B NVFP4 on the weights mlx-lm streams is 0.66× mlx-lm
 (41.5 vs 62.9 tok/s; decode-kernels.md §8) — a no-go; the gap is the NVFP4 GEMV's ALU-bound decode (221 GB/s) plus
-the pack's 9 % unit padding, and MLX's one-instruction nibble-to-half decode is the first follow-up. The nvfp4 plugin reads MLX's conversions (same codes,
-`scales` as U8, no tensor scale). The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
+the pack's 9 % unit padding. The nvfp4 plugin reads MLX's conversions (same codes, `scales` as U8, no tensor scale).
+The contingency tasks (#100–#103) run: MLX's half-exponent nibble decode is the plugin's default (#100,
+`NVFP4_DECODE = 3`: 2–25 % per shape, the tile's fill +35 %, plain decode of the 8B 0.74× mlx-lm on equal bytes;
+gemv-kernel-study.md §3e) — the remaining gap on the wide shapes is the unit padding (#101), on the 4096-row
+shapes the occupancy of 256 blocks (the tile's K-split). The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
 8–133 ms compute buffers: `max_cb_ms` is a latency knob, not a pacing one.
 Model 3 (#46) is built as packages: the MoE ops (`ops/moe.py`: `moe_route`, `moe_gemv` = the GEMV template's pairs
 mode addressing expert blocks through the router's ids, `moe_combine`), the `SparseMoE` layer and the `qwen3_moe`

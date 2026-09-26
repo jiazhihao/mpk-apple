@@ -167,6 +167,58 @@ What it says **[M]**:
    boundary is two dispatches — the producer with the residual add and the statistic, the consumer — plus the
    scaling dispatch, and no separate reduction.
 
+## 3e. MLX's decode as `NVFP4_DECODE = 3` (#100) — `apple-m5-pro-20c_nvfp4_v3_shapes.jsonl`
+
+Go/no-go #2 (decode-kernels.md §8) left the NVFP4 GEMV at 221 GB/s in the 8B's step against mlx-lm's 268 over
+its whole step, the decode the suspect. V3 is MLX's `fp4.h` decode (MIT, `third_party/NOTICE`): a nibble's three
+magnitude bits placed straight into a half's exponent field, `as_type<half>(ushort((c & 7) << 9))` — the E2M1
+value × 2⁻¹⁴ exactly (e = 0 lands in the half subnormals, m · 2⁻¹⁵) — the sign a select, half → float, the 2¹⁴
+folded into `decode_scale`. It is bit-identical to V2 (the same products and sums up to an exact power of two;
+`test_nvfp4_decode_variants_are_exact`) and the shortest of the four per weight: shift, mask, select, convert.
+Measured 2026-09-26 [M] on the 8B's shapes (`tools/bench/decode_shapes.py`: R = 16, T = 1, the three geometries,
+min-of-3 over ≥ 2 GB, the oracle checked; `tools/bench/mlx_baseline.py`'s `qmv` the same day; GB/s of the
+weights' bytes on both sides — our pack streams 1.11× that at K = 4096 and 1.04× at K = 12288, the lane-row
+unit's padding of #101):
+
+| shape | MLX `qmv` | V2, best geometry | V3, best geometry | V3 / `qmv` | V3 crew ×1 / crew ×2 / 1 blk per SIMD-group |
+|---|---|---|---|---|---|
+| gate\|up 24576×4096 | 290 | 227 (crew ×2) | **244** (1 blk/SG) | 0.84 | 195 / 236 / 244 |
+| down 4096×12288 | 272 | 180 (1 blk/SG) | **224** (1 blk/SG) | 0.82 | 124 / 192 / 224 |
+| qkv 6144×4096 | 252 | 205 (1 blk/SG) | **243** (1 blk/SG) | 0.97 | 171 / 238 / 243 |
+| o_proj 4096×4096 | 232 | 170 (1 blk/SG) | **208** (1 blk/SG) | 0.90 | 118 / 182 / 208 |
+| lm_head 151936×4096 | 294 | 258 (1 blk/SG) | **262** (1 blk/SG) | 0.89 | 211 / 257 / 262 |
+| M1 17408×5120 | 283 | 224 (crew ×2) | **248** (1 blk/SG) | 0.88 | 198 / 238 / 248 |
+
+V3 gains 2–25 % per shape (most on the K = 12288 down projection and the 4096-row o_proj, where V2's ALU cost bit
+hardest) and moves every shape to the one-block-per-SIMD-group geometry, which the autotuner picks. R = 8 packs
+gain nothing (gate|up 252 vs 246, down 218 vs 235 GB/s, best RG each): R = 16 stays. The tile (`gemm_tile`,
+decode-kernels.md §6) takes the same snippet in its cooperative fill: at TM = 8, gate|up 172 → 232 GB/s and down
+92 → 141; the profile writer (#49) re-measured the engine block with V3 — `accelerator_nvfp4` 1.35 → 1.04 of a
+T = 1 pass at 8 rows, 1.36 → 1.06 at 16 — and per shape the tile against the shader is:
+
+| shape | shader T = 1 | tile TM = 8 | tile TM = 16 | shader T = 2 / 4 / 8 |
+|---|---|---|---|---|
+| gate\|up 24576×4096 | 0.232 ms (244 GB/s) | 0.245 (231, ×1.06) | 0.250 (227, ×1.08) | ×1.54 / ×2.42 / ×7.52 |
+| down 4096×12288 | 0.126 ms (224 GB/s) | 0.201 (141, ×1.59) | 0.203 (139, ×1.61) | ×1.46 / ×2.30 / ×11.01 |
+| qkv 6144×4096 | 0.058 ms (244 GB/s) | 0.069 (205, ×1.19) | 0.070 (203, ×1.20) | ×1.93 / ×3.08 / ×8.67 |
+| o_proj 4096×4096 | 0.045 ms (207 GB/s) | 0.066 (143, ×1.45) | 0.067 (142, ×1.46) | ×1.39 / ×2.24 / ×10.80 |
+| lm_head 151936×4096 | 1.337 ms (262 GB/s) | 1.405 (249, ×1.05) | 1.440 (243, ×1.08) | ×1.53 / ×2.46 / ×7.38 |
+
+The tile is within 8 % of a T = 1 shader pass on gate|up and lm_head and 1.2–1.6× on the three 4096–6144-row
+shapes: 256–384 row tiles cannot occupy the crew's 480 SIMD-groups (the K-split of decode-kernels.md §6 is the
+next item; the shader's T = 2 pass costs 1.4–1.9×, so the tile stays the T ≥ 2 path throughout).
+
+**Against #100's gate** (within 5 % of `qmv` per shape): not met by the decode alone — V3 is 0.82–0.97 of `qmv`
+in weight bytes. The bus, though, carries the pack's padding: at K = 4096 / 5120 the V3 shader's bus rate is
+0.93–1.07 of `qmv`'s (gate|up 271 GB/s, qkv 270, o_proj 231, lm_head 291, M1 264), and 0.85 on the down projection
+(232). So the remaining gap on the wide shapes is the bytes, not the ALU — #101 (the unit without its padding) is
+the item that closes it; on the 4096-row down projection it is occupancy ([H]: 256 blocks of 16 rows against
+`qmv`'s 1024 SIMD-groups of 4 rows each, K = 12288 at 8 bytes per thread per row; the R = 8 pack did not help at
+RG = 2). `qmv`'s structure — two SIMD-groups per threadgroup, four rows per SIMD-group, 16 weights per thread per
+row with one E4M3 scale byte each, the activations loaded once per 512 columns and reused over the four rows — is
+the same activation reuse and, after V3, the same instruction count per weight as ours. In the step
+(decode-kernels.md §8): plain decode of the 8B on the MLX pack 41.5 → 46.4 tokens/s, 0.66 → 0.74× mlx-lm.
+
 ## 4. What it says
 
 1. **FP8 is bus-bound at T = 1** (85–95 % of nominal); the crew geometry is at parity on the wide shapes and 5–30 %

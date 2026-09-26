@@ -69,7 +69,7 @@ def test_gemv_conventional_geometry_and_dynamic_t(dev):
     assert np.all(out[2:] == 0)                                    # tokens beyond t_active are not written
 
 
-@pytest.mark.parametrize("variant", ["0", "1", "2"])
+@pytest.mark.parametrize("variant", ["0", "1", "2", "3"])
 @pytest.mark.parametrize("rows,t", [(16, 1), (4, 1), (8, 4)])
 def test_nvfp4_decode_variants_are_exact(dev, variant, rows, t):
     out, ref, _ = _run(dev, "nvfp4", 100, rows, t, "interleaved16", extra_macros={"NVFP4_DECODE": variant})

@@ -34,6 +34,14 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
   `Qwen3_5RMSNormGated`, `torch_recurrent_gated_delta_rule`, `Qwen3_5GatedDeltaNet`, `Qwen3_5Attention`,
   `apply_rotary_pos_emb`); written against that file, no code copied verbatim.
 
+## MLX (ml-explore/mlx, MIT)
+
+- `monolith/formats/nvfp4.py` — `NVFP4_DECODE = 3` in the MSL snippet adapted from `mlx/backend/metal/kernels/fp4.h`
+  (v0.32, MIT): the E2M1 nibble decoded by placing its three magnitude bits into a half's exponent field
+  (`as_type<half>(ushort((bits & 7) << 9))`, the sign a select) with the 2^14 folded into the block scale; the
+  quantized-checkpoint reader also follows MLX's `nvfp4` layout (codes eight per U32, E4M3 scales as U8), no code
+  copied for that.
+
 ## Original
 
 - `probes/` — original to this repository.

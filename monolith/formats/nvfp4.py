@@ -11,8 +11,9 @@ Lane-row unit (K = 5120): 80 bytes of nibbles (5 words) + 10 scale bytes, padded
 
 Decode variants (``NVFP4_DECODE``): 0 = per-nibble float bit construction (the reference, ~14 ALU ops per weight),
 1 = nibble pairs to ``half2`` with packed 16-bit integer arithmetic, 2 = the eight magnitudes as small integers in one
-32-bit constant with an int→float conversion, the ×0.5 folded into the block scale (the default: 241–265 GB/s vs 168–184
-for V0 at the conventional geometry on the M5 Pro; docs/research/gemv-kernel-study.md).
+32-bit constant with an int→float conversion, the ×0.5 folded into the block scale, 3 = MLX's ``fp4.h`` decode (the
+default): the three magnitude bits placed into a half's exponent field, the 2¹⁴ folded into the block scale —
+bit-identical to 2 and 2–25 % faster per shape on the M5 Pro (docs/research/gemv-kernel-study.md §3, §3e).
 
 Convention checked on the real checkpoint (layer 0 ``down_proj``, 2026-09-24): the stored block-scale codes are all
 non-negative and top out at exactly 0x7E (448), i.e. ``weight_scale_2 = amax / (6 · 448)``; the dequantized matrix has
@@ -43,7 +44,7 @@ class NVFP4(Format):
 #define WEIGHTS_PER_WORD 32u
 #define SCALE_GROUP 16u
 #ifndef NVFP4_DECODE
-#define NVFP4_DECODE 2      // measured on the M5 Pro (tools/bench/results/*_nvfp4_decode.jsonl): V2 > V1 > V0
+#define NVFP4_DECODE 3      // measured on the M5 Pro (gemv-kernel-study.md §3e, 2026-09-26): V3 > V2 > V1 > V0 on every shape
 #endif
 #if NVFP4_DECODE == 0
 // V0: per nibble, float bit construction (reference; ~14 ALU ops per weight)
@@ -86,6 +87,19 @@ static inline void decode_word(uint4 q, thread float* out) {
     out[e] = float((c & 8u) ? -k : k);
   }
 }
+#elif NVFP4_DECODE == 3
+// V3: MLX's fp4.h decode (ml-explore/mlx, mlx/backend/metal/kernels/fp4.h, v0.32, MIT — third_party/NOTICE): the three magnitude bits placed straight into a half's
+//   exponent field — as_type<half>((c & 7) << 9) is the E2M1 value times 2^-14 exactly (e = 0 lands in the subnormals:
+//   m · 2^-15) — the sign a select, then half -> float; the 2^14 folds into the block scale (decode_scale). The same
+//   products and sums as V2 up to an exact power of two: bit-identical outputs.
+static inline void decode_word(uint4 q, thread float* out) {
+  uint w[4] = {q.x, q.y, q.z, q.w};
+  for (uint e = 0; e < 32; e++) {
+    uint c = (w[e >> 3] >> ((e & 7u) * 4u)) & 0xFu;
+    half h = as_type<half>(ushort((c & 7u) << 9));
+    out[e] = float((c & 8u) ? -h : h);
+  }
+}
 #endif
 static inline float fp8_e4m3_scale(uint q) {
   uint e = (q >> 3) & 15u, m = q & 7u;
@@ -96,6 +110,8 @@ static inline float fp8_e4m3_scale(uint q) {
 // scale of group g of this lane-row: byte g of the unit's scale region (held in registers as uints)
 #if NVFP4_DECODE == 2
 static inline float decode_scale(thread const uint* sw, uint g) { return 0.5f * fp8_e4m3_scale((sw[g >> 2] >> ((g & 3u) * 8u)) & 0xFFu); }
+#elif NVFP4_DECODE == 3
+static inline float decode_scale(thread const uint* sw, uint g) { return 16384.0f * fp8_e4m3_scale((sw[g >> 2] >> ((g & 3u) * 8u)) & 0xFFu); }
 #else
 static inline float decode_scale(thread const uint* sw, uint g) { return fp8_e4m3_scale((sw[g >> 2] >> ((g & 3u) * 8u)) & 0xFFu); }
 #endif

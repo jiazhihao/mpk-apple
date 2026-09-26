@@ -447,3 +447,21 @@ stream of its own, or units of two rows, would stream what mlx-lm streams); (3) 
 dispatch to the un-fused choice, so a cheaper fused form is what would move it. Until (1) lands the plain-decode metric stays a no-go; the plan's rule for a missed gate stands — the engine's
 levers (fusion, GPU autonomy, speculation) do not depend on it, and the speculative round on the 8B is measured at
 19.9 ms per token against this 15.8.
+
+
+**Follow-up (1) landed — the decode (#100, 2026-09-26 [M]).** `NVFP4_DECODE = 3` (gemv-kernel-study.md §3e: MLX's
+half-exponent decode, bit-identical to V2, 2–25 % per shape, the tile's fill 172 → 232 GB/s on gate|up) is the
+default and the profile's engine block is re-measured with it. Plain decode of the 8B on the MLX pack, the same
+protocol (`plain_baseline.py`, three alternating reps, the best per prompt):
+
+| set | ours tok/s (ms) | mlx-lm tok/s (ms) | ratio | ours GB/s (% of 307, the pack's bytes) | mlx-lm GB/s |
+|---|---|---|---|---|---|
+| all (11 prompts) | 46.4 (21.5) | 62.7 (15.9) | **0.74** | 216 (70 %) | 267 (87 %) |
+| per category | 46.2–46.8 | 62.6–62.8 | 0.737–0.746 | 215–218 | 266–267 |
+
+The traced step (295 dispatches, min of 5): 22.3 ms of per-op minima against the 15.2 ms bound — the GEMVs by
+shape gate|up 9.03 ms (2.26 GB, 251 GB/s), down 5.57 (1.06 GB, 190), qkv 2.52 (0.57 GB, 224), o_proj 2.07
+(0.38 GB, 182), lm_head 1.35 (288); the attention, norm and boundary items as before (#102). What remains of the
+0.26: the pack's bytes (#101: 1.11× the weights at K = 4096, 8 % of the step at the measured rates), the 4096-row
+shapes' occupancy (down and o_proj at 182–190 GB/s against 244–251 on the wide ones, §3e) and the 2.2 ms of
+non-GEMV time (#102).
