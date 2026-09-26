@@ -409,3 +409,41 @@ in the compiler yet**; the helper, its test and the bench flag stay for the firs
 experts of #46 (variable tokens per expert), which this machine cannot host. D9 stands: a dispatch boundary is the
 barrier, and stealing is a per-op tool, not the runtime.
 
+## 8. Plain decode against mlx-lm on the same machine (#36, go/no-go #2) — `apple-m5-pro-20c_plain_baseline.jsonl`
+
+`python tools/bench/plain_baseline.py` runs our engine and mlx-lm 0.31 (MLX 0.32) on the same model, the spec bench's
+eleven prompts, 128 greedy tokens, three paired alternating reps, the best rep per prompt; both engines timed by wall
+clock over the decode phase. Qwen3-8B NVFP4 on the M5 Pro, 2026-09-25 [M]:
+
+| checkpoint (bytes streamed per token) | ours tok/s (ms) | mlx-lm tok/s (ms) | ratio | ours GB/s (% of 307) | mlx-lm GB/s |
+|---|---|---|---|---|---|
+| `nvidia/Qwen3-8B-NVFP4` (ours 5.51 GB: BF16 `lm_head`) vs its MLX conversion (4.26 GB: NVFP4 `lm_head`) | 36.5 (27.4) | 61.5 (16.3) | 0.59 | 201 (65 %) | 262 (85 %) |
+| the MLX conversion on both engines (mlx-lm 4.26 GB; our pack 4.65 GB for the same weights — the lane-row unit's 16-byte padding, 72 → 80 bytes at K = 4096) | 41.5 (24.0) | 62.9 (15.9) | 0.66 | 193 (63 %) | 268 (87 %) |
+
+The first row is not a like-for-like comparison: the nvidia checkpoint keeps `lm_head` in BF16 (1.24 GB of the
+5.5 GB per token), MLX's conversion quantizes it; the nvfp4 plugin now reads MLX's layout (the same codes eight per
+U32 and the E4M3 scales as `scales`, no tensor scale — bit-exact against `mx.dequantize`), so the second row runs
+our engine on the same weights mlx-lm streams (tokens agree with mlx-lm's for 64/64 on two prompts, 28/64 on the
+third — a near-tie); the eleven-prompt set gives the same 0.66 on every category. **Go/no-go #2 is a no-go on this
+chip: 0.66× mlx-lm, not parity.** Where the 8 ms go
+(`python -m monolith.trace` on the MLX pack, min of 5 steps, 295 dispatches, 22.4 ms of per-op minima against a
+15.2 ms bound):
+
+| op | n | ms | share | GB/s |
+|---|---|---|---|---|
+| gemv (the NVFP4 projections) | 144 | 19.27 | 86 % | 221 |
+| lm_head (NVFP4) | 1 | 1.35 | 6 % | 287 |
+| gqa_decode + gqa_merge | 72 | 1.01 | 4.5 % | — |
+| norm_apply (the un-fused norms the autotuner chose) | 73 | 0.74 | 3.3 % | — |
+
+So the gap is the NVFP4 GEMV itself: 221 GB/s on the 8B's shapes against mlx-lm's ≥ 270 over its whole step. Our
+kernel's decode is ALU-bound (gemv-kernel-study.md §3: 225 GB/s at T = 1 on the M1 shape vs `qmv` 266); MLX's
+`fp4.h` decodes a nibble by placing its three magnitude bits straight into a `half`'s exponent field
+(`as_type<half>(ushort((bits & 7) << 9))`, the sign a select), one instruction per weight, with the 2^-14 factor
+folded into the scale. Follow-ups, in order: (1) that decode as `NVFP4_DECODE = 3` in the M1 harness, then the step;
+(2) the pack's 9 % byte overhead on this shape — the lane-row unit pads 64 payload + 8 scale bytes to 80 (a scale
+stream of its own, or units of two rows, would stream what mlx-lm streams); (3) the attention core's 1 ms
+(SIMD-group-matrix scoring, M9); (4) the 73 norm dispatches (0.74 ms) — the autotuner already charges the separate
+dispatch to the un-fused choice, so a cheaper fused form is what would move it. Until (1) lands the plain-decode metric stays a no-go; the plan's rule for a missed gate stands — the engine's
+levers (fusion, GPU autonomy, speculation) do not depend on it, and the speculative round on the 8B is measured at
+19.9 ms per token against this 15.8.

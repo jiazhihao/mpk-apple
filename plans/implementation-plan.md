@@ -279,6 +279,14 @@ geometry; keep it per chip only where the A/B shows a gain (expected ~2–4 % on
 Exit gate: the plain-decode success metric. *If 1.10× is missed but parity holds:* proceed to M6 — speculation does
 not depend on it — and record why.
 
+**Go/no-go #2, read on the M5 Pro 2026-09-25 (#36; decode-kernels.md §8): no-go.** On the model this machine hosts
+(Qwen3-8B NVFP4) and the very bytes mlx-lm streams (its NVFP4 conversion, read through the nvfp4 plugin's MLX
+layout), our plain decode is 41.5 tok/s against mlx-lm's 62.9 — 0.66×; 63 % of nominal on our pack's bytes (9 %
+more than mlx-lm's for the same weights: the lane-row unit's 16-byte padding) against 87 %. The gap is the NVFP4
+GEMV (221 GB/s on the 8B's shapes, 86 % of the step); the follow-ups are MLX's one-instruction nibble-to-half decode
+as a kernel variant and a denser unit layout. The engine's levers do not depend on the metric (the rule above); the 27B rows wait for
+a machine that hosts it.
+
 
 *Status (2026-09-24, #33).* Per-op GPU timestamps exist: `Queue.profile` (one compute encoder per dispatch with
 timestamp counter samples at the stage boundaries — the granularity Apple GPUs support — correlated to CPU time),

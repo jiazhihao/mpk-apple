@@ -1,6 +1,10 @@
 """NVFP4 as ModelOpt stores it (``nvidia/Qwen3.8-27B-NVFP4``): E2M1 codes two per byte (low nibble first) in
 ``weight`` ``U8 [N, K/2]``, an E4M3 block scale per 16 columns in ``weight_scale`` ``F8_E4M3 [N, K/16]``, and one FP32
-tensor scale ``weight_scale_2``. Dequantization: ``w = e2m1(code) · e4m3(block_scale) · weight_scale_2``
+tensor scale ``weight_scale_2``. Dequantization: ``w = e2m1(code) · e4m3(block_scale) · weight_scale_2``. MLX's
+``nvfp4`` mode (``mlx_lm.convert -q --mode nvfp4``) stores the same codes eight per ``U32`` (little-endian, so the
+byte view is the ModelOpt layout) in ``weight`` ``U32 [N, K/8]`` and the E4M3 block scales as ``scales`` ``U8
+[N, K/16]``, with no tensor scale: ``unpack`` reads both (a tensor scale of 1 for MLX), verified bit-exact against
+``mx.dequantize``.
 (the ModelOpt/vLLM convention; ``input_scale`` is an activation-quantization parameter and is ignored — design D11).
 
 Lane-row unit (K = 5120): 80 bytes of nibbles (5 words) + 10 scale bytes, padded to 96; ``SCALE_GROUP = 16``.
@@ -99,9 +103,17 @@ static inline float decode_scale(thread const uint* sw, uint g) { return fp8_e4m
 
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:
         n, k = shape
-        w = np.asarray(tensors["weight"], dtype=np.uint8)
-        sc = np.asarray(tensors["weight_scale"], dtype=np.uint8)
-        s2 = float(np.asarray(tensors["weight_scale_2"], dtype=np.float32).reshape(()))
+        if "weight_scale_2" in tensors:                                          # ModelOpt: U8 codes, F8_E4M3 scales, a tensor scale
+            w = np.asarray(tensors["weight"], dtype=np.uint8)
+            sc = np.asarray(tensors["weight_scale"], dtype=np.uint8)
+            s2 = float(np.asarray(tensors["weight_scale_2"], dtype=np.float32).reshape(()))
+        elif "scales" in tensors:                                                # MLX: U32 words of 8 codes, U8 E4M3 scales, no tensor scale
+            w32 = np.ascontiguousarray(np.asarray(tensors["weight"], dtype=np.uint32))
+            w = w32.view(np.uint8).reshape(w32.shape[0], w32.shape[1] * 4)
+            sc = np.asarray(tensors["scales"], dtype=np.uint8)
+            s2 = 1.0
+        else:
+            raise ValueError("nvfp4: expected weight_scale + weight_scale_2 (ModelOpt) or scales (MLX) beside the weight")
         if w.shape != (n, k // 2) or sc.shape != (n, k // BLOCK) or k % BLOCK:
             raise ValueError(f"nvfp4: weight {w.shape}, scales {sc.shape} do not match shape {shape}")
         return DequantSpec("nvfp4", (n, k), {"weight": w, "weight_scale": sc}, {"weight_scale_2": s2, "block": BLOCK})

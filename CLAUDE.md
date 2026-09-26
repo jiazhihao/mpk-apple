@@ -41,7 +41,10 @@ every T > 1 GEMV runs on the tile as the predicated variant above T = 1, and the
 35.8 to 19.9 ms per token on the prompt set (1.80× the shader path, 1.36× plain: math 1.89×, code 1.60×, text
 1.24×, chat 0.99×; the step 94 % bus-bound), tokens equal to the golden (dspark.md §3) — the M6 gate is met on
 math and code on this chip. Speculative decoding targets a **DSpark** drafter, not the MTP head.
-The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
+Go/no-go #2 (#36) is read on this machine: plain decode of the 8B NVFP4 on the weights mlx-lm streams is 0.66× mlx-lm
+(41.5 vs 62.9 tok/s; decode-kernels.md §8) — a no-go; the gap is the NVFP4 GEMV's ALU-bound decode (221 GB/s) plus
+the pack's 9 % unit padding, and MLX's one-instruction nibble-to-half decode is the first follow-up. The nvfp4 plugin reads MLX's conversions (same codes,
+`scales` as U8, no tensor scale). The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
 8–133 ms compute buffers: `max_cb_ms` is a latency knob, not a pacing one.
 An intermittent model-tier failure (wrong tokens / a hang / an empty generation, never reproducible alone) was three
 out-of-bounds stores found with shader validation (#92): the GDN commit pass wrote its read-out through a 16-byte

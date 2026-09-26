@@ -43,6 +43,35 @@ def test_nvfp4_dequant_matches_reference_formula():
     assert np.array_equal(f.dequantize(got), ref)
 
 
+def test_nvfp4_reads_the_mlx_layout():
+    """MLX's nvfp4 mode: the same E2M1 codes eight per little-endian U32 and the E4M3 block scales as U8 ``scales``,
+    no tensor scale (verified bit-exact against ``mx.dequantize`` on 2026-09-26). The detector maps the group to
+    the nvfp4 plugin, the logical shape counts 8 codes per word, and unpack dequantizes like ModelOpt's layout with a
+    tensor scale of 1."""
+    from monolith.formats.checkpoint import TensorGroup, detect_format, logical_shape
+
+    f = FORMATS.get("nvfp4")
+    spec = f.quantize(_w(8, 64))
+    codes_u8 = spec.tensors["weight"]                                                     # U8 [8, 32], low nibble first
+    w32 = np.ascontiguousarray(codes_u8).view(np.uint32)                                  # U32 [8, 8]: MLX's word layout
+    assert w32.shape == (8, 8)
+    mlx = f.unpack({"weight": w32, "scales": spec.tensors["weight_scale"]}, shape=(8, 64))
+    modelopt = f.unpack({"weight": codes_u8, "weight_scale": spec.tensors["weight_scale"], "weight_scale_2": np.float32(1.0)}, shape=(8, 64))
+    assert np.array_equal(f.dequantize(mlx), f.dequantize(modelopt)) and mlx.params["weight_scale_2"] == 1.0
+    codes = unpack_nibbles(codes_u8)
+    ref = np.array([[e2m1_to_f32(codes[n, k]) * e4m3_to_f32(spec.tensors["weight_scale"][n, k // 16]) for k in range(64)] for n in range(8)], np.float32)
+    assert np.array_equal(f.dequantize(mlx), ref)
+    g = TensorGroup("model.layers.0.mlp.gate_proj", "model.layers.0.mlp.gate_proj.weight", {"scales": "model.layers.0.mlp.gate_proj.scales"})
+    dtypes = {g.weight: "U32", g.sides["scales"]: "U8"}
+    g.format = detect_format(g, dtypes)
+    assert g.format == "nvfp4" and logical_shape(g, {g.weight: (12288, 512)}) == (12288, 4096)
+    g2 = TensorGroup("x", "x.weight", {"weight_scale": "x.weight_scale", "weight_scale_2": "x.weight_scale_2"})
+    g2.format = detect_format(g2, {"x.weight": "U8", "x.weight_scale": "F8_E4M3", "x.weight_scale_2": "F32"})
+    assert g2.format == "nvfp4" and logical_shape(g2, {"x.weight": (12288, 2048)}) == (12288, 4096)
+    with pytest.raises(ValueError):
+        f.unpack({"weight": w32}, shape=(8, 64))
+
+
 @pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
 @pytest.mark.parametrize("lane_order", ["contiguous", "interleaved16"])
 @pytest.mark.parametrize("rows", [4, 16])
