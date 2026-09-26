@@ -80,7 +80,10 @@ class Session:
         from .bench import profile_for_device
         from .runtime import _native as nt
 
+        from .nn.pack_plan import bind_pack_formats
+
         self.model, self.pack = model, PackFile(pack_dir)
+        bind_pack_formats(model, self.pack)                    # a pack re-quantized at pack time differs from the checkpoint the tree was built from
         self.dev = nt.Device()
         info = self.dev.info()
         self.profile = profile or profile_for_device(info.gpu_cores, info.apple_family)
@@ -89,6 +92,8 @@ class Session:
         self.drafter, self.drafter_pack = drafter, (PackFile(drafter_pack) if drafter is not None else None)
         if drafter is not None and drafter_pack is None:
             raise ValueError("Session: a drafter needs its pack (drafter_pack)")
+        if drafter is not None:
+            bind_pack_formats(drafter, self.drafter_pack)
         if layout is None and drafter is not None:
             layout = StepStateLayout(t_max=max(8, drafter.gamma + 1), gamma_max=max(7, drafter.gamma))
         self.layout = layout or StepStateLayout()

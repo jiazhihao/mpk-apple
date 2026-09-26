@@ -103,8 +103,9 @@ class Packer:
         g = self.groups.get(seg.source)
         if g is None:
             raise KeyError(f"packer: no tensor group {seg.source!r} in the checkpoint")
-        if g.format != fmt_name:
-            raise ValueError(f"packer: {seg.source} is {g.format!r}, slab wants {fmt_name!r}")
+        requantize = g.format != fmt_name
+        if requantize and g.format not in ("bf16", "f32"):
+            raise ValueError(f"packer: {seg.source} is {g.format!r}, slab wants {fmt_name!r} (only a BF16 / F32 matrix is re-quantized at pack time)")
         shape = logical_shape(g, self.shapes)
         tensors = {"weight": self.ckpt.get(g.weight)}
         for side, full in g.sides.items():
@@ -115,6 +116,12 @@ class Packer:
             shape = (int(len(rows)),) + tuple(shape[1:])
         if len(shape) != 2:
             raise ValueError(f"packer: {seg.source} is not a matrix ({shape})")
+        if requantize:
+            # re-quantization at pack time (a BF16 drafter packed as NVFP4 / INT8 / …): the format's own quantizer on the
+            # float matrix the reference holds; the module tree is bound to the pack's format when a session loads it
+            w = tensors["weight"]
+            w32 = bf16_to_f32(w) if self.dtypes.get(g.weight) == "BF16" else np.asarray(w, dtype=np.float32)
+            return FORMATS.get(fmt_name).quantize(np.ascontiguousarray(w32.reshape(int(shape[0]), int(shape[1]))))
         return FORMATS.get(fmt_name).unpack(tensors, shape=(int(shape[0]), int(shape[1])))
 
     # ---- public --------------------------------------------------------------------------------------------------

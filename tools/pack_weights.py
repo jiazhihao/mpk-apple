@@ -67,9 +67,30 @@ def pack_from_model(a, layout) -> int:
     if a.num_layers_override is not None:
         opts["num_layers_override"] = a.num_layers_override
     model = cls.from_checkpoint(a.model, **opts)
-    manifest = pack_model(model, a.model, a.out, layout, extra={"architecture": arch, "options": opts})
+    extra = {"architecture": arch, "options": opts}
+    _requantize(model, a, extra)
+    manifest = pack_model(model, a.model, a.out, layout, extra=extra)
     print(f"packed {len(manifest['slabs'])} slabs, {len(manifest['aux'])} aux tensors, {manifest['nbytes'] / 2**30:.2f} GiB -> {a.out}")
     return 0
+
+
+def _requantize(tree, a, extra) -> None:
+    """``--quantize FMT``: the BF16 / F32 matrices are quantized into FMT at pack time (``--quantize-keep`` substrings
+    stay as stored — the embedding tables a step only gathers from, a head kept exact); recorded in the manifest."""
+    if not a.quantize:
+        return
+    from monolith.formats.safetensors_reader import SafetensorsDir
+    from monolith.nn.pack_plan import bind_formats
+
+    keep = tuple(k for k in (a.quantize_keep or "").split(",") if k)
+    ckpt = SafetensorsDir(a.model, rename=getattr(tree, "checkpoint_rename", None), adapt=getattr(tree, "checkpoint_adapt", None))
+    try:
+        bound = bind_formats(tree, ckpt, requantize=a.quantize, keep=keep)
+    finally:
+        ckpt.close()
+    n = sum(1 for f in bound.values() if f == a.quantize)
+    extra["quantize"] = {"format": a.quantize, "keep": list(keep), "matrices": n}
+    print(f"re-quantizing {n} matrices to {a.quantize} at pack time" + (f" (kept as stored: {', '.join(keep)})" if keep else ""))
 
 
 def pack_from_drafter(a, layout) -> int:
@@ -81,7 +102,9 @@ def pack_from_drafter(a, layout) -> int:
         print(f"no drafter plugin registered as {a.drafter_kind!r}")
         return 1
     drafter = cls.from_checkpoint(a.model, target_lm_head=None, max_context=a.max_context)
-    manifest = pack_model(drafter, a.model, a.out, layout, extra={"drafter": a.drafter_kind, "options": {"max_context": a.max_context}})
+    extra = {"drafter": a.drafter_kind, "options": {"max_context": a.max_context}}
+    _requantize(drafter, a, extra)
+    manifest = pack_model(drafter, a.model, a.out, layout, extra=extra)
     print(f"packed {len(manifest['slabs'])} slabs, {len(manifest['aux'])} aux tensors, {manifest['nbytes'] / 2**30:.2f} GiB -> {a.out}")
     return 0
 
@@ -96,6 +119,8 @@ def main(argv=None) -> int:
     ap.add_argument("--num-layers-override", type=int, default=None)
     ap.add_argument("--lane-order", default="interleaved16", choices=["contiguous", "interleaved16"])
     ap.add_argument("--rows", type=int, default=16)
+    ap.add_argument("--quantize", default=None, help="quantize the checkpoint's BF16 / F32 matrices into this format at pack time (nvfp4, int8, fp8_e4m3, int4_affine)")
+    ap.add_argument("--quantize-keep", default=None, help="comma-separated tensor-name substrings that stay as stored with --quantize (e.g. embed_tokens,markov)")
     a = ap.parse_args(argv)
     layout = PackLayout(rows=a.rows, lane_order=a.lane_order)
     if a.drafter_kind is not None:

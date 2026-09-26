@@ -61,6 +61,42 @@ def test_speculative_equals_plain_greedy(packs, verify):
     assert st["error"] == 0
 
 
+def test_speculative_equals_plain_greedy_with_a_requantized_drafter(packs, tmp_path):
+    """The drafter's BF16 matrices quantized at pack time (#103; INT4 affine here — its K % 256 fits the synthetic
+    widths, nvfp4 needs K % 512 and the drafter's hidden must match the target head's): the session binds a fresh
+    tree to the pack's formats, the round runs the quantized kernels, and the greedy tokens still equal plain decode's."""
+    from monolith.formats.safetensors_reader import SafetensorsDir
+    from monolith.nn.pack_plan import bind_formats
+
+    tdir, _ = packs
+    ddir = tmp_path / "drafter_q"
+    ddir.mkdir()
+    write_checkpoint(ddir, seed=5, with_head=False, vocab_size=50, target_hidden_size=256, target_layer_ids=[-1, 1], block_size=3)
+    plain = Session(_model(tdir), str(tdir / "pack"), eos=-1, autotune=False)
+    model = _model(tdir)
+    drafter, _, cfg, _ = build(ddir, target_lm_head=model.lm_head)
+    ckpt = SafetensorsDir(str(ddir))
+    try:
+        bound = bind_formats(drafter, ckpt, requantize="int4_affine", keep=("embed_tokens", "markov"))
+    finally:
+        ckpt.close()
+    assert bound["layers.0.mlp.down_proj.weight"] == "int4_affine" and bound["embed_tokens.weight"] == "bf16"
+    pack_model(drafter, str(ddir), str(ddir / "pack"), PackLayout(rows=16))
+    fresh, _, _, _ = build(ddir, target_lm_head=model.lm_head)                       # bound from the BF16 checkpoint
+    assert fresh.blocks[0].mlp.down.format_of("down_proj") == "bf16"
+    spec = Session(model, str(tdir / "pack"), eos=-1, autotune=False, drafter=fresh, drafter_pack=str(ddir / "pack"), verify="cost")
+    assert fresh.blocks[0].mlp.down.format_of("down_proj") == "int4_affine"          # the session rebound it from the pack
+    rng = np.random.default_rng(7)
+    for n_prompt, n_new in ((5, 24), (9, 16)):
+        ids = [int(x) for x in rng.integers(0, 50, n_prompt)]
+        ref = plain.generate(ids, n_new)
+        got = spec.generate(ids, n_new)
+        assert got.tokens == ref.tokens, (n_prompt, got.tokens, ref.tokens)
+        assert len(got.tokens) == n_new and got.decode_tokens == n_new - 1
+        assert all(a <= cfg.block_size for a in got.accepted)
+    assert spec.engine(0).state()["error"] == 0
+
+
 def test_context_capacity_guard(packs):
     """The program knows how many positions a sequence may occupy (the target's KV rows; with a drafter the smaller of
     that and its context cache less the block): a request that cannot fit is refused before it starts, one that just
