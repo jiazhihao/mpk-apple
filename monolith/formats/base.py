@@ -71,6 +71,7 @@ class Format(ABC):
     bytes_per_weight: float = 0.0
     weights_per_word: int = 0
     scale_group: int = 0
+    pack_k_multiple: int = 32        # K must be a multiple of this for ``pack`` (32 lanes; a lane's stripe holds whole scale groups)
 
     @abstractmethod
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:

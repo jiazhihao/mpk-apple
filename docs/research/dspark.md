@@ -139,6 +139,11 @@ text and chat: the step is 94 % bus-bound now (decode-kernels.md §5), so what r
 — the prompt's and the drafter's, not the engine's — and the two BF16 `lm_head` passes per step (a quarter of
 that with the 27B's NVFP4 head).
 
+*2026-09-26:* on the MLX 8B pack (the bytes mlx-lm streams) with the V3 decode and the drafter re-quantized to
+NVFP4 at pack time, the cost-aware round is at **12.6 ms per token** (math 8.9, code 11.0, chat 16.6, text 14.5)
+against plain decode's 21.5 and mlx-lm plain's 15.9 — the round's trace and the comparison are in decode-kernels.md
+§8; mlx-lm's own speculative decoding is still to be measured (#103).
+
 Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify(1 + L))`. With the llama.cpp accepted lengths above
 (2.7–4.1 at n-max 4) and the M5 Pro cost table, the break-even is comfortable on FP8 layers and marginal for the NVFP4
 MLPs on the shader path — the reason the verify-length rule, the INT8/NVFP4 drafter and the Apple10 accelerator verify

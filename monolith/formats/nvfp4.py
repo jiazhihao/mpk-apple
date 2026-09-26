@@ -40,6 +40,7 @@ class NVFP4(Format):
     bytes_per_weight = 0.5 + 1.0 / BLOCK
     weights_per_word = 32
     scale_group = BLOCK
+    pack_k_multiple = 32 * BLOCK
     msl_decode = """
 #define WEIGHTS_PER_WORD 32u
 #define SCALE_GROUP 16u
