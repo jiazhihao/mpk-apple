@@ -407,7 +407,10 @@ path.
   µs ever matter. Variants a program can never take are not encoded: under the cost-aware or a fixed L ≥ 1 rule a
   decode step runs at T = 1 + L ≥ 2, so the step's T = 1 variants are pruned and the next variant's range starts
   at 0 (a prefill chunk of one token runs on it); the injection's variants (`n_inject` can be 1) and the threshold
-  rule's (L = 0 is possible) stay.
+  rule's (L = 0 is possible) stay. A tile's input is read in `x_permute`'s order; when the input is un-normed and
+  the GEMV runs on the tile alone, its producer writes that order itself (`PERM_OUT`: the attention merge for
+  `o_proj`, the gate|up tile's silu·mul epilogue for `down`) into the tile's scratch and the permute dispatch is not
+  emitted — the normed inputs keep theirs, which applies the norm on the way.
 
 ### 5.8 Speculative decoding with a DSpark drafter
 

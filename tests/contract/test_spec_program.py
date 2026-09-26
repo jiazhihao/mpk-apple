@@ -262,3 +262,40 @@ def test_accelerator_plan_in_the_plain_programs(pair):
     assert any(b[0] == 7 for b in down[1].bindings) and any(b[0] == 8 for b in down[1].bindings)
     dec = compile_program(model, tp, PROF_ACCEL, t=1)
     assert len([o for o in dec.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]) == 1 and not any(o.meta.get("accelerator") for o in dec.ops)
+
+
+def test_fused_permutes(pair):
+    """Under the cost rule every predicated GEMV runs on the tile alone, so the un-normed tile inputs — the attention
+    output for o_proj, the gated product for down — are written in x' order by their producers (the merge, the
+    gate|up tile's epilogue) straight into the consumer's scratch: no x_permute for them, and the two dispatches
+    share the buffer. Under the threshold rule (a shader variant remains) nothing is fused."""
+    model, drafter, tp, dp = pair
+    prog = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp)
+    perms = [o for o in prog.ops if o.meta.get("kind") == "x_permute"]
+    tiles = [o for o in prog.ops if o.meta.get("accelerator")]
+    permuted = {[b for b in o.bindings if b[0] == 3][0][1] for o in perms}                 # the scratches a permute dispatch writes
+    xin = lambda o: [b for b in o.bindings if b[0] == 2][0][1]
+    by_name = {o.name: o for o in tiles}
+    for name in ("gemv:layers.1.self_attn.o_proj.o_proj", "gemv:layers.0.mlp.down.down_proj", "gemv:layers.1.mlp.down.down_proj"):
+        assert xin(by_name[name]) not in permuted, f"{name}'s input is written by its producer, not a permute"
+    for name in ("gemv:layers.1.self_attn.qkv.q_proj+k_proj+v_proj", "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"):
+        assert xin(by_name[name]) in permuted, f"{name}'s input is normed: the permute applies the norm"
+    merge = [o for o in prog.ops if o.name == "gqa_merge" and o.meta.get("perm_out")]
+    assert len(merge) == 3 and all(prog.kernels[m.kernel].macros["PERM_OUT"] == "1" for m in merge)   # the target's layer 1 and the drafter's two layers
+    assert xin(by_name["gemv:layers.1.self_attn.o_proj.o_proj"]) == [b for b in merge[0].bindings if b[0] == 3][0][1]
+    gate_up, down = by_name["gemv:layers.1.mlp.gate_up.gate_proj+up_proj"], by_name["gemv:layers.1.mlp.down.down_proj"]
+    assert gate_up.meta["perm_out"] and prog.kernels[gate_up.kernel].macros["PERM_OUT"] == "1" and prog.kernels[gate_up.kernel].macros["PERM_K"] == "256u"
+    assert [b for b in gate_up.bindings if b[0] == 3][0][1] == xin(down) and not down.meta["perm_out"]
+    assert any(o.meta.get("perm_out") for o in tiles if o.name.startswith("gemv:draft.") and "gate_up" in o.name)
+    out3 = lambda o: [b for b in o.bindings if b[0] == 3][0][1]
+    target_tiles = [t for t in tiles if t.name.startswith("gemv:layers.")]
+    fused_target = [o for o in prog.ops if o.meta.get("perm_out") and any(xin(t) == out3(o) for t in target_tiles)]
+    assert len(fused_target) == 3                                                          # o_proj of layer 1, down of layers 0 and 1
+    plain = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="threshold", verify_threshold=0.5)
+    # the target keeps its T = 1 shader variants there, so its inputs go through permutes again; the drafter's block GEMVs
+    # (static rows: the tile alone under any rule) stay fused
+    plain_tiles = [o for o in plain.ops if o.meta.get("accelerator")]
+    plain_permuted = {out3(o) for o in plain.ops if o.meta.get("kind") == "x_permute"}
+    assert all(xin(t) in plain_permuted for t in plain_tiles if t.name.startswith("gemv:layers."))
+    assert not any(o.meta.get("perm_out") for o in plain_tiles if o.name.startswith("gemv:layers."))
+    assert sum(1 for o in plain.ops if o.meta.get("kind") == "x_permute") == len(perms) + len(fused_target)   # one permute dispatch per fused target producer

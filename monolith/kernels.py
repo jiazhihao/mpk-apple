@@ -14,6 +14,31 @@ from .formats.blm import PackInfo
 KERNELS_DIR = Path(__file__).resolve().parents[1] / "kernels"
 PRELUDE = "#include <metal_stdlib>\nusing namespace metal;\n"
 
+# PERM_OUT: a kernel that produces a tile GEMV's input writes it in x_permute's order (gemm_tile.metal's x') straight
+# into the tile's scratch, so the permute dispatch is not needed: natural column n of a K-wide row -> slot perm_dest(n)
+PERM_OUT_MSL = """
+#ifndef PERM_OUT
+#define PERM_OUT 0
+#endif
+#if PERM_OUT
+static inline uint perm_dest(uint n) {                       // the inverse of x_permute's perm_source for K = PERM_K
+  const uint kl = PERM_K / 32u, span = 32u * PERM_WPW;
+  const uint l = n / kl, o = n % kl, j = o / PERM_WPW, e = o % PERM_WPW;
+  const uint p = j * span + l * PERM_WPW + e;                // the pack-order column
+  const uint kt = p / PERM_TK, r = p % PERM_TK, mq = r / (PERM_TK / 4u), r2 = r % (PERM_TK / 4u);
+  const uint slot = (r2 & 3u) | ((mq & 1u) << 2) | ((mq >> 1) << 3) | ((r2 >> 2) << 4);
+  return kt * PERM_TK + slot;
+}
+#endif
+"""
+
+
+def perm_out_macros(k: int, wpw: int, tk: int) -> Dict[str, str]:
+    """The producer-side macros of a fused permute: the consumer tile's K, its format's weights per word and its TK."""
+    if k % (32 * wpw) or k % tk:
+        raise ValueError(f"perm_out: K={k} must be a multiple of {32 * wpw} and of {tk}")
+    return {"PERM_OUT": "1", "PERM_K": f"{k}u", "PERM_WPW": f"{wpw}u", "PERM_TK": f"{tk}u"}
+
 
 def template(name: str) -> str:
     return (KERNELS_DIR / name).read_text()
@@ -155,12 +180,13 @@ MSL_TENSOR_OPS = 4 << 16          # the language version the tensor-ops kernels 
 GEMM_TN = 16                      # rows per accelerator tile (the default up to 16 tokens; gemm_tile_shape)
 GEMM_TK = 256                     # columns per accelerator tile
 GEMM_PERM_SG = 16                 # SIMD-groups per row of x_permute (its grid is tm * GEMM_PERM_SG SIMD-groups of 32)
+THREADGROUP_MEMORY_LIMIT = 32768  # bytes of threadgroup memory a dispatch may declare (Apple GPUs); a kernel needing more fails to build
 
 
 def gemm_source(fmt: str) -> str:
     """The gemm_tile kernel (the M5 accelerator path for T > 1, #50) for storage format ``fmt``; compile it with
     ``language_version=MSL_TENSOR_OPS``."""
-    return PRELUDE + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+    return PRELUDE + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
 
 
 def gemm_tile_shape(tm: int) -> Tuple[int, int]:
@@ -170,13 +196,16 @@ def gemm_tile_shape(tm: int) -> Tuple[int, int]:
 
 
 def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional[int] = None, tk: Optional[int] = None,
-                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False, ksplit: int = 1) -> Dict[str, str]:
+                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False, ksplit: int = 1,
+                scale_cache: Optional[bool] = None) -> Dict[str, str]:
     """The specialization of gemm_tile for one slab geometry, ``tm`` token rows (8, 16 or 32 — the accelerator's
     16-row minimum makes 8 cost what 16 costs; the operation's T_act ≤ tm is a run-time parameter), the tile shape
     ``tn × tk`` (64×64, 32×128 or 16×256: 4096 weights, one per thread register; the measured default per ``tm``) and
     the GEMV fusions it takes over (``epilogue`` residual | silu_mul, ``stat_out``, ``round_before_residual``; the
     input norm is applied by x_permute on the way in). ``ksplit`` > 1: one row tile per threadgroup of that many
-    SIMD-groups, each a contiguous K slice, the partials reduced through threadgroup memory (``gemm_geometry``)."""
+    SIMD-groups, each a contiguous K slice, the partials reduced through threadgroup memory (``gemm_geometry``).
+    ``scale_cache``: None = keep a thread's scale words in registers when they fit (the default), False = never — a
+    K-split finer than the lane groups (8 or 16 slices at K = 4096) needs the cache off."""
     f = FORMATS.get(info.format)
     wpw = int(f.weights_per_word)
     if tn is None or tk is None:
@@ -197,8 +226,12 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         raise ValueError(f"gemm_tile: R={info.rows} must divide the {tn}-row tile")
     if tm not in (8, 16, 32):
         raise ValueError(f"gemm_tile: TM must be 8, 16 or 32 (got {tm})")
-    if ksplit not in (1, 2, 4) or (info.k // tk) % ksplit:
-        raise ValueError(f"gemm_tile: KSPLIT={ksplit} must be 1, 2 or 4 and divide the {info.k // tk} K tiles")
+    if ksplit not in (1, 2, 4, 8, 16) or (info.k // tk) % ksplit:
+        raise ValueError(f"gemm_tile: KSPLIT={ksplit} must be 1, 2, 4, 8 or 16 and divide the {info.k // tk} K tiles")
+    part_bytes = (ksplit - 1) * 32 * (max(1, tm // 16) * tn // 2) * 4       # the slices' partial tiles (part[KSPLIT-1][32][C_CAP] floats)
+    if part_bytes > THREADGROUP_MEMORY_LIMIT:
+        raise ValueError(f"gemm_tile: KSPLIT={ksplit} at TM={tm} needs {part_bytes} bytes of threadgroup memory for the partial tiles "
+                         f"(the limit is {THREADGROUP_MEMORY_LIMIT})")
     macros = {"K": str(info.k), "R": str(info.rows), "TM": str(tm), "TN": f"{tn}u", "TK": f"{tk}u",
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
               "UNIT_WORDS": unit_words(info), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0",
@@ -208,7 +241,7 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
     lpt = tk // wpw                                            # lanes per tile: LPT * 16 bytes of each row's 128-byte line
     if lpt * 16 >= 64:
         macros["Q_OUTER"] = "1"                                # lane group outer (half a line or more per row piece) …
-        if info.scale_bytes:                                   # … and the scale words of a thread's rows and lanes can stay
+        if info.scale_bytes and scale_cache is not False:      # … and the scale words of a thread's rows and lanes can stay
             nw = max(1, (tk // 4) // wpw)                      #     in registers across the lane group's words (≤ 16 uints)
             if (tn // 8) * nw * int(macros["SCALE_WORDS"]) * 4 <= 16:
                 if ksplit > 1 and ((info.k // tk) // ksplit) % int(macros["PAYLOAD_WORDS"]):     # the cache is filled at a lane group's first word
@@ -224,7 +257,7 @@ def gemm_geometry(mode: str, n_tiles: int, cores: Optional[int] = None, tg: int 
     ``crew2`` (12 SIMD-groups per core, one or two threadgroups per core, static slices of the tiles; needs
     ``cores``) or ``ksplit<S>`` (one tile per threadgroup of S SIMD-groups, the K-split; ``n_sg`` = tiles × S)."""
     if mode.startswith("ksplit"):
-        s = int(mode[6:])
+        s = int(mode[6:].rstrip("nc"))
         return n_tiles * s, n_tiles, 32 * s
     if cores is None:
         raise ValueError("gemm_geometry: the crew modes need the core count")
@@ -233,7 +266,8 @@ def gemm_geometry(mode: str, n_tiles: int, cores: Optional[int] = None, tg: int 
 
 
 def gemm_ksplit(mode: str) -> int:
-    return int(mode[6:]) if mode.startswith("ksplit") else 1
+    """The split of a tile geometry mode: ``ksplit<S>`` or ``ksplit<S>nc`` (the scale cache off) → S; the crew → 1."""
+    return int(mode[6:].rstrip("nc")) if mode.startswith("ksplit") else 1
 
 
 def gemm_params(n_rows: int, n_tiles: int, n_sg: int, t_active: int, *, out_scale: float = 1.0, tile0: int = 0, n_blocks: int = 0) -> bytes:
@@ -350,7 +384,7 @@ def macro_key(macros: Mapping[str, str]) -> str:
 def gqa_source(v2: bool = False, steal: bool = False) -> str:
     """The attention kernels: the shared helpers + v1 (``gqa_decode`` / ``gqa_merge``, with the DRAFT variant) or v2
     (``gqa_decode_v2`` / ``gqa_merge_v2``: the long-context structure of design §5.6, #34)."""
-    src = PRELUDE + template("gqa_common.metal") + "\n"
+    src = PRELUDE + PERM_OUT_MSL + template("gqa_common.metal") + "\n"
     if steal:
         src += template("common/steal.metal") + "\n"                                   # the claim protocol (#44), v1 only
     return src + template("gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
@@ -375,7 +409,7 @@ GQA_V2_CHUNK_MIN = 32
 def gqa_v2_macros(head_dim: int, *, rmax: int, rg: int = 4) -> Dict[str, str]:
     """v2: ``rmax`` = the query rows per block (rep · T_max, ≤ 32: the threadgroup-memory query cache), ``rg`` =
     rows per pass of the scoring / P·V loop."""
-    if head_dim % 32 or not 1 <= rmax <= 32 or not 1 <= rg <= rmax or rmax * head_dim * 2 > 32768:
+    if head_dim % 32 or not 1 <= rmax <= 32 or not 1 <= rg <= rmax or rmax * head_dim * 2 > THREADGROUP_MEMORY_LIMIT:
         raise ValueError("gqa_decode_v2: head_dim a multiple of 32, 1 <= rg <= rmax <= 32, and rmax·D·2 bytes within threadgroup memory")
     return {"D": str(head_dim), "RMAX": f"{rmax}u", "RG": f"{rg}u"}
 

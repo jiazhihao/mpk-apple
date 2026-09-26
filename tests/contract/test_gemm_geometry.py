@@ -13,7 +13,9 @@ def test_crew_and_ksplit_geometries():
     assert kernels.gemm_geometry("crew2", 256, 20) == (480, 40, 384)
     assert kernels.gemm_geometry("ksplit2", 256) == (512, 256, 64)          # n_sg = tiles × S, one tile per threadgroup of S SIMD-groups
     assert kernels.gemm_geometry("ksplit4", 1536) == (6144, 1536, 128)
-    assert kernels.gemm_ksplit("ksplit4") == 4 and kernels.gemm_ksplit("crew2") == 1
+    assert kernels.gemm_geometry("ksplit8", 256) == (2048, 256, 256)
+    assert kernels.gemm_ksplit("ksplit4") == 4 and kernels.gemm_ksplit("crew2") == 1 and kernels.gemm_ksplit("ksplit16nc") == 16
+    assert kernels.gemm_geometry("ksplit4nc", 256) == (1024, 256, 128)
     with pytest.raises(ValueError):
         kernels.gemm_geometry("crew", 256)                                  # the crew needs the core count
 
@@ -35,3 +37,10 @@ def test_ksplit_macro_follows_the_slab():
     _, info, _ = pack_spec(random_spec("bf16", 64, 512, rng), PackLayout(rows=16))      # 2 K tiles: 4 does not divide them
     with pytest.raises(ValueError):
         kernels.gemm_macros(info, tm=8, ksplit=4)
+    # the slices' partial tiles live in threadgroup memory: at TM = 32 (a 32 × 128 tile, 32 floats per lane) 16 slices
+    # need 61,440 bytes, over the 32 KiB limit — refused before a pipeline is built; 8 slices (28,672) fit
+    _, info, _ = pack_spec(random_spec("fp8_e4m3", 64, 4096, rng), PackLayout(rows=16))
+    assert kernels.gemm_macros(info, tm=32, ksplit=8)["KSPLIT"] == "8u"
+    with pytest.raises(ValueError, match="threadgroup memory"):
+        kernels.gemm_macros(info, tm=32, ksplit=16)
+    assert kernels.gemm_macros(info, tm=16, ksplit=16)["KSPLIT"] == "16u"                 # 15 × 32 × 8 × 4 = 15 KiB

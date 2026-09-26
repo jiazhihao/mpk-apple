@@ -49,7 +49,7 @@ class GemmBench:
             lane_order: str = "interleaved16", tg_per_core: int = 1, tg: int = 384, copies: Optional[int] = None,
             reps: int = 3, seed: int = 0, check: bool = True, out_bf16: bool = False,
             extra_macros: Optional[Dict[str, str]] = None, tn: Optional[int] = None, tk: Optional[int] = None, ksplit: int = 1,
-            placement: str = "inline") -> dict:
+            placement: str = "inline", scale_cache: Optional[bool] = None) -> dict:
         rng = np.random.default_rng(seed)
         spec = random_spec(fmt, n, k, rng)
         data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
@@ -68,7 +68,7 @@ class GemmBench:
         rsbuf = nt.Buffer(self.dev, row_scales.tobytes())
         ybuf = nt.Buffer(self.dev, tm * n * (2 if out_bf16 else 4))
         ybuf.fill(0)
-        macros = kernels.gemm_macros(pinfo, tm=tm, out_bf16=out_bf16, tn=tn, tk=tk, ksplit=ksplit)
+        macros = kernels.gemm_macros(pinfo, tm=tm, out_bf16=out_bf16, tn=tn, tk=tk, ksplit=ksplit, scale_cache=scale_cache)
         tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
         macros.update(extra_macros or {})
         if check and macros.get("EXP_MODE", "0") != "0":

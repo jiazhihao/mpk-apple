@@ -30,6 +30,7 @@ class Profile:
     sibling_order: str = "either"     # "alu_first" | "bus_first" | "either"
     max_cb_ms: float = 16.0
     attention: str = "v1"             # the attention kernel: "v1" (block = kv head × chunk × row group) or "v2" (§5.6 v2, #34)
+    attention_rows: int = 4           # v1's query rows per pass over a chunk (RBMAX): more rows stream the chunk fewer times, at register cost
     accelerator: str = "off"          # "on": T > 1 GEMVs run on the tensor-ops tile (gemm_tile, #50/#51) above accelerator_min_t
     accelerator_min_t: Dict[str, int] = field(default_factory=dict)     # cost_T format key -> the smallest T the tile covers (default 2)
     cost_t: Dict[str, Dict[int, float]] = field(default_factory=dict)   # format -> {T: cost relative to T = 1}
@@ -80,6 +81,8 @@ class Profile:
             raise ValueError(f"profile {name}: engine.scale_placement must be 'inline' or 'block'")
         if eng.get("attention", "v1") not in ("v1", "v2"):
             raise ValueError(f"profile {name}: engine.attention must be 'v1' or 'v2'")
+        if int(eng.get("attention_rows", 4)) not in (1, 2, 4, 8, 16):
+            raise ValueError(f"profile {name}: engine.attention_rows must be 1, 2, 4, 8 or 16")
         if eng.get("accelerator", "off") not in ("on", "off"):
             raise ValueError(f"profile {name}: engine.accelerator must be 'on' or 'off'")
         min_t = {str(f): int(t) for f, t in (eng.get("accelerator_min_t") or {}).items()}
@@ -101,6 +104,7 @@ class Profile:
             sibling_order=str(eng.get("sibling_order", "either")),
             max_cb_ms=float(eng.get("max_cb_ms", 16.0)),
             attention=str(eng.get("attention", "v1")),
+            attention_rows=int(eng.get("attention_rows", 4)),
             accelerator=str(eng.get("accelerator", "off")),
             accelerator_min_t=min_t,
             cost_t=cost_t,

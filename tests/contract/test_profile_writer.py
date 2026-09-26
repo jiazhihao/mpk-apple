@@ -61,7 +61,9 @@ def _measurements():
 
 
 def test_decide_and_merge_produce_a_loadable_profile(tmp_path):
-    engine, notes = decide(_measurements(), {"sibling_order": "alu_first", "max_cb_ms": 16, "lane_order": "contiguous"})
+    engine, notes = decide(_measurements(), {"sibling_order": "alu_first", "max_cb_ms": 16, "lane_order": "contiguous", "attention_rows": 8})
+    assert engine["attention_rows"] == 8                                                  # not measured: the file's value carries over
+    assert decide(_measurements(), {"sibling_order": "alu_first"})[0]["attention_rows"] == 4
     assert engine["family"] == "Apple10" and engine["lane_order"] == "interleaved16" and engine["threadgroups_per_core"] == 1
     assert engine["sibling_order"] == "alu_first" and engine["max_cb_ms"] == 16 and engine["attention"] == "v1"
     assert engine["accelerator"] == "on" and engine["accelerator_min_t"] == {"fp8": 2, "nvfp4": 2}

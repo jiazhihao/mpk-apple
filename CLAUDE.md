@@ -55,9 +55,13 @@ projections 1.5–1.7× faster at T = 8, autotuned per op) to 10.8, and a wider 
 T = 1 variants a cost-rule program never takes (615 → 469 dispatches) to 10.4, the padding-free pack (#101:
 `scale_placement: block` — the block's scales in their own region, the 8B pack 4.66 → 4.30 GB per token, 1.008×
 the checkpoint), `StepState.stop_at` (the program stops itself at the request, no over-run) and sub-word lane
-units (2 or 4 lanes share a payload word: the DSpark Markov head in NVFP4, 78 → 24 MB) to **9.6** against mlx-lm
-plain's 16.0 — and against mlx-lm's own speculative decoding with a Qwen3-0.6B 4-bit draft, **9.25 at N = 3**:
-ours / theirs 1.044 (ahead on math), the #103 gate not yet met (decode-kernels.md §6, §8, §9). Plain decode is at
+units (2 or 4 lanes share a payload word: the DSpark Markov head in NVFP4, 78 → 24 MB), the permutes of un-normed
+tile inputs written by their producers (`PERM_OUT`) and a one-step pump to **9.56** against mlx-lm plain's 15.9 —
+and against mlx-lm's own speculative decoding with a Qwen3-0.6B 4-bit draft, **9.24 at N = 3**: ours / theirs
+1.036–1.055 (the range is the token stream's: near-tie tokens flip with the tile variants' rounding and the block
+drafter's acceptance with them; ahead on math, even on code, behind on chat and text), the #103 gate not yet met
+(decode-kernels.md §6, §8, §9). The step is at the bus on its GEMVs; the structural lever left is acceptance — an
+LM-drafter plugin (a 0.6B Qwen3 step inside the round) projects 6–8 % under mlx-lm's best. Plain decode is at
 0.776× mlx-lm. The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
 8–133 ms compute buffers: `max_cb_ms` is a latency knob, not a pacing one.
 Model 3 (#46) is built as packages: the MoE ops (`ops/moe.py`: `moe_route`, `moe_gemv` = the GEMV template's pairs
