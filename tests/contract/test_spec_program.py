@@ -239,8 +239,8 @@ def test_accelerator_plan_in_the_round_program(pair):
     # the cost rule: T = 1 on the shader, T >= 2 on the tile's row at TM = 8
     assert verify_costs(PROF_ACCEL, tp, 3, 8) == pytest.approx([1.0, 1.05, 1.05, 1.05])
     assert verify_costs(PROF_ACCEL, tp, 3, 8, accelerator="off") == pytest.approx([1.0, 1.1, 1.2, 1.3])
-    vs = [o for o in prog.ops if o.name == "verify_select"][0]
-    prm = prog.buffers[[b for b in vs.bindings if b[0] == 3][0][1]].init
+    vs = [o for o in cost_prog.ops if o.name == "verify_select"][0]                # the cost-rule program's table
+    prm = cost_prog.buffers[[b for b in vs.bindings if b[0] == 3][0][1]].init
     assert struct.unpack_from("<4f", prm, 16) == pytest.approx((1.0, 1.05, 1.05, 1.05))
     # the program survives its JSON (the language version included)
     back = Program.from_json(prog.to_json())
