@@ -31,7 +31,8 @@ Everything else in a profile is the measurement record; `engine` is the normaliz
 (`monolith.core.profile.Profile`): `family` (the kernel-binding key), `lane_order` of the weight pack
 (`contiguous` | `interleaved16`), `scale_placement` (`inline` | `block`: where a pack keeps its block scales — the
 block region drops the lane-row unit's padding where a lane's scales fit one word, #101), `threadgroups_per_core`,
-`sibling_order` (`alu_first` | `bus_first` | `either`), `max_cb_ms`, `attention` (`v1` | `v2`) and
+`sibling_order` (`alu_first` | `bus_first` | `either`), `max_cb_ms`, `attention` (`v1` | `v2` | `auto`: v2 up to 16
+query rows per step, v1 above — #113), `attention_v2_threadgroups` (v2's threadgroups per core, 2 by default),
 `attention_rows` (v1's query rows per pass over a chunk, 4 by default), `accelerator` (`on` | `off`: T > 1 GEMVs on
 the tensor-ops tile) with `accelerator_min_t` per format, and `cost_T` — per format, the cost of a T-token pass
 relative to T = 1 (the shader rows, and `accelerator_<format>` rows at the tile's TM), which the verify-length rule

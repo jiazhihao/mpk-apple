@@ -48,7 +48,10 @@ def test_accelerator_plan_reproduces_the_m5_pro_decision():
 
 def test_attention_choice():
     assert attention_choice({(1024, 1): 0.10, (4096, 4): 0.30}, {(1024, 1): 0.08, (4096, 4): 0.25})[0] == "v2"
-    assert attention_choice({(1024, 1): 0.10, (4096, 4): 0.30}, {(1024, 1): 0.08, (4096, 4): 0.30})[0] == "v1"    # not everywhere
+    assert attention_choice({(1024, 1): 0.10, (4096, 4): 0.30}, {(1024, 1): 0.08, (4096, 4): 0.30})[0] == "v1"    # not everywhere, and (4096, 4) is 16 rows
+    assert attention_choice({(1024, 1): 0.10, (4096, 8): 0.30}, {(1024, 1): 0.08, (4096, 8): 0.30})[0] == "auto"  # faster up to 16 rows (rep 4), not at 32
+    assert attention_choice({(1024, 4): 0.10, (4096, 4): 0.30}, {(1024, 4): 0.08, (4096, 4): 0.30}, rep=8)[0] == "v1"  # rep 8 · T 4 = 32 rows: nothing in the small regime
+    assert attention_choice({(1024, 1): 0.10, (4096, 8): 0.30}, {(1024, 1): 0.11, (4096, 8): 0.25})[0] == "v1"    # slower where it would be used
     assert attention_choice({(1024, 1): 0.10}, {})[0] == "v1"
 
 

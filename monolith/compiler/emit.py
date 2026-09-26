@@ -56,8 +56,9 @@ class _Ctx:
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
-    attention: str = "v1"                                                 # the attention kernel (profile / override)
+    attention: str = "v1"                                                 # the attention kernel (profile / override): v1 | v2 | auto
     attn_rows: int = 4                                                    # v1's query rows per pass (the profile's attention_rows)
+    attn_v2_tg: int = 2                                                   # v2's threadgroups per core (the profile's attention_v2_threadgroups)
     accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
     accel_min_t: Dict[str, int] = field(default_factory=dict)             # cost_T format key -> the smallest T the tile covers
     t_min: int = 1                                                        # the smallest T a decode step of this program can take: the
@@ -566,8 +567,13 @@ def _gqa_src(ctx: _Ctx, v2: bool = False) -> str:
 
 
 def _gqa_v2(ctx: _Ctx, heads: int, kv: int) -> bool:
-    """v2 when the profile (or the override) asks and the block's rows fit its query cache."""
-    return ctx.attention == "v2" and (heads // kv) * ctx.t <= 32
+    """v2 when the profile (or the override) asks and the block's rows fit its query cache; ``auto``: v2 up to 16 query
+    rows per step (rep · T) — measured 2–3× faster than v1 at T = 1 and at 1024 keys with two threadgroups per core,
+    while v1 keeps ~10 % at 32 rows over a short context (decode-kernels.md §11)."""
+    rows = (heads // kv) * ctx.t
+    if ctx.attention == "v2":
+        return rows <= 32
+    return ctx.attention == "auto" and rows <= 16
 
 
 def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
@@ -575,7 +581,7 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     rep = heads // kv
     if v2:
-        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=4), STEP_STATE="1"), ctx.n_sg // 12, kernels.GQA_V2_CHUNK_MIN
+        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=min(4, rep * ctx.t)), STEP_STATE="1"), (ctx.n_sg // 12) * ctx.attn_v2_tg, kernels.GQA_V2_CHUNK_MIN
     chunk = int(a.get("chunk", 64))
     lm_mode, chain_i = int(a.get("lm_mode", 0)), int(a.get("chain_i", 0))
     if v2 and lm_mode:
@@ -606,7 +612,7 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
         v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
         scaling=float(a["scaling"]), has_gate=False, n_chunks_max=n_chunks_max, rows_max=rows_max))
     st = ctx.program.step_state
-    grid, tg = ctx.crew_grid()
+    grid, tg = ((n_sg, 1, 1), (ctx.tg, 1, 1)) if v2 else ctx.crew_grid()          # v2: one threadgroup per block, n_sg of them
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *ctx.buf(part_o)), (8, *ctx.buf(part_md)), (9, prm, 0), (15, st, 0)],
             grid, tg, op.kind, writes=[1, 2, 7, 8], attention="v2" if v2 else "v1")
@@ -938,6 +944,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
     ctx = _Ctx(program, packs, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, values=g.values, dynamic_t=dynamic_t,
                speculative=speculative, attention=attention or profile.attention, attn_rows=int(profile.attention_rows), accelerator=accelerator or profile.accelerator,
+               attn_v2_tg=int(profile.attention_v2_threadgroups),
                accel_min_t=dict(profile.accelerator_min_t), tuner=tuner, eos=eos, ring_capacity=ring_capacity, t_min=max(1, int(t_min)))
     _pack_windows(ctx)
     ctx.ctx_cap_target, ctx.ctx_cap = _context_capacity(ctx, g)

@@ -118,13 +118,20 @@ def accelerator_plan(shader: Mapping[str, Mapping[int, float]], tile: Mapping[st
     return ("on" if on else "off"), min_t, ("; ".join(notes) if notes else "no tile measurement (the tensor ops did not compile or were skipped)")
 
 
-def attention_choice(v1: Mapping[Any, float], v2: Mapping[Any, float]) -> Tuple[str, str]:
-    """``(attention, why)``: v2 only when faster than v1 at every measured (context, T) by more than the margin."""
+def attention_choice(v1: Mapping[Any, float], v2: Mapping[Any, float], rep: int = 4) -> Tuple[str, str]:
+    """``(attention, why)``: v2 when faster than v1 at every measured (context, T) by more than the margin; ``auto``
+    (v2 up to 16 query rows per step, v1 above) when it is faster at every point with rep · T ≤ 16 but not everywhere;
+    v1 otherwise."""
     common = [k for k in v1 if k in v2]
     if not common:
         return "v1", "v2 not measured"
     if all(v2[k] < v1[k] * (1 - NOISE) for k in common):
         return "v2", "v2 faster at every point: " + ", ".join(f"{k}: {v2[k]:.3f} vs {v1[k]:.3f} ms" for k in common)
+    small = [k for k in common if rep * int(k[1]) <= 16]
+    if small and all(v2[k] < v1[k] * (1 - NOISE) for k in small):
+        worst = max(common, key=lambda k: v2[k] / v1[k])
+        return "auto", ("v2 faster at every point up to 16 query rows (" + ", ".join(f"{k}: {v2[k]:.3f} vs {v1[k]:.3f} ms" for k in small)
+                        + f"), not at {worst}: {v2[worst]:.3f} vs {v1[worst]:.3f} ms")
     worst = max(common, key=lambda k: v2[k] / v1[k])
     return "v1", f"v2 not faster everywhere (at {worst}: {v2[worst]:.3f} vs {v1[worst]:.3f} ms)"
 
@@ -147,13 +154,14 @@ def decide(measurements: Mapping[str, Any], current: Optional[Mapping[str, Any]]
             for f, rows in measurements.get("tile_ms", {}).items() if f in measurements["shader_ms"] and rows}
     accel, min_t, notes["accelerator"] = accelerator_plan(shader, tile)
     att = measurements.get("attention_ms") or {}
-    attention, notes["attention"] = attention_choice(att.get("v1", {}), att.get("v2", {}))
+    attention, notes["attention"] = attention_choice(att.get("v1", {}), att.get("v2", {}), rep=int(measurements.get("attention_rep", 4)))
     cost_t: Dict[str, Dict[str, float]] = {k: {str(t): c for t, c in tbl.items()} for k, tbl in shader.items()}
     for k, rows in tile.items():
         cost_t[f"accelerator_{k}"] = {str(tm): c for tm, c in sorted(rows.items())}
     engine = {"family": measurements["family"], "lane_order": lane, "scale_placement": placement, "threadgroups_per_core": tgs,
               "sibling_order": cur.get("sibling_order", "either"), "max_cb_ms": cur.get("max_cb_ms", 16),
-              "attention": attention, "attention_rows": int(cur.get("attention_rows", 4)), "accelerator": accel, "accelerator_min_t": min_t, "cost_T": cost_t,
+              "attention": attention, "attention_rows": int(cur.get("attention_rows", 4)), "attention_v2_threadgroups": int(cur.get("attention_v2_threadgroups", 2)),
+              "accelerator": accel, "accelerator_min_t": min_t, "cost_T": cost_t,
               "note": "written by tools/profile_writer.py from the kernel harnesses (min-of-N over >= 2 GB streamed per point): cost_T = the "
                       "pass cost relative to a T = 1 shader pass at the best geometry per T; accelerator_<fmt> = gemm_tile at TM rows in "
                       "the same unit; sibling_order and max_cb_ms are the probes' (p11, p6/p6b) and attention_rows the file's: they carry over"}

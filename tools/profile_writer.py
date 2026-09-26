@@ -137,11 +137,12 @@ def measure(*, shape: Tuple[int, int] = (17408, 5120), formats: Sequence[str] = 
     if attention is not None:
         heads, kv, d = attention
         m["attention_ms"] = {"v1": {}, "v2": {}}
+        m["attention_rep"] = heads // kv
         for ctx in ctxs:
             for t in attn_ts:
                 for v2 in (False, True):
                     try:
-                        r = gqa_bench.run(b.dev, heads, kv, d, ctx, t, 64, 4, reps, v2=v2)
+                        r = gqa_bench.run(b.dev, heads, kv, d, ctx, t, 64, min(4, (heads // kv) * t) if v2 else 4, reps, v2=v2, v2_tg=2)
                     except Exception as e:  # noqa: BLE001
                         log(f"attention {'v2' if v2 else 'v1'} ctx={ctx} T={t}: skipped ({e})")
                         continue

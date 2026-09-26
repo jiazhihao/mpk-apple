@@ -111,7 +111,7 @@ def test_attention_kernel_follows_the_profile(tmp_path):
 
     prm = prog2.buffers[[b for b in [o for o in prog2.ops if o.name == "gqa_decode"][0].bindings if b[0] == 9][0][1]].init
     heads, kv, t_active, position, n_sg = struct.unpack_from("<IIIII", prm)
-    assert (heads, kv, t_active, n_sg) == (8, 2, 2, 20)                     # v2: n_sg carries the threadgroup count
+    assert (heads, kv, t_active, n_sg) == (8, 2, 2, 40)                     # v2: n_sg carries the threadgroup count
     n_chunks_max = struct.unpack_from("<I", prm, 60)[0]
     assert n_chunks_max == 16 // 32 + 1 or n_chunks_max == 1
     # the argmax partials share one workspace across programs' ops (one name → one buffer)

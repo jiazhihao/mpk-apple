@@ -864,8 +864,56 @@ than the T = 1 shader; the profile's `accelerator_min_t` rule sent every T > 1 t
 | 8B NVFP4 | 8 | 1024 | 1391 | **1402** | 968 | 1.45 | 52.58 → 52.70 ms | 36.60 ms |
 
 At T = 1 the 0.6B's layer is 89 µs against MLX's 59 (1.50×, from 2.37×) over 128 tokens of context and 135 over
-1024 (the 64-key chunks of a long context: 40 µs of attention against MLX's 15 — the long-context attention is M9's
-SIMD-group-matrix scoring); the 8B's is 1.2–1.3× at T = 1. The T > 1 rows barely moved: the tuner keeps the tile
+1024 (the 64-key chunks of a long context: 40 µs of attention against MLX's 15); the 8B's is 1.2–1.3× at T = 1.
+
+**The attention kernel, once more.** Two more experiments on the T = 1 core, timed in isolation (the core and the
+merge back to back, 50 pairs, min of 5, the GPU warm) [M]:
+
+* An **eight-lanes-per-key score pass** (`KPL8`: 16 dims per lane, four keys per iteration, a three-step shuffle
+  reduction per dot instead of five per key, the queries in the same layout) — the instruction count per key falls
+  3×, and it measured *slower* over a short context (0.6B, 128 keys: 39 → 52 µs for core + merge with 16 scalar
+  loads per lane; 44 with uint4 loads) and 5–10 % faster over 1024 keys. Not kept: at 16-key chunks the per-block
+  prologue (the queries normed and RoPE'd per block) dominates, and the core's problem is not instructions but a
+  dependent chain on one to three SIMD-groups per core.
+* **The v2 kernel of #34 at T = 1** (`gqa_decode_v2`: one threadgroup per (kv head, batch of chunks), a SIMD-group
+  per 32-key chunk, the queries in threadgroup memory, no per-(key, row) reduction), with one or two threadgroups
+  per core:
+
+| geometry | ctx | T | v1 | v2, 1 threadgroup / core | **v2, 2 / core** |
+|---|---|---|---|---|---|
+| 0.6B (16 heads / 8 kv, D 128) | 128 | 1 | 38.9 µs | 15.4 | **12.3** |
+| | 1024 | 1 | 61.3 | 33.4 | **24.8** |
+| | 128 / 1024 | 4 | 27.9 / 164 | 24.4 / 72 | **24.4 / 58** |
+| | 128 / 1024 | 8 | 46.8 / 248 | 42.0 / 129 | **42.0 / 104** |
+| 8B (32 heads / 8 kv, D 128) | 128 | 1 | 27.7 | 16.1 | **16.0** |
+| | 1024 | 1 | 89.7 | 42.5 | **34.9** |
+| | 128 / 1024 | 4 | 46.9 / 248 | 41.9 / 129 | **42.1 / 103** |
+| | 128 / 1024 | 8 | **68.8** / 378 | 76.2 / 239 | 76.2 / **192** |
+
+  v2 with two threadgroups per core is 2–3× faster than v1 at T = 1 at every context and wins every T over 1024
+  keys; v1 keeps ~10 % only at 32 query rows (the 8B at T = 8) over a short context — #34's "not faster everywhere"
+  was measured at one threadgroup per core at (4096, 4). The profile's `attention` takes **`auto`** now: v2 up to 16
+  query rows per step (rep · T), v1 above, with `attention_v2_threadgroups` (2) — the M5 Pro profile carries both,
+  the writer measures v2 at that geometry and can decide `auto` itself (`attention_choice`). In the step: the 0.6B
+  2.91 → 2.75 ms per token, the 8B's plain decode 18.40 → 18.03 (0.87× mlx-lm, from 0.76× at #103's start).
+
+**With the auto attention** (the same protocol) [M]:
+
+| model | T | ctx | before µs / layer | **after** | mlx-lm | after / mlx | our step → | mlx-lm step |
+|---|---|---|---|---|---|---|---|---|
+| 0.6B 4-bit | 1 | 128 | 140 | **84** | 60 | 1.42 | 4.38 → 2.81 ms | 2.08 ms |
+| 0.6B 4-bit | 1 | 1024 | 147 | **101** | 58 | 1.74 | 4.57 → 3.27 ms | 2.53 ms |
+| 0.6B 4-bit | 4 | 128 | 252 | **202** | 71 | 2.86 | 7.97 → 6.52 ms | 2.42 ms |
+| 0.6B 4-bit | 4 | 1024 | 346 | **239** | 86 | 2.78 | 10.60 → 7.55 ms | 3.05 ms |
+| 0.6B 4-bit | 8 | 128 | 272 | **228** | 115 | 1.99 | 8.54 → 7.29 ms | 3.95 ms |
+| 0.6B 4-bit | 8 | 1024 | 442 | **291** | 144 | 2.02 | 13.26 → 9.08 ms | 5.03 ms |
+| 8B NVFP4 | 1 | 128 | 549 | **468** | 402 | 1.16 | 21.08 → 18.08 ms | 15.64 ms |
+| 8B NVFP4 | 1 | 1024 | 563 | **483** | 422 | 1.14 | 21.57 → 18.65 ms | 16.35 ms |
+| 8B NVFP4 | 4 | 128 | 1029 | **994** | 455 | 2.18 | 39.37 → 38.17 ms | 17.20 ms |
+| 8B NVFP4 | 4 | 1024 | 1212 | **1054** | 524 | 2.01 | 45.98 → 40.34 ms | 19.45 ms |
+| 8B NVFP4 | 8 | 128 | 1085 | **1072** | 842 | 1.27 | 41.57 → 40.97 ms | 33.18 ms |
+| 8B NVFP4 | 8 | 1024 | 1391 | **1395** | 964 | 1.45 | 52.58 → 52.61 ms | 36.51 ms |
+ The T > 1 rows barely moved: the tuner keeps the tile
 there because its isolated timing (9–17 µs per 0.6B GEMV) is half what the same dispatch takes in the program
 (35–45 µs) — a discrepancy the tile's own harness reproduces only with a streamed weight set; in the program the
 tile follows a shader kernel and reads a small x'. Until that is understood the small-K verify pass is a shader

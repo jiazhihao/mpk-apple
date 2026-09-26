@@ -24,7 +24,8 @@ from monolith.nn.rope import rope_tables_permuted               # noqa: E402
 from monolith.runtime import _native as nt                     # noqa: E402
 
 
-def run(dev, heads, kv, d, ctx, t, chunk, rb, reps, v2=False, steal=False):
+def run(dev, heads, kv, d, ctx, t, chunk, rb, reps, v2=False, steal=False, v2_tg=1):
+    """``v2_tg``: v2's threadgroups per core (the profile's attention_v2_threadgroups)."""
     rng = np.random.default_rng(0)
     rep = heads // kv
     hd, kd = heads * d, kv * d
@@ -50,12 +51,13 @@ def run(dev, heads, kv, d, ctx, t, chunk, rb, reps, v2=False, steal=False):
     tabs = [nt.Buffer(dev, f32_to_bf16(cos).tobytes()), nt.Buffer(dev, f32_to_bf16(sin).tobytes()),
             nt.Buffer(dev, np.ones(d, np.float32).tobytes()), nt.Buffer(dev, np.ones(d, np.float32).tobytes())]
     n_sg = 12 * dev.info().gpu_cores
-    params = kernels.gqa_params(heads=heads, kv_heads=kv, t_active=t, position=ctx, n_sg=dev.info().gpu_cores if v2 else n_sg, q_off=0,
+    n_tg = dev.info().gpu_cores * v2_tg
+    params = kernels.gqa_params(heads=heads, kv_heads=kv, t_active=t, position=ctx, n_sg=n_tg if v2 else n_sg, q_off=0,
                                 gate_off=hd + 2 * kd, k_off=hd, v_off=hd + kd, in_stride=n1, out_stride=hd, ctx_max=ctx_max, eps=1e-6,
                                 scaling=d ** -0.5, has_gate=True, n_chunks_max=n_chunks_max, rows_max=rows_max, nominal_sg=n_sg)
     d1 = (nt.Dispatch().pipeline(p_dec).buffer(0, proj).buffer(1, kc).buffer(2, vc).buffer(3, tabs[0]).buffer(4, tabs[1])
           .buffer(5, tabs[2]).buffer(6, tabs[3]).buffer(7, part_o).buffer(8, part_md).bytes(9, params)
-          .grid(-(-(n_sg * 32) // 384)).threadgroup(384).barrier())
+          .grid(n_tg if v2 else -(-(n_sg * 32) // 384)).threadgroup(384).barrier())
     d2 = (nt.Dispatch().pipeline(p_merge).buffer(0, part_o).buffer(1, part_md).buffer(2, proj).buffer(3, out).bytes(4, params)
           .grid(t * heads).threadgroup(32))
     ds = [d1, d2]

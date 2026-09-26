@@ -29,8 +29,9 @@ the cost-aware rule at 36 ms per token vs 27 plain — a no-go on the shader pat
 path (M9). The barrier pass and the sibling overlap (#29, #35: the gate GEMV beside the mixer core) take the 0.8B
 from 6.85 to 6.58 ms per token; the ICB barrier flag orders the flagged command behind all before it (measured;
 the field is `barrier_before`). #34 closed with a measured no: the attention v2 (kept as a per-profile option)
-is not the long-context win, SIMD-group-matrix scoring is (M9); fast math buys 1–2 % and breaks bit-identity,
-so safe stays. Format 2 (#47) is built: affine INT4 groups (`formats/int4_affine`, MLX / AWQ / GPTQ) as a plugin —
+is not the long-context win at one threadgroup per core — at two it is the T ≤ 4 win and the profile's default
+(`attention: auto`, #113 below); SIMD-group-matrix scoring stays M9's long-context item; fast math buys 1–2 % and
+breaks bit-identity, so safe stays. Format 2 (#47) is built: affine INT4 groups (`formats/int4_affine`, MLX / AWQ / GPTQ) as a plugin —
 the MLX 4-bit 0.8B decodes token-identical to its oracle; the port needed a per-group bias hook, the quantized-embedding
 gather, ragged lane stripes and a package-declared value adapter (mlx_lm folds `1 +` into the zero-centered norms;
 porting-log.md); the porting guide (#48, `docs/porting.md`) closes M8. M9's accelerator GEMM is built (#50,
@@ -84,7 +85,10 @@ the layer count (decode-kernels.md §11) — at T = 1 the 0.6B's layer was 140 �
 against 400; the attention core at T = 1 over a short context was the largest loss (16–24 blocks of 64 keys over 240
 SIMD-groups: the chunk is chosen at run time now, 65 → 24 µs), then the GEMVs on K = 1024 slabs (denser crews as
 tuner candidates, the fused norm's fold unrolled, the tuner timing with the program's partial count, shader or tile
-per op by measured time); the layer gate (every layer strictly faster than MLX's) is open.
+per op by measured time), and #34's verdict on the v2 attention was geometry-bound: with two threadgroups per core v2
+is 2–3× faster than v1 at T = 1 and at 1024 keys for every T, so the profile's `attention` is `auto` (v2 up to 16
+query rows per step). The 0.6B decodes at 2.75 ms per token (MLX 2.08), the 8B plain at 18.0 (0.87× mlx-lm); the
+layer gate (every layer strictly faster than MLX's) is open.
 
 ## Read these, in this order
 
