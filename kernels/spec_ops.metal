@@ -49,8 +49,11 @@
 
 struct ConcatParams { uint k; uint t_active; uint pad0; uint pad1; };
 struct ConfParams { uint gamma; uint hidden; uint rank; uint pad; float sts[16]; };
-struct SelectParams { uint gamma; float threshold; uint t_max; uint mode; float cost[16]; uint log_cap; uint ctx_cap; uint pad2; uint pad3; };
-struct AcceptParams { uint ring_cap; int eos; uint log_cap; uint ctx_cap; };
+struct SelectParams { uint gamma; float threshold; uint t_max; uint mode; float cost[16]; uint log_cap; uint ctx_cap; uint lm; uint pad3; };
+struct AcceptParams { uint ring_cap; int eos; uint log_cap; uint ctx_cap; uint lm; uint pad0; uint pad1; uint pad2; };
+// lm = 1: an LM drafter (design §5.8): drafter_ctx_len is the length of the committed prefix it has processed; the accept scan
+// leaves in n_inject the committed rows it has not (the last ones of the step: 0 in decode unless every draft was accepted,
+// the chunk in prefill) and in n_chain whether the step drafts (0 in a prefill chunk); the select records where the chain got to.
 
 kernel void tap_concat(device const uint4* s0 [[buffer(0)]], device const uint4* s1 [[buffer(1)]], device const uint4* s2 [[buffer(2)]],
                        device const uint4* s3 [[buffer(3)]], device const uint4* s4 [[buffer(4)]], device const uint4* s5 [[buffer(5)]],
@@ -63,7 +66,7 @@ kernel void tap_concat(device const uint4* s0 [[buffer(0)]], device const uint4*
   const uint sg = gid / sw;
   const uint t = sg / N_SRC, s = sg % N_SRC;
 #if STEP_STATE
-  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))) return;
+  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))))) return;
 #else
   if (t >= p.t_active) return;
 #endif
@@ -102,7 +105,8 @@ kernel void confidence(device const ushort* hidden [[buffer(0)]], device const u
 kernel void verify_select(device const int* drafts [[buffer(0)]], device const float* conf [[buffer(1)]], device StepState* st [[buffer(2)]],
                           constant SelectParams& p [[buffer(3)]], device float* conf_log [[buffer(4)]], uint i [[thread_position_in_grid]]) {
   if (i != 0 || st->done) return;
-  st->drafter_ctx_len = st->drafter_ctx_len + st->n_inject;    // the draft pass appended the injected positions
+  if (p.lm) st->drafter_ctx_len = st->position + ((st->prefill_left > 0u) ? 0u : p.gamma);   // the ingest reached position; the chain added gamma rows
+  else st->drafter_ctx_len = st->drafter_ctx_len + st->n_inject;    // the draft pass appended the injected positions
   st->n_inject = 0u;
   if (st->prefill_left > 0u) return;                          // the host feeds the next chunk
   for (uint k = 0; k < p.gamma; k++) {
@@ -148,6 +152,7 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
     st->step = st->step + 1u;
     st->n_inject = t;
     st->checkpoint_index = t;
+    st->n_chain = 0u;                                         // no drafting from a prefill chunk
     if (p.ctx_cap && st->position >= p.ctx_cap) { st->error = 2u; st->done = 1u; }   // the context is full
     return;
   }
@@ -173,14 +178,15 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
   st->ring_head = head;
   if (st->stop_at && head >= st->stop_at) stop = true;        // the request is served: the queued steps return at once
   st->accepted = acc;
-  st->anchor = last;
-  st->pending_tokens[0] = last;
+  st->anchor = last;                                          // pending_tokens keeps the step's rows: an LM drafter's ingest reads them; the select rewrites them
   st->position = st->position + base + committed;
   st->step = st->step + 1u;
   st->verify_len = 0u;
   st->t_this_step = 1u;
   st->n_inject = base + committed;
   st->checkpoint_index = base + committed;
+  st->n_chain = 1u;
+  if (p.lm) st->n_inject = (st->position > st->drafter_ctx_len) ? st->position - st->drafter_ctx_len : 0u;   // the committed rows the LM drafter has not seen
   if (stop) st->done = 1u;
   if (p.ctx_cap && st->position >= p.ctx_cap) { st->error = 2u; st->done = 1u; }     // the context is full
 }

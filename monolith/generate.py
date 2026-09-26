@@ -196,9 +196,12 @@ class Session:
             if err:                                               # past a request that fits sets 2 harmlessly, so only a short result is one)
                 raise RuntimeError(f"generate: the program stopped with error {err} after {len(tokens)} of {max_new_tokens} tokens "
                                    f"({'the token ring overflowed' if err == 1 else 'the context capacity was reached'})")
+        stats = self._accept_stats(pre, len(chunks)) if self.drafter is not None else None
+        if stats is not None:
+            steps = len(stats[0])          # the decode steps that ran: the pump's count includes the steps queued behind `done`, which returned at once
         gen = Generation(tokens[:max_new_tokens], prefill_ms, dec_ms, dec_wall, host, steps, decode_tokens=min(len(tokens), max_new_tokens) - n_pre)
-        if self.drafter is not None:
-            gen.accepted, gen.committed, gen.verify_len, gen.confidences = self._accept_stats(pre, len(chunks))
+        if stats is not None:
+            gen.accepted, gen.committed, gen.verify_len, gen.confidences = stats
         return gen
 
     def _accept_stats(self, eng, n_prefill_steps: int):
@@ -260,9 +263,11 @@ class Session:
 
 
 def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos: Optional[int] = None, drafter_dir: Optional[str] = None,
-                 drafter_pack: Optional[str] = None, drafter_kind: str = "dspark", sts_path: Optional[str] = None, **options: Any) -> Session:
+                 drafter_pack: Optional[str] = None, drafter_kind: str = "dspark", sts_path: Optional[str] = None,
+                 drafter_options: Optional[Dict[str, Any]] = None, **options: Any) -> Session:
     """The session for a checkpoint directory (+ optionally a drafter's: its kind names the ``Drafter`` plugin;
-    ``sts_path`` = a JSON ``{"temperatures": [...]}`` from ``tools/bench/sts_calibrate.py``)."""
+    ``sts_path`` = a JSON ``{"temperatures": [...]}`` from ``tools/bench/sts_calibrate.py``; ``drafter_options`` go to
+    the plugin's ``from_checkpoint`` — an LM drafter's ``gamma``)."""
     with open(Path(model_dir) / "config.json") as f:
         arch = json.load(f)["architectures"][0]
     cls = resolve_model(arch)
@@ -276,7 +281,7 @@ def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos:
     if drafter_dir is not None:
         from .spec import DRAFTERS
 
-        dopts = {}
+        dopts = dict(drafter_options or {})
         if sts_path:
             with open(sts_path) as f:
                 dopts["sts"] = json.load(f)["temperatures"]
@@ -301,6 +306,7 @@ def main(argv=None) -> int:
     ap.add_argument("--drafter", default=None, help="a drafter checkpoint directory: speculative decoding (design §5.8)")
     ap.add_argument("--drafter-pack", default=None, help="the drafter's pack (tools/pack_weights.py --drafter-kind …)")
     ap.add_argument("--drafter-kind", default="dspark", help="the Drafter plugin the drafter checkpoint belongs to")
+    ap.add_argument("--draft-gamma", type=int, default=None, help="an LM drafter's drafts per round (--drafter-kind lm; default 5)")
     ap.add_argument("--verify", default="cost", choices=["cost", "threshold", "fixed"], help="the verify-length rule (cost needs the chip's cost table)")
     ap.add_argument("--verify-threshold", type=float, default=None, help="the confident-prefix threshold (<= 0: verify the whole block)")
     ap.add_argument("--verify-length", type=int, default=None, help="with --verify fixed: the drafts verified every step")
@@ -319,6 +325,7 @@ def main(argv=None) -> int:
                         temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed, autotune=not a.no_autotune,
                         drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind, verify=a.verify,
                         verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts, barriers=a.barriers,
+                        drafter_options={"gamma": a.draft_gamma} if a.draft_gamma is not None else None,
                         attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator)
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0

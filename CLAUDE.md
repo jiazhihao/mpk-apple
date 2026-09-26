@@ -71,6 +71,14 @@ An intermittent model-tier failure (wrong tokens / a hang / an empty generation,
 out-of-bounds stores found with shader validation (#92): the GDN commit pass wrote its read-out through a 16-byte
 placeholder, the tile's permute wrote a slab's K into a scratch sized by a narrower input, a drafter appended past
 its context cache — fixed, and a `Program` now carries a `context_capacity` the serial ops enforce.
+The M5 contingency (#100–#103) took the round on the 8B from 18.4 to 9.56 ms per token wall (V3 NVFP4 decode, the
+padding-free pack, the K-split tile, the fused permutes, `stop_at`, the 1 × 2 pump) against mlx-lm's own speculative
+decoding at 9.24 — 1.036×, ahead on math, behind on chat/text (decode-kernels.md §8–§9). The second drafter plugin
+(`monolith/spec/lm`, #103): any registered model package built with a `prefix` runs as the classical draft model
+inside the round (the same `Qwen3-0.6B-4bit` mlx-lm drafts with; token-identical to plain decode, mlx-lm's
+acceptance), with graph activation scopes and per-pass mixer modes; it exposed the small-model step: our 0.6B decodes
+at 4.1 ms per token where MLX takes 2.1 (row-split GEMV items and the attention's load-ahead brought it from 4.6),
+so the LM round costs more than mlx-lm's until the per-layer gap closes (decode-kernels.md §10) — the next task.
 
 ## Read these, in this order
 

@@ -75,11 +75,15 @@ kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* ta
                   uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
 #if STEP_STATE
-  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))) return;
+  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))))) return;
 #else
   if (t >= p.t_active) return;
 #endif
-#if EMBED_IDS
+#if EMBED_IDS == 3
+  uint tok = (t < st->n_inject) ? uint(tokens[st->checkpoint_index - st->n_inject + t]) : uint(st->anchor);   // the ingest rows, then the anchor
+#elif EMBED_IDS == 2
+  uint tok = uint(tokens[st->checkpoint_index - st->n_inject + t]);     // an LM drafter's ingest: the last n_inject committed rows of the step
+#elif EMBED_IDS
   uint tok = (t == 0u) ? uint(tokens[0]) : p.mask_id;
 #else
   uint tok = uint(tokens[t]);

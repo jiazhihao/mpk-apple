@@ -134,11 +134,11 @@ class GQAAttention(Module):
         g.op("gqa_decode", [proj, kc, vc, cos, sin, qn, kn], [part_o, part_md], domain=BlockDomain("heads", self.heads),
              klass=OpClass.MAP, updates=[kc.name, vc.name], heads=self.heads, kv_heads=self.kv_heads,
              head_dim=self.head_dim, rotary_dim=self.rotary_dim, eps=self.eps, scaling=self.head_dim ** -0.5,
-             segments=[s for s in self.kernel_segments() if s[0] != "gate"], rope="permuted", chunk=chunk)
+             segments=[s for s in self.kernel_segments() if s[0] != "gate"], rope="permuted", chunk=chunk, **ctx.mixer_attrs)
         ins = [part_o, part_md]
         if self.gate:
             ins.append(self.qkv.lower(g, h, norm=norm, rows=(self.core_rows, hd), sibling=True).value)
         o = g.value(f"{self.prefix}attn", (t, hd), DType.BF16)
         g.op("gqa_merge", ins, [o], domain=BlockDomain("heads", self.heads), klass=OpClass.MAP, heads=self.heads,
-             kv_heads=self.kv_heads, head_dim=self.head_dim, gate=self.gate, chunk=chunk)
+             kv_heads=self.kv_heads, head_dim=self.head_dim, gate=self.gate, chunk=chunk, **ctx.mixer_attrs)
         return self.o_proj.lower(g, o, residual=h, name=f"{self.prefix}h").value

@@ -265,7 +265,8 @@ draft ops, the verify/accept kernels, the dynamic-T program) was the engine's wo
 
 `monolith/spec/<name>/` implements `spec.drafter.Drafter` — a `Module` (weights, oracle, lowering) with `gamma`,
 `from_checkpoint(path, target_lm_head=)`, `tap_layers()` (the target layers whose residual streams it reads, `-1`
-= the embedding), `lower_draft(g, DraftContext, anchor) → DraftBlock` (tokens, confidences, hidden),
+= the embedding), `lower_draft(g, DraftContext, anchor) → DraftBlock` (tokens, confidences, hidden; the context carries the
+target's tapped residual streams, the anchor and the step's token rows),
 `lower_select(g, block, profile, cost=, threshold=, fixed=)` (the verify length from the profile's cost table or
 the drafter's own rule) and `lower_context_update(g, taps, accepted)`. Register with `@register_drafter("<name>")`
 and import the package in `monolith/spec/__init__.py`. The target exposes taps through `Model.feature_taps()` and
@@ -275,6 +276,15 @@ tables stay; the Markov head's GEMV, K = 256, packs as NVFP4 through sub-word un
 `quantize`, the gathered tables kept as stored, a matrix whose K the format cannot pack — `pack_k_multiple` — kept
 too; the session binds the tree to the pack's formats, so the emitted draft ops carry the quantized kernels);
 `generate --drafter … --drafter-kind <name>` runs the round.
+
+**An LM drafter** needs no drafter code: `--drafter-kind lm` runs a registered model package as the draft model
+(`monolith/spec/lm`; mlx-lm's `draft_model`). The package's tree must take `prefix` in `from_checkpoint` (every slab,
+aux entry, table, state and activation name gets it — `monolith/models/qwen3` does; the tables are stored under the
+prefix and read by their bare names), expose `embed_tokens`, `layers()`, `norm`, `lm_head` and `tables()`, and use
+attention mixers only (the GDN kernels have no ingest/chain modes: `GatedDeltaNet.lower` refuses a pass mode). Pack it
+with `tools/pack_weights.py --model <draft ckpt> --out <pack> --drafter-kind lm` (an MLX 4-bit checkpoint packs as it
+is) and run `generate --drafter <draft ckpt> --drafter-pack <pack> --drafter-kind lm --draft-gamma N`; the benches'
+`fixed:N` modes chain N. The drafter's vocabulary may not exceed the target's (the two must share a tokenizer).
 
 Two shape rules the emitter enforces: a value that feeds a GEMV has exactly the slab's K columns (a drafter whose
 block goes through the target's head has the target's hidden width), and a sequence occupies at most the program's

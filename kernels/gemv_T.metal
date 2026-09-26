@@ -111,6 +111,20 @@ struct GemvParams { uint n_rows; uint n_blocks; uint n_sg; uint t_active; float 
 #ifndef LANES_PER_WORD
 #define LANES_PER_WORD 1u                              // 2 or 4: a sub-word unit — lanes share one payload word (blm.py), interleaved order only
 #endif
+#ifndef RSPLIT
+#define RSPLIT 1u                                      // work items per block: item i streams rows [i·R/RSPLIT, (i+1)·R/RSPLIT) of its block
+#endif                                                 // (silu_mul: that share of the gate rows and their up partners) — a narrow slab's blocks alone
+                                                       // leave most of the crew idle (design §5.5: 64 blocks over 240 SIMD-groups); RG divides the share
+#define RR (R / RSPLIT)                                // rows per item
+#if (R % RSPLIT) != 0 || (RR % RG) != 0
+#error "gemv_T: RSPLIT must divide R and RG must divide R / RSPLIT"
+#endif
+#if EPILOGUE == 2 && ((CHUNK % RSPLIT) != 0 || ((CHUNK / RSPLIT) % RG) != 0)
+#error "gemv_T silu_mul: RSPLIT must divide CHUNK and RG must divide CHUNK / RSPLIT"
+#endif
+#if PAIRS && RSPLIT != 1u
+#error "gemv_T PAIRS: no row split"
+#endif
 static inline uint unit_word(uint lane, uint r, uint j) {
 #if LANES_PER_WORD > 1
 #if LANE_ORDER == 0
@@ -188,7 +202,8 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
   const uint sg = gid / sw;
 #if STEP_STATE
   if (st->done) return;
-  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T : st->t_this_step);   // dynamic T (≤ the compiled T), design §5.7
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T : st->t_this_step)));
+  if (T_act == 0u) return;                                     // no rows this step (an LM drafter's chain in a prefill chunk): no weights streamed   // dynamic T (≤ the compiled T), design §5.7
 #ifdef T_HI
   if (T_act > T_HI || T_act <= T_LO) return;
 #endif
@@ -212,10 +227,12 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
     const uint t_tok = it / (K_TOPK * EXPERT_BLOCKS), slot = (it / EXPERT_BLOCKS) % K_TOPK, bb = it % EXPERT_BLOCKS;
     const uint b = uint(ids[t_tok * K_TOPK + slot]) * EXPERT_BLOCKS + bb;    // the slab block of the slot's expert
     device const ushort* xrow = x + (ulong)(PAIRS_X_SLOT ? (t_tok * K_TOPK + slot) : t_tok) * K;   // the item's activation row (T = 1 below)
+    const uint part = 0u;                                            // no row split: the item is the whole block
     const uint ocol0 = slot * (p.n_rows / (EPILOGUE == 2 ? 2u : 1u));      // the slot's columns of the output row
 #else
-  for (uint bb = sg; bb < p.n_blocks; bb += p.n_sg) {
-    const uint b = bb + p.block0;                                    // the slab block; bb the range-relative one
+  for (uint it = sg; it < p.n_blocks * RSPLIT; it += p.n_sg) {
+    const uint bb = it / RSPLIT, part = it % RSPLIT;                 // the range-relative block and the item's share of its rows
+    const uint b = bb + p.block0;                                    // the slab block
     device const ushort* xrow = x;
     const uint t_tok = 0u, ocol0 = 0u;
 #endif
@@ -226,8 +243,15 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #endif
 #if EPILOGUE == 2
     float gate_v[CHUNK][T];
-#endif
+    // the item's gate rows [part·CR, (part+1)·CR) then their up partners CHUNK + the same range (the pairs stay in one item)
+#define CR (CHUNK / RSPLIT)
+    for (uint side = 0; side < 2u; side++)
+    for (uint r0 = side * CHUNK + part * CR; r0 < side * CHUNK + (part + 1u) * CR; r0 += RG) {
+#elif PAIRS
     for (uint r0 = 0; r0 < R; r0 += RG) {
+#else
+    for (uint r0 = part * RR; r0 < (part + 1u) * RR; r0 += RG) {
+#endif
       float acc[RG][T];
       for (uint i = 0; i < RG; i++) for (uint t = 0; t < T; t++) acc[i][t] = 0.0f;
 #if SCALE_GROUP > 0
@@ -375,7 +399,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
       }
     }
 #if STAT_OUT
-    if (lane == 0) for (uint t = 0; t < T; t++) if (t < T_act) stat_out[t * p.n_blocks + bb] = ssq_out[t];
+    if (lane == 0) for (uint t = 0; t < T; t++) if (t < T_act) stat_out[t * p.n_blocks * RSPLIT + it] = ssq_out[t];   // one partial per item
 #endif
   }
 }

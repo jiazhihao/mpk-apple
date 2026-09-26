@@ -23,7 +23,7 @@ from .. import kernels
 from ..core.dtypes import DType
 from ..core.ir import BlockDomain, Graph, Op, OpClass, Value
 from ..core.profile import COST_FORMAT, Profile
-from ..core.shapes import N_INJ, Sym, T, bind, numel, step_bindings
+from ..core.shapes import N_CHAIN, N_FIRST, N_INJ, Sym, T, bind, numel, step_bindings
 from ..core.step_state import StepStateLayout
 from ..formats import FORMATS
 from ..formats.blm import PackInfo
@@ -35,7 +35,7 @@ from .coverage import check_coverage
 from .passes import DEFAULT_PASSES
 
 WINDOW_BYTES = 2 << 30          # pack windows: ICB bind offsets are 32-bit (design §5.1)
-ROW_SOURCE = {T: 0, N_INJ: 1}   # the StepState field a symbolic row count reads (T_SRC): t_this_step / n_inject
+ROW_SOURCE = {T: 0, N_INJ: 1, N_CHAIN: 3, N_FIRST: 4}   # the StepState field(s) a symbolic row count reads (T_SRC): t_this_step / n_inject / n_chain / n_inject + n_chain
 STATIC_ROWS = 2
 ACCEPT_LOG = "accept_log"       # the speculative program's per-step (committed << 16 | verify_len << 8 | accepted) log buffer
 CONF_LOG = "conf_log"           # … and its per-step confidences (16 floats per step)
@@ -146,7 +146,7 @@ class _Ctx:
         if isinstance(d, Sym):
             if d not in ROW_SOURCE:
                 raise ValueError(f"emit: {op!r} has an unknown row symbol {d}")
-            return self.t, ROW_SOURCE[d]
+            return step_bindings(self.t)[d], ROW_SOURCE[d]          # N_CHAIN compiles to one row
         return int(d), STATIC_ROWS
 
     def t_macros(self, t_c: int, t_src: int) -> Dict[str, str]:
@@ -177,6 +177,15 @@ class _Ctx:
 
 def _value_bytes(v: Value, t: int) -> int:
     return numel(v.shape, step_bindings(t)) * v.dtype.itemsize
+
+
+def _size_stat(ctx: _Ctx, name: str) -> None:
+    """A hoisted statistic's buffer: its rows (the value's own row bound — an LM drafter's first chain step has
+    T_max + 1) × the partials per token its producer writes (the blocks × the row split). Sized here, where the
+    producer's choice is known; shader validation found the earlier ``T_max × n_blocks`` short on both counts."""
+    v = ctx.values[name]
+    rows = numel((v.shape[0],), step_bindings(ctx.t)) if v.shape else 1
+    ctx.program.buffers[name] = BufferSpec(max(rows * ctx.stat_parts[name] * 4, 16), None, "arena")
 
 
 def _pack_windows(ctx: _Ctx) -> None:
@@ -317,12 +326,30 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
             ctx.norm_scratch[key] = xn
         x_binding = (xn, 0)
     stat_out = op.attrs.get("stat_value")
+    rsplits = []
+    for c in choices:                                               # a cached split that does not fit the shape (a stale cache) falls back to 1
+        rs = int(str(c.macros.get("RSPLIT", "1")).rstrip("u")) if c else 1
+        rsplits.append(rs if c is None or rs in kernels.gemv_rsplits(info.rows, int(c.macros["RG"]), epilogue) else 1)
     if stat_out is not None:
-        ctx.stat_parts[stat_out] = n_blocks
+        # the statistic's partial count is one number for its consumer: every writer of the op — each shader variant and the
+        # tile, which writes one partial per block — must agree on it, so with a tile every variant keeps RSPLIT = 1, and
+        # without one the variants take the smallest split they all admit (a mismatch fed the next norm garbage partials
+        # from the rows a prefill chunk sent through the tile: decode-kernels.md §10)
+        if tile_range is not None:
+            rsplits = [1] * len(rsplits)
+        elif len(set(rsplits)) > 1:
+            rs = min(rsplits)
+            rsplits = [rs if rs in kernels.gemv_rsplits(info.rows, int(c.macros["RG"]) if c else 2, epilogue) else 1 for c in choices]
+            if len(set(rsplits)) > 1:
+                rsplits = [1] * len(rsplits)
+        ctx.stat_parts[stat_out] = n_blocks * rsplits[0]
+        _size_stat(ctx, stat_out)
+    elif tile_range is not None:
+        rsplits = [1] * len(rsplits)                                # (no statistic: the split is free, but the tile's twin keeps the simple layout)
     lo = 0
-    for tv, choice in zip(variants, choices):
+    for tv, choice, rsplit in zip(variants, choices, rsplits):
         rg = int(choice.macros["RG"]) if choice else None
-        macros = dict(kernels.gemv_macros(info, t=tv, rg=rg, epilogue=epilogue, out_bf16=True, stat_out=stat_out is not None,
+        macros = dict(kernels.gemv_macros(info, t=tv, rg=rg, epilogue=epilogue, out_bf16=True, stat_out=stat_out is not None, rsplit=rsplit,
                                           norm=fuse_norm, round_before_residual=bool(op.attrs.get("round_residual"))), **ctx.t_macros(tv, t_src))
         if len(variants) > 1 or tile_range is not None:
             macros["T_LO"], macros["T_HI"] = str(lo), str(tv)
@@ -340,7 +367,7 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
             bindings.append((8, stat_out, 0))
             writes.append(8)
         ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
-                rg=int(macros["RG"]), geometry=choice.grid_mode if choice else "crew", fused_norm=fuse_norm, t_variant=tv,
+                rg=int(macros["RG"]), rsplit=rsplit, geometry=choice.grid_mode if choice else "crew", fused_norm=fuse_norm, t_variant=tv,
                 t_range=[lo, tv] if (len(variants) > 1 or tile_range is not None) else None, variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
                 row_range=[block0 * info.rows, n_rows] if rr is not None else None)
         lo = tv
@@ -462,6 +489,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     stat_out = op.attrs.get("stat_value")
     if stat_out is not None:
         ctx.stat_parts[stat_out] = n_blocks
+        _size_stat(ctx, stat_out)
     lo, hi = t_range
     tm = gemm_tm(hi)
     predicated = t_src != STATIC_ROWS
@@ -538,7 +566,10 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     if v2:
         return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=4), STEP_STATE="1"), ctx.n_sg // 12, kernels.GQA_V2_CHUNK_MIN
     chunk = int(a.get("chunk", 64))
-    return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows), STEP_STATE="1"), ctx.n_sg, chunk
+    lm_mode, chain_i = int(a.get("lm_mode", 0)), int(a.get("chain_i", 0))
+    if v2 and lm_mode:
+        raise ValueError("gqa_decode: an LM drafter's attention runs on the v1 core (the v2 core has no LM modes)")
+    return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows, lm_mode=lm_mode, chain_i=chain_i), STEP_STATE="1"), ctx.n_sg, chunk
 
 
 def _gqa(ctx: _Ctx, op: Op) -> None:
@@ -550,16 +581,17 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
-    v2 = _gqa_v2(ctx, heads, kv)
+    v2 = _gqa_v2(ctx, heads, kv) and not a.get("lm_mode")
     macros, n_sg, chunk = _gqa_geometry(ctx, a, ctx_max, v2)
     kd = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_decode_v2" if v2 else "gqa_decode", macros)
     rep = heads // kv
-    n_chunks_max, rows_max = -(-ctx_max // chunk), rep * ctx.t
+    t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
+    n_chunks_max, rows_max = -(-ctx_max // chunk), rep * t_c
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
     if _value_bytes(part_o, ctx.t) < po or _value_bytes(part_md, ctx.t) < pm:
         raise ValueError(f"gqa_decode: the partial values are too small for {kv} kv heads × {n_chunks_max} chunks × {rows_max} rows")
     prm = ctx.params("gqa", kernels.gqa_params(
-        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
+        heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
         v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
         scaling=float(a["scaling"]), has_gate=False, n_chunks_max=n_chunks_max, rows_max=rows_max))
     st = ctx.program.step_state
@@ -577,7 +609,7 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     out = op.outputs[0]
     a = op.attrs
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
-    v2 = _gqa_v2(ctx, heads, kv)
+    v2 = _gqa_v2(ctx, heads, kv) and not a.get("lm_mode")
     rep = heads // kv
     core = part_o.producer
     ctx_max = ctx.shape(core.inputs[1])[0] if core is not None else 0
@@ -587,14 +619,15 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
         macros = dict(macros, **fused[1])
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros)
     n_chunks_max = ctx.shape(part_o)[1] // (kv * rep * d)
+    t_c, _ = ctx.rows_of(op)
     prm = ctx.params("gqa_merge", kernels.gqa_params(
-        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
+        heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
         in_stride=heads * d, out_stride=heads * d, ctx_max=n_chunks_max * chunk, eps=1e-6, scaling=1.0, has_gate=gate is not None,
-        n_chunks_max=n_chunks_max, rows_max=rep * ctx.t))
+        n_chunks_max=n_chunks_max, rows_max=rep * t_c))
     st = ctx.program.step_state
     gb = ctx.buf(gate) if gate is not None else ctx.buf(part_o)
     ctx.add(km, [(0, *ctx.buf(part_o)), (1, *ctx.buf(part_md)), (2, *gb), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
-            (ctx.t * heads, 1, 1), (32, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
+            (t_c * heads, 1, 1), (32, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
 
 
 def _draft_attn(ctx: _Ctx, op: Op) -> None:
@@ -691,9 +724,14 @@ def _argmax(ctx: _Ctx, op: Op) -> None:
     logits, = op.inputs
     token = op.outputs[0]
     t_c, t_src = ctx.rows_of(op)
+    if t_src == STATIC_ROWS and isinstance(logits.shape[0], Sym):     # a row view written from symbolic-row logits (an LM drafter's
+        t_c, t_src = step_bindings(ctx.t)[logits.shape[0]], ROW_SOURCE[logits.shape[0]]   # chain: no row in a prefill chunk)
     vocab = ctx.shape(logits)[1]
     src = kernels.argmax_source()
     m = ctx.t_macros(t_c, t_src)
+    if op.attrs.get("last"):
+        m = dict(m, ARGMAX_LAST="1")                                  # only the last row (an LM drafter's first chain step ends with the anchor)
+        t_c = 1
     kp, kf = ctx.kernel("argmax", src, "argmax_partial", m), ctx.kernel("argmax", src, "argmax_final", m)
     pv, pi = ctx.scratch("argmax.val", t_c * ctx.n_sg * 4, shared=True), ctx.scratch("argmax.idx", t_c * ctx.n_sg * 4, shared=True)
     prm = ctx.params("argmax", kernels.argmax_params(vocab, t_c, ctx.n_sg))
@@ -774,7 +812,7 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
     else:
         mode, thr = 0, (float(op.attrs.get("threshold", 0.0)) if conf is not None else 0.0)
     prm = ctx.params("verify_select", kernels.select_params(gamma, thr, ctx.layout.t_max, mode=mode, cost=cost, log_cap=kernels.ACCEPT_LOG_CAP,
-                                                            ctx_cap=ctx.ctx_cap_target))
+                                                            ctx_cap=ctx.ctx_cap_target, lm=bool(op.attrs.get("lm"))))
     ctx.program.buffers.setdefault(CONF_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * kernels.CONF_LOG_WIDTH * 4, None, "arena"))
     cb = ctx.buf(conf) if conf is not None else (ctx.scratch("verify_select.conf", gamma * 4), 0)
     ctx.add(k, [(0, *ctx.buf(drafts)), (1, *cb), (2, ctx.program.step_state, 0), (3, prm, 0), (4, CONF_LOG, 0)], (1, 1, 1), (32, 1, 1), op.kind,
@@ -784,7 +822,8 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
 def _accept_scan(ctx: _Ctx, op: Op) -> None:
     token, = op.inputs
     k = ctx.kernel("spec_ops", _spec_ops(ctx), "accept_scan", {})
-    prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP, ctx_cap=ctx.ctx_cap))
+    prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP, ctx_cap=ctx.ctx_cap,
+                                                          lm=bool(op.attrs.get("lm"))))
     ctx.program.buffers.setdefault(ACCEPT_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * 4, None, "arena"))
     ctx.add(k, [(0, *ctx.buf(token)), (1, ctx.program.step_state, 0), (2, ctx.program.ring, 0), (3, prm, 0), (4, ACCEPT_LOG, 0)],
             (1, 1, 1), (32, 1, 1), op.kind, writes=[1, 2, 4])
@@ -902,8 +941,8 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
                 program.buffers[v.name] = BufferSpec(max(_value_bytes(v, t), 16), None, "arena")
         elif not v.is_source:
             nbytes = _value_bytes(v, t)
-            if v.name in hoisted:
-                nbytes = t * hoisted[v.name] * 4              # a hoisted statistic holds n_blocks partials per token
+            if v.name in hoisted:                                     # a hoisted statistic holds partials per token: re-sized by its producer (_size_stat)
+                nbytes = numel((v.shape[0],), step_bindings(t)) * hoisted[v.name] * 4
             program.buffers[v.name] = BufferSpec(max(nbytes, 16), None, "arena")
         elif v.is_weight or v.is_const:
             if v.name not in ctx.windows:
@@ -989,7 +1028,8 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
     from ..spec import DraftContext
 
     acc = g.value("accepted", (1,), DType.U32)
-    g.op("accept_scan", [token], [acc], domain=BlockDomain("span", 1), klass=OpClass.SERIAL)
+    lm = bool(getattr(drafter, "lm_drafter", False))          # an LM drafter: the scan's bookkeeping differs (design §5.8)
+    g.op("accept_scan", [token], [acc], domain=BlockDomain("span", 1), klass=OpClass.SERIAL, **({"lm": True} if lm else {}))
     for op in list(g.ops):
         ck = op.attrs.get("commit_kind")
         if ck:
@@ -1000,7 +1040,8 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
         if i not in model.tap_values:
             raise ValueError(f"lower_round: the drafter taps layer {i}, which the model does not expose ({sorted(model.tap_values)})")
         taps.append(model.tap_values[i])
-    block = drafter.lower_draft(g, DraftContext(taps, None))
+    tokens = [v for v in g.values.values() if v.is_input and tuple(v.shape) == (T,)]     # the step's token rows (pending_tokens)
+    block = drafter.lower_draft(g, DraftContext(taps, None, tokens=tokens[0] if len(tokens) == 1 else None))
     return drafter.lower_select(g, block, profile, cost=cost, threshold=threshold, fixed=fixed)
 
 
