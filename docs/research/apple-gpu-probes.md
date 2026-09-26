@@ -105,7 +105,7 @@ work, nothing more). Verdicts on the hypotheses that §4 (formerly §3) asked th
 | H2 One 384-thread threadgroup per core, ~12 full-speed SIMD-groups | **holds** | `p4`: flat to G = 20, 2× at G = 22; k ≤ 14 SIMD-groups at full speed inside one threadgroup | D4's geometry is right; see N2 for the occupancy caveat |
 | H3 Crew-geometry block sweep ≥ 80 % of nominal and ≥ the conventional geometry | **fails as written, holds after one layout change** | lane-contiguous sub-ranges: 219 GB/s (71 %); the same geometry with lanes interleaved at 16 B: 286–295 (93–96 %); a real FP8 kernel: 275 vs 277 for the conventional geometry | D8's intra-block lane order becomes a profile value (N1); the crew-geometry claim shrinks from "+5–17 %" to **parity** for T = 1 |
 | H4 A dispatch boundary is no dearer than an in-kernel barrier | **holds, by a wider margin** | 1.38–1.40 µs vs 1.97–2.47 (static) / 4.25–4.78 (stealing); with 30 µs blocks 81.5 vs 81.7–88.1 µs/op | D5 stands; plan M7's M5 re-evaluation is done |
-| H5 Sharing: per dispatch, worst case per command buffer, never inside a dispatch | **changed in both directions** | foreign dispatches *sometimes* get in during a dispatch (2 of 12 trials always, 5 of 12 never, 5 of 12 partly); behind a long command buffer they waited for the whole buffer in 3 of 4 runs (M3 Pro: 1 of 6) | in-dispatch preemption exists but cannot be relied on; command-buffer length is the control on both chips and matters *more* here (D6 tightens); the on-screen frame-pacing check (plan M0) is the next measurement |
+| H5 Sharing: per dispatch, worst case per command buffer, never inside a dispatch | **changed in both directions** | foreign dispatches *sometimes* get in during a dispatch (2 of 12 trials always, 5 of 12 never, 5 of 12 partly); behind a long command buffer they waited for the whole buffer in 3 of 4 runs (M3 Pro: 1 of 6) | in-dispatch preemption exists but cannot be relied on; command-buffer length is the control on both chips and matters *more* here (D6 tightens). **The on-screen check (`p15`, 2026-09-25) then found the display path unaffected**: a window's frames kept arriving every vsync (120 Hz, 0 % late) while ALU-bound compute buffers of 8–133 ms ran back to back with 3 in flight — the compositor is not the foreign work `p6b` measured, so `max_cb_ms` is a latency choice (the pump's over-run), not a pacing constraint |
 | H6 The bus needs most of the cores (little spare ALU) | **fails** | 6 of 20 cores stream 278 GB/s; one core streams 71 GB/s, 3.9× an M3 Pro core | the design's "little or none" projection assumed Apple10 cores stream like Apple9 cores; they do not. D14's overlap is worth *more* on the M5 Pro, not less |
 | H7 An ALU-bound op is no longer fully hidden | **fails (still hidden) — with a new condition** | hidden 102–126 % when the ALU op is encoded first, 1–29 % when the bus op is first (3 runs) | a per-chip encode-order rule (N3); on the M3 Pro order was irrelevant |
 | H8 Threadgroup memory is not faster than device memory | **holds** | 36 vs 37 ns per hot read, both ~40 % faster than on the M3 Pro | D3 stands |
@@ -181,9 +181,9 @@ order rules (N1, N5) must be re-measured, not assumed:
 | H9 FP8 T = 1 bus-bound at the crew geometry; NVFP4 T = 1 ALU-bound; T-cost curve | `p13` | the M1 kernel study's priorities for that chip |
 | H10 MPP `matmul2d` on Apple9 runs on the shader ALUs (survey: 1.05–1.21× over `simdgroup_matrix`) — so `p14` should *lose* to `p13` at every T | `p14` | if it wins anyway, the accelerator path is not M5-only |
 
-Still to write: (a) an on-screen frame-pacing check with command buffers of 8 / 16 / 33 / 66 ms (the compositor's
-behaviour was never measured directly, and the M5 Pro blocks foreign work for whole command buffers more often than
-the M3 Pro); (b) `p13` with the NVFP4 decode rewritten around 16-bit packed math and a register LUT — the current
+Still to write: (a) *done as `p15` (§6)*: the on-screen frame-pacing check found the display path unaffected by
+compute command buffers of 8–133 ms on the M5 Pro (ALU-bound; the bus-bound pass needs an unlocked screen and is
+pending); (b) `p13` with the NVFP4 decode rewritten around 16-bit packed math and a register LUT — the current
 decode is the ALU limiter; (c) `p14` with the tile fill done through a cooperative right-input tensor instead of
 threadgroup memory, and with the next tile's dequantization overlapped with the current `matmul2d` (design §5.12's
 M5-only pipelining idea).
@@ -266,6 +266,32 @@ queue A: 80 command buffers x 10 dispatches (~15 ms)    | mean 0.33-1.0 ms, max 
 
 Other work is normally scheduled between dispatches, but it can be held behind an entire in-flight command buffer; it
 never gets in during a dispatch. Same process, second command queue — the window compositor was not measured directly.
+
+### P15 — on-screen frame pacing under compute command buffers (`p15_frame_pacing`, M5 Pro, 2026-09-25)
+
+A 360 × 220 window presents one trivially rendered frame per vsync through a `CAMetalLayer` on its own queue and
+records each frame's presented time; a second queue keeps 3 compute command buffers in flight, each L ms of ~1 ms
+ALU dispatches at the crew geometry (`aluwork`, calibrated), for 4 s per L. The display ran at 120 Hz (8.33 ms):
+
+```
+L ms   heavy queue                    frames  mean ms  p99 ms  max ms  late >= 2 vsyncs  fps
+0      idle                              479     8.35    8.33   16.67   0.2 %           119.7
+8      501 buffers of 8.0 ms             481     8.33    8.33    8.33   0.0 %           120.0
+16     251 buffers of 16.1 ms            483     8.33    8.33    8.33   0.0 %           120.0
+33     123 buffers of 33.2 ms            489     8.33    8.33    8.33   0.0 %           120.0
+66      63 buffers of 66.3 ms            501     8.33    8.33    8.34   0.0 %           120.0
+133     32 buffers of 133.7 ms           513     8.33    8.33    8.33   0.0 %           120.0
+```
+
+Every frame arrived on its vsync at every buffer length — the WindowServer's work is not the "foreign dispatch on a
+second queue" of `p6b`, which waited for whole buffers: the display path is scheduled ahead of (or interleaved
+with) our compute buffers. Consequences: `max_cb_ms` does not protect frame pacing on this chip; it remains a
+latency knob (how far the pump over-runs a request, how soon a stop lands) and stays at 16 ms. Caveats: the window
+must be on screen — an occluded window's drawables are never presented, and with the screen locked nothing is
+composited (the probe detects the lock and skips) — so the bus-bound pass (the same phases with `p12`'s streaming
+kernel, 292 GB/s per dispatch, the engine's own kind of load) is written but still to be run with the screen
+unlocked (`./probes/run_all.sh p15_frame_pacing`); and the heavy queue is in the same process as the window, like
+`p6b`.
 
 ### P7 — launch overhead (`p7_dispatch_overhead`)
 

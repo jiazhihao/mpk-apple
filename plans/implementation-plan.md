@@ -66,9 +66,10 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
 * [ ] Reference tooling: exact NVFP4/FP8 → BF16 dequantizer; HF golden scripts (adapt
       `mirage/tests/runtime_python/models/qwen38/hf_golden.py`): full goldens for the small model; per-layer goldens
       for the 27B produced layer-streamed (54 GB of BF16 does not fit in 36 GB) or on a larger machine.
-* [ ] On-screen frame-pacing check on the M5 Pro: compositor frame times while command buffers of 8 / 16 / 33 / 66 ms
-      run back to back → confirms the default `max_cb_ms` (16 ms from `p6`/`p6b`; the M5 Pro blocks foreign work for
-      whole command buffers in the usual case).
+* [x] On-screen frame-pacing check on the M5 Pro (`p15`, 2026-09-25; hardware report §6 P15): a window's frames kept
+      their 120 Hz vsync with 0 % late frames while ALU-bound compute command buffers of 8–133 ms ran back to back —
+      the display path is not the foreign work `p6b` measured, so `max_cb_ms` (16 ms) is a latency choice, not a
+      pacing constraint. The bus-bound pass waits for an unlocked screen.
 
 Exit: baseline table (plain and speculative), goldens, drafters on disk with recorded configs, ≥ 1 profile (two
 provisional profiles exist: `profiles/`).
@@ -278,6 +279,14 @@ geometry; keep it per chip only where the A/B shows a gain (expected ~2–4 % on
 Exit gate: the plain-decode success metric. *If 1.10× is missed but parity holds:* proceed to M6 — speculation does
 not depend on it — and record why.
 
+**Go/no-go #2, read on the M5 Pro 2026-09-25 (#36; decode-kernels.md §8): no-go.** On the model this machine hosts
+(Qwen3-8B NVFP4) and the very bytes mlx-lm streams (its NVFP4 conversion, read through the nvfp4 plugin's MLX
+layout), our plain decode is 41.5 tok/s against mlx-lm's 62.9 — 0.66×; 63 % of nominal on our pack's bytes (9 %
+more than mlx-lm's for the same weights: the lane-row unit's 16-byte padding) against 87 %. The gap is the NVFP4
+GEMV (221 GB/s on the 8B's shapes, 86 % of the step); the follow-ups are MLX's one-instruction nibble-to-half decode
+as a kernel variant and a denser unit layout. The engine's levers do not depend on the metric (the rule above); the 27B rows wait for
+a machine that hosts it.
+
 
 *Status (2026-09-24, #33).* Per-op GPU timestamps exist: `Queue.profile` (one compute encoder per dispatch with
 timestamp counter samples at the stage boundaries — the granularity Apple GPUs support — correlated to CPU time),
@@ -455,7 +464,12 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
   kernel or runtime edits allowed, the CI extension test enforces it, and the drafter contract is exercised with a
   second target–drafter pair.
 * Model 3, new ops (a Qwen3.5-MoE-class model: router + expert GEMV indexed by GPU-resident expert ids) — exercises the
-  new-op path and data-dependent indexing inside a static program. The survey shows this is where an overhead-free
+  new-op path and data-dependent indexing inside a static program. **Built 2026-09-26 (#46):** the ops `moe_route`,
+  `moe_gemv` (gemv_T's pairs mode) and `moe_combine` with oracle tests, the `SparseMoE` layer, and the `qwen3_moe`
+  package (`Qwen3MoeForCausalLM`), proven on a synthetic checkpoint (the block as a program matches its torch oracle;
+  the whole model lowers, passes coverage and emits static and dynamic-T programs). The real checkpoints of the class
+  (Qwen3-30B-A3B, 17 GB resident at NVFP4) exceed this machine's working set: the golden and the tok/s row wait for a
+  machine that hosts one. The survey shows this is where an overhead-free
   engine has the most headroom (today's engines reach only 36–55 % of the bound on 3B-active MoE).
 * Format 2 — **built (#47): affine INT4 groups** (`formats/int4_affine`, the MLX / AWQ / GPTQ family; mlx 0.32's
   quantizer reproduced bit-exactly). The plugin path held for the decode contract, but the port needed four

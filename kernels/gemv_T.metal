@@ -68,6 +68,16 @@
 #ifndef SCALE_BIAS
 #define SCALE_BIAS 0                 // a format with a per-group bias (affine INT4: w = scale·code + bias): acc += bias · Σ x over the group
 #endif
+#ifndef PAIRS
+#define PAIRS 0                      // 1: the MoE expert mode (design §5.11) — T = 1 per item; the work items are (token, slot, block) over
+#endif                               // T_act tokens × K_TOPK slots × EXPERT_BLOCKS blocks of the slot's expert (ids[t·K_TOPK + slot], buffer 9):
+                                     // the item streams slab block e·EXPERT_BLOCKS + b against row t of x into columns slot·n_out + … of row t
+#ifndef PAIRS_X_SLOT
+#define PAIRS_X_SLOT 0               // with PAIRS: 0 = the item's activation row is the token's (x [T, K]: the gate|up input, shared by the
+#endif                               // token's slots); 1 = the (token, slot) pair's (x [T·K_TOPK, K]: the down projection reads the slot's activation)
+#if PAIRS && (T != 1 || NORM || STAT_OUT || EPILOGUE == 1)
+#error "gemv_T PAIRS: T must be 1, and the norm, the statistic output and the residual epilogue are not fused here"
+#endif
 #define KL (K / 32u)                                   // columns per lane
 #define WPW WEIGHTS_PER_WORD
 #define XW (WPW / 8u)                                  // uint4 words of bf16 activations per weight word
@@ -133,6 +143,9 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if STAT_OUT
                    device float* stat_out [[buffer(8)]],
 #endif
+#if PAIRS
+                   device const int* ids [[buffer(9)]],
+#endif
 #if STEP_STATE
                    device const StepState* st [[buffer(15)]],
 #endif
@@ -158,8 +171,19 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
     rn[t] = rsqrt(ssq / float(K) + p.eps);
   }
 #endif
+#if PAIRS
+  const uint n_items = T_act * K_TOPK * EXPERT_BLOCKS;
+  for (uint it = sg; it < n_items; it += p.n_sg) {
+    const uint t_tok = it / (K_TOPK * EXPERT_BLOCKS), slot = (it / EXPERT_BLOCKS) % K_TOPK, bb = it % EXPERT_BLOCKS;
+    const uint b = uint(ids[t_tok * K_TOPK + slot]) * EXPERT_BLOCKS + bb;    // the slab block of the slot's expert
+    device const ushort* xrow = x + (ulong)(PAIRS_X_SLOT ? (t_tok * K_TOPK + slot) : t_tok) * K;   // the item's activation row (T = 1 below)
+    const uint ocol0 = slot * (p.n_rows / (EPILOGUE == 2 ? 2u : 1u));      // the slot's columns of the output row
+#else
   for (uint bb = sg; bb < p.n_blocks; bb += p.n_sg) {
     const uint b = bb + p.block0;                                    // the slab block; bb the range-relative one
+    device const ushort* xrow = x;
+    const uint t_tok = 0u, ocol0 = 0u;
+#endif
     device const uint4* wb = w + (ulong)b * (R * 32u * UNIT_WORDS);
 #if STAT_OUT
     float ssq_out[T];
@@ -197,7 +221,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #endif
         for (uint t = 0; t < T; t++) {
           if (t < T_act) {
-            device const uint4* xp = (device const uint4*)(x + t * K + col);
+            device const uint4* xp = (device const uint4*)(xrow + t * K + col);
             for (uint v = 0; v < XW; v++) { uint4 q = (8u * v < nvalid) ? xp[v] : uint4(0u);
               xf[t][8 * v] = bf16lo(q.x); xf[t][8 * v + 1] = bf16hi(q.x); xf[t][8 * v + 2] = bf16lo(q.y); xf[t][8 * v + 3] = bf16hi(q.y);
               xf[t][8 * v + 4] = bf16lo(q.z); xf[t][8 * v + 5] = bf16hi(q.z); xf[t][8 * v + 6] = bf16lo(q.w); xf[t][8 * v + 7] = bf16hi(q.w); }
@@ -213,7 +237,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #else
         uint4 xq[T][XW];
         for (uint t = 0; t < T; t++) {
-          if (t < T_act) { device const uint4* xp = (device const uint4*)(x + t * K + col); for (uint v = 0; v < XW; v++) xq[t][v] = (8u * v < nvalid) ? xp[v] : uint4(0u); }
+          if (t < T_act) { device const uint4* xp = (device const uint4*)(xrow + t * K + col); for (uint v = 0; v < XW; v++) xq[t][v] = (8u * v < nvalid) ? xp[v] : uint4(0u); }
           else { for (uint v = 0; v < XW; v++) xq[t][v] = uint4(0); }
         }
 #if NORM
@@ -299,10 +323,15 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
             ssq_out[t] = fma(vr, vr, ssq_out[t]);
 #endif
             if (lane == 0) {
-#if OUT_BF16
-              y[t * n_out + orow] = ushort(as_type<uint>(vr) >> 16);
+#if PAIRS
+              const uint yrow = t_tok, ycol = ocol0 + orow, ystride = K_TOPK * n_out;
 #else
-              y[t * n_out + orow] = v;
+              const uint yrow = t, ycol = orow, ystride = n_out;
+#endif
+#if OUT_BF16
+              y[yrow * ystride + ycol] = ushort(as_type<uint>(vr) >> 16);
+#else
+              y[yrow * ystride + ycol] = v;
 #endif
             }
           }

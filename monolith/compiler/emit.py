@@ -712,7 +712,73 @@ def _accept_scan(ctx: _Ctx, op: Op) -> None:
             (1, 1, 1), (32, 1, 1), op.kind, writes=[1, 2, 4])
 
 
+def _moe_route(ctx: _Ctx, op: Op) -> None:
+    """The router's top-k per token: one SIMD-group per token over the E logits (ops/moe.py)."""
+    logits, = op.inputs
+    ids, weights = op.outputs
+    t_c, t_src = ctx.rows_of(op)
+    n_experts, top_k = int(op.attrs["n_experts"]), int(op.attrs["top_k"])
+    if ctx.shape(logits)[1] != n_experts or ctx.shape(ids)[1] != top_k:
+        raise ValueError(f"moe_route: logits {ctx.shape(logits)} / ids {ctx.shape(ids)} do not match {n_experts} experts, top {top_k}")
+    k = ctx.kernel("moe_route", kernels.moe_route_source(), "moe_route", dict(kernels.moe_route_macros(n_experts, bool(op.attrs.get("renorm"))), **ctx.t_macros(t_c, t_src)))
+    prm = ctx.params("moe_route", kernels.moe_route_params(n_experts, top_k, t_c))
+    ctx.add(k, [(0, *ctx.buf(logits)), (1, *ctx.buf(ids)), (2, *ctx.buf(weights)), (3, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind, writes=[1, 2])
+
+
+def _moe_gemv(ctx: _Ctx, op: Op) -> None:
+    """An expert projection in gemv_T's pairs mode (ops/moe.py): the work items are (token, slot, block) and the
+    slab block comes from the router's ids; the output row is the token's, the slot's columns at slot · n_out."""
+    x, w, ids = op.inputs
+    y = op.outputs[0]
+    t_c, t_src = ctx.rows_of(op)
+    info = ctx.slab_info(w.name)
+    top_k, expert_rows = int(op.attrs["top_k"]), int(op.attrs["expert_rows"])
+    x_slot = bool(op.attrs.get("x_per_slot"))
+    if ctx.shape(x)[1] != info.k * (top_k if x_slot else 1):           # per-slot rows: [T, k·K] read as [T·k, K]
+        raise ValueError(f"moe_gemv {w.name}: the input {x.name} has {ctx.shape(x)[1]} columns, the slab has K = {info.k}"
+                         + (f" per slot × {top_k} slots" if x_slot else ""))
+    if expert_rows % info.rows or info.n % expert_rows:
+        raise ValueError(f"moe_gemv {w.name}: {expert_rows} rows per expert must be whole blocks of {info.rows} and divide the slab's {info.n}")
+    epilogue = op.attrs.get("epilogue")
+    n_out = expert_rows // 2 if epilogue == "silu_mul" else expert_rows
+    if ctx.shape(y)[1] != top_k * n_out:
+        raise ValueError(f"moe_gemv {w.name}: the output has {ctx.shape(y)[1]} columns, expected {top_k} × {n_out}")
+    macros = dict(kernels.gemv_macros(info, t=1, epilogue=epilogue, out_bf16=True, pairs=(top_k, expert_rows // info.rows, x_slot)), **ctx.t_macros(t_c, t_src))
+    k = ctx.kernel(f"gemv_T|{info.format}", kernels.gemv_source(info.format), "gemv_T", macros)
+    n_sg, grid, tg = ctx.geometry("crew", expert_rows // info.rows)
+    prm = ctx.params("moe_gemv", kernels.gemv_params(expert_rows, expert_rows // info.rows, n_sg, t_c))
+    ctx.add(k, [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, *ctx.buf(x)), (3, *ctx.buf(y)), (4, prm, 0), (9, *ctx.buf(ids))],
+            grid, tg, f"{op.kind}:{w.name}", writes=[3], kind=op.kind, bytes=int(info.nbytes) * top_k // (info.n // expert_rows), format=info.format,
+            n=expert_rows, k=info.k, rg=int(macros["RG"]), geometry="crew", top_k=top_k)
+
+
+def _moe_combine(ctx: _Ctx, op: Op) -> None:
+    """The weighted sum of the k expert outputs (+ the gated shared expert) (+ the residual), one SIMD-group per token."""
+    ins = list(op.inputs)
+    h, weights = ins[0], ins[1]
+    rest = ins[2:]
+    shared = gate = residual = None
+    if op.attrs.get("has_shared"):
+        shared, gate = rest[0], rest[1]
+        rest = rest[2:]
+    if op.attrs.get("has_residual"):
+        residual = rest[0]
+    out = op.outputs[0]
+    t_c, t_src = ctx.rows_of(op)
+    hidden, top_k = ctx.shape(out)[1], int(op.attrs["top_k"])
+    if ctx.shape(h)[1] != top_k * hidden:
+        raise ValueError(f"moe_combine: h has {ctx.shape(h)[1]} columns, expected {top_k} × {hidden}")
+    k = ctx.kernel("moe_combine", kernels.moe_combine_source(), "moe_combine",
+                   dict(kernels.moe_combine_macros(shared is not None, residual is not None), **ctx.t_macros(t_c, t_src)))
+    prm = ctx.params("moe_combine", kernels.moe_combine_params(hidden, top_k, t_c))
+    hb = ctx.buf(h)
+    bindings = [(0, *hb), (1, *ctx.buf(weights)), (2, *(ctx.buf(shared) if shared is not None else hb)), (3, *(ctx.buf(gate) if gate is not None else hb)),
+                (4, *(ctx.buf(residual) if residual is not None else hb)), (5, *ctx.buf(out)), (6, prm, 0)]
+    ctx.add(k, bindings, (t_c, 1, 1), (32, 1, 1), op.kind, writes=[5])
+
+
 HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_apply_op, "gemv": _gemv, "lm_head": _gemv,
+            "moe_route": _moe_route, "moe_gemv": _moe_gemv, "moe_combine": _moe_combine,
             "gqa_decode": _gqa, "gqa_merge": _gqa_merge, "gdn_mixer": _gdn, "gdn_commit": _gdn, "gdn_norm": _gdn_norm, "argmax": _argmax,
             "sample": _sample,
             "tap_concat": _tap_concat, "draft_attn": _draft_attn, "confidence": _confidence, "verify_select": _verify_select,
