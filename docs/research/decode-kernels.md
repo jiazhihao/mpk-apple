@@ -625,3 +625,15 @@ hash-map prompt the padding-free pack's plain decode diverges from the inline pa
 geometries and not at all with the default ones, and plain vs speculative diverge at token 64 on the inline packs
 and at token 5 on these: near-tie flips within the numerics contract (≤ 2 ULP per op), not layout errors; a
 generation under shader validation reported nothing.
+
+**Sub-word units (the same day).** With the scales in the region, a payload of 4 or 8 bytes per lane-row is not
+padded to a word: `LANES_PER_WORD` (4 or 2) lanes share one, the shader GEMV selects its part (`sub_word`) and
+decodes it as a partial word (`K_TAIL`), and a stripe narrower than a scale group carries the group's byte once per
+lane (`blm.lane_groups`, as the INT4 plugin already did). The formats' `pack_k_multiple` is 256 now — the decode
+kernels' stripe granularity — so `--quantize nvfp4` reaches the DSpark Markov head: 151936 × 256, 7 reads per
+round, 78 MB in BF16 → 24 MB (160 bytes per row: 128 of nibbles and 32 of group bytes); the drafter streams 0.644 GB
+per round. Bit-identical to the padded inline unit on every format (`test_gemv_sub_word_units`); the tile and the
+gather refuse sub-word slabs (they run at T = 1 on the shader, which is where the head runs). The round (§8's
+protocol): 10.00 → **9.58 ms per token** GPU (math 6.80, code 8.36, chat 12.30, text 11.50) at the same acceptance
+(3.06 tokens per step: the 4-bit head drafts as the BF16 one did), 9.66 wall against mlx-lm's 9.25 — **1.044×**, and
+ahead on math (6.91 vs 7.13); code 1.02, text 1.06, chat 1.10.

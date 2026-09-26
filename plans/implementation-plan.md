@@ -298,9 +298,10 @@ decode-kernels.md §8) — the gate's "within 5 % of `qmv`" is not met by the de
 (the tile's K-split, next).
 *#101, #103 (2026-09-26):* the padding-free pack streams 1.008× the checkpoint's bytes (#101 met); plain decode
 0.776× mlx-lm; the round 10.0 ms per token (the drafter as NVFP4, the K-split, the pruned variants, `stop_at`)
-against mlx-lm's own speculative decoding at 9.25 (a Qwen3-0.6B 4-bit draft, N = 3) — **1.087×, the gate not yet
-met**; the LM draft accepts more per step than DSpark's block drafter, so the remaining levers are the step's glue
-(the Markov head's BF16 bytes, the permutes, the attention core, the dispatch count; decode-kernels.md §8).
+against mlx-lm's own speculative decoding at 9.25 (a Qwen3-0.6B 4-bit draft, N = 3) — 1.087×, then 9.6 with the
+Markov head in NVFP4 (sub-word lane units): **1.044×, ahead on math, the gate not yet met**; the LM draft accepts
+more per step than DSpark's block drafter, so the remaining levers are the step's glue (the permutes written by
+their producers, the attention core, the dispatch count; decode-kernels.md §8, §9).
 
 
 *Status (2026-09-24, #33).* Per-op GPU timestamps exist: `Queue.profile` (one compute encoder per dispatch with

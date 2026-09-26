@@ -39,6 +39,8 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
     if info.k % 256 or info.payload_bytes % 4:
         raise ValueError(f"decode kernels: K must be a multiple of 256 ({info.format}, K={info.k})")
     p, s = info.payload_bytes, info.scale_bytes
+    if info.lanes_per_word > 1 and (info.lane_order != "interleaved16" or (s and info.scale_placement != "block")):
+        raise ValueError(f"decode kernels: a sub-word unit needs the interleaved order and block scales ({info.format}, K={info.k})")
     if info.scale_placement == "block" and s:
         # the block's scale region after its payload words: a lane's S bytes start (lane·S) % 16 into a word; the
         # kernels load scale_words words from there and index the scales by SCALE_SOFF (in the format's scale units)
@@ -54,7 +56,14 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
     group = info.scale_group or getattr(f, "scale_group", 0)
     if group:
         g["GROUP_SEG"] = str(math.gcd(math.gcd(int(f.weights_per_word), info.k // 32), int(group)))
+    if info.lanes_per_word > 1:
+        g["LANES_PER_WORD"] = f"{info.lanes_per_word}u"                     # 2 or 4 lanes share a payload word (blm.py)
     return g
+
+
+def unit_words(info: PackInfo) -> str:
+    """The ``UNIT_WORDS`` macro: 16-byte payload words per lane-row (1 for a sub-word unit)."""
+    return str(info.payload_words)
 
 
 def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool = False, norm: bool = False,
@@ -81,7 +90,7 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
         raise ValueError(f"gemv_T: unknown epilogue {epilogue!r}")
     macros = {"K": str(info.k), "R": str(info.rows), "T": str(t), "RG": str(rg),
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
-              "UNIT_WORDS": str(info.unit_bytes // 16), **geometry, "OUT_BF16": "1" if out_bf16 else "0",
+              "UNIT_WORDS": unit_words(info), **geometry, "OUT_BF16": "1" if out_bf16 else "0",
               "X_PRECONVERT": "1" if preconvert else "0",
               "NORM": "1" if norm else "0", "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
     if epilogue == "silu_mul":
@@ -174,6 +183,8 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         tn, tk = gemm_tile_shape(tm)
     if info.rows not in (8, 16):
         raise ValueError(f"gemm_tile: R={info.rows} must be 8 or 16 (the epilogues index pack blocks)")
+    if info.lanes_per_word > 1:
+        raise ValueError(f"gemm_tile: sub-word units (K={info.k}) are the shader GEMV's; the tile reads whole-word units")
     if epilogue not in EPILOGUES:
         raise ValueError(f"gemm_tile: unknown epilogue {epilogue!r}")
     if round_before_residual and epilogue != "residual":
@@ -190,7 +201,7 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         raise ValueError(f"gemm_tile: KSPLIT={ksplit} must be 1, 2 or 4 and divide the {info.k // tk} K tiles")
     macros = {"K": str(info.k), "R": str(info.rows), "TM": str(tm), "TN": f"{tn}u", "TK": f"{tk}u",
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
-              "UNIT_WORDS": str(info.unit_bytes // 16), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0",
+              "UNIT_WORDS": unit_words(info), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0",
               "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
     if round_before_residual:
         macros["EPILOGUE_ROUND"] = "1"
@@ -282,13 +293,15 @@ def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None) 
     elif info.format == "bf16":
         if info.k % 256:
             raise ValueError("embed: a packed bf16 table needs K % 256 == 0")
-        macros = {"EMBED_PACKED": "1", "R": str(info.rows), "UNIT_WORDS": str(info.unit_bytes // 16),
+        macros = {"EMBED_PACKED": "1", "R": str(info.rows), "UNIT_WORDS": unit_words(info),
                   "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1"}
     else:
         f = FORMATS.get(info.format)
         if not f.scale_group or abs(info.tensor_scale - 1.0) > 0:
             raise ValueError(f"embed: a packed {info.format} table needs block scales and no per-tensor scale")
-        macros = {"EMBED_PACKED": "1", "EMBED_DEQUANT": "1", "R": str(info.rows), "UNIT_WORDS": str(info.unit_bytes // 16),
+        if info.lanes_per_word > 1:
+            raise ValueError(f"embed: sub-word units (K={info.k}) are the shader GEMV's; the gather reads whole-word units")
+        macros = {"EMBED_PACKED": "1", "EMBED_DEQUANT": "1", "R": str(info.rows), "UNIT_WORDS": unit_words(info),
                   "K": str(info.k), "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1", **unit_geometry(info, f)}
     if ids not in (None, "block"):
         raise ValueError(f"embed: unknown ids mode {ids!r}")

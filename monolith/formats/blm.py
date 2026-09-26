@@ -19,6 +19,12 @@ whole-word loads stay inside the block — so the pack streams the weights' byte
 K = 4096 (the inline 40,960). A lane's scales start ``(lane·S) % 16`` bytes into a word: the kernels load
 ``scale_words`` words and index the scales from that offset (``SCALE_SOFF``).
 
+Sub-word units (with the block placement, interleaved order): a stripe whose payload is 4 or 8 bytes (K = 256 or
+512 for NVFP4, K = 256 for the byte formats) is not padded to a word — ``lanes_per_word`` lanes share one 16-byte
+word (``[row][lane][P]``: word ``row·32/LPW + lane/LPW``, the lane's part ``lane % LPW``) and its scales, the
+group(s) its stripe touches, live in the block's region. The shader GEMV reads them (a 151936×256 Markov head in
+NVFP4 is 22 MB instead of 78); the tile and the gather do not.
+
 The matrix's per-tensor scale (NVFP4 ``weight_scale_2``, FP8 ``weight_scale``) is metadata (``PackInfo``), applied by
 the kernel once per output. Everything here is numpy; the same index arithmetic is what the kernels use.
 """
@@ -33,6 +39,20 @@ import numpy as np
 from .base import PackLayout
 
 LANES = 32
+SUB_WORD_PAYLOADS = (4, 8)          # payload bytes per lane-row that share a 16-byte word (4 or 2 lanes per word)
+
+
+def lane_groups(k: int, group: int) -> Tuple[np.ndarray, np.ndarray, int]:
+    """Per lane: the first scale group its stripe of ``K/32`` columns touches and how many it touches; a pack gives
+    every lane the max count (a stripe starting inside a group touches one more than its length would; a stripe
+    narrower than a group shares the group's scale with its neighbours, stored once per lane)."""
+    if k % LANES:
+        raise ValueError(f"K={k} must be a multiple of {LANES} lanes")
+    kl = k // LANES
+    start = np.arange(LANES) * kl
+    first = start // group
+    count = (start + kl - 1) // group - first + 1
+    return first, count, int(count.max())
 
 
 @dataclass(frozen=True)
@@ -49,6 +69,16 @@ class PackInfo:
     tensor_scale: float = 1.0
     scale_group: int = 0      # weights per block scale (0 = no block scales)
     scale_placement: str = "inline"   # "inline": scales inside the unit; "block": the block's scale region after its payload words
+
+    @property
+    def lanes_per_word(self) -> int:
+        """Lanes sharing one 16-byte payload word: 1 for whole-word units, 2 or 4 for sub-word ones."""
+        return 16 // self.unit_bytes if self.unit_bytes < 16 else 1
+
+    @property
+    def payload_words(self) -> int:
+        """16-byte payload words per lane-row as the kernels count them (1 for a sub-word unit)."""
+        return max(1, self.unit_bytes // 16)
 
     @property
     def scale_words(self) -> int:
@@ -70,7 +100,7 @@ class PackInfo:
 
     @property
     def block_bytes(self) -> int:
-        return self.rows * LANES * self.unit_bytes + self.scale_region_bytes
+        return self.rows * LANES * self.unit_bytes + self.scale_region_bytes      # sub-word: 32·U bytes per row is whole words
 
     @property
     def nbytes(self) -> int:
@@ -83,6 +113,8 @@ class PackInfo:
     def unit_offset(self, block: int, row: int, lane: int, word: int = 0) -> int:
         """Byte offset of the ``word``-th 16-byte word of lane-row ``(row, lane)`` in ``block`` — the kernel's index."""
         base = block * self.block_bytes
+        if self.lanes_per_word > 1:
+            return base + (row * LANES + lane) * self.unit_bytes             # the lane's part of its shared word
         if self.lane_order == "contiguous":
             return base + (lane * self.rows + row) * self.unit_bytes + word * 16
         return base + ((row * self.words_per_unit + word) * LANES + lane) * 16
@@ -114,10 +146,14 @@ def pack_blm(payload: np.ndarray, scales: Optional[np.ndarray], layout: PackLayo
     # the block placement only where it pays: an inline unit without padding (INT4 affine at K = 4096: 64 + 16) or a
     # ragged stripe whose tail half-word holds the scales for free stays inline, and so does a lane whose scales
     # span two words of the region (K = 5120 / 12288 for NVFP4: measured slower on the tile than the padded unit,
-    # decode-kernels.md §9) — block placement means one 16-byte scale load per lane-row
-    block_scales = (layout.scale_placement == "block" and s_bytes > 0 and _pad16(p_bytes) + s_bytes < _pad16(p_bytes + s_bytes)
+    # decode-kernels.md §9) — block placement means one 16-byte scale load per lane-row. A 4- or 8-byte payload
+    # (interleaved order) becomes a sub-word unit: lanes share a word, the unit is the payload alone.
+    sub_word_ok = layout.scale_placement == "block" and p_bytes in SUB_WORD_PAYLOADS and layout.lane_order == "interleaved16"
+    unit_if_block = (p_bytes if sub_word_ok else _pad16(p_bytes)) + s_bytes
+    block_scales = (layout.scale_placement == "block" and s_bytes > 0 and unit_if_block < _pad16(p_bytes + s_bytes)
                     and max(-(-((lane * s_bytes) % 16 + s_bytes) // 16) for lane in range(LANES)) == 1)
-    unit = _pad16(p_bytes) if block_scales else _pad16(p_bytes + s_bytes)
+    sub_word = sub_word_ok and (s_bytes == 0 or block_scales)
+    unit = p_bytes if sub_word else (_pad16(p_bytes) if block_scales else _pad16(p_bytes + s_bytes))
     r = layout.rows
     n_blocks = -(-n // r)
     units = np.zeros((n_blocks * r, LANES, unit), dtype=np.uint8)
@@ -125,7 +161,9 @@ def pack_blm(payload: np.ndarray, scales: Optional[np.ndarray], layout: PackLayo
     if scales is not None and not block_scales:
         units[:n, :, p_bytes:p_bytes + s_bytes] = np.ascontiguousarray(scales, dtype=np.uint8)
     blocks = units.reshape(n_blocks, r, LANES, unit)                       # [b, row, lane, U]
-    if layout.lane_order == "contiguous":
+    if sub_word:
+        data = blocks                                                       # [b, row, lane, P]: 32·P bytes per row = whole words, lanes in order
+    elif layout.lane_order == "contiguous":
         data = blocks.transpose(0, 2, 1, 3)                                 # [b, lane, row, U]
     else:
         w = unit // 16
@@ -152,7 +190,9 @@ def unpack_blm(data: bytes, info: PackInfo) -> Tuple[np.ndarray, Optional[np.nda
     r, u = info.rows, info.unit_bytes
     per_block = buf.reshape(info.n_blocks, info.block_bytes)
     pbytes = per_block[:, : r * LANES * u]
-    if info.lane_order == "contiguous":
+    if info.lanes_per_word > 1:
+        blocks = pbytes.reshape(info.n_blocks, r, LANES, u)
+    elif info.lane_order == "contiguous":
         blocks = pbytes.reshape(info.n_blocks, LANES, r, u).transpose(0, 2, 1, 3)
     else:
         w = u // 16

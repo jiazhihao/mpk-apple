@@ -10,7 +10,7 @@ from typing import Any, Mapping, Tuple
 import numpy as np
 
 from .base import DequantSpec, Format, PackLayout
-from .blm import PackInfo, join_lanes, pack_blm, split_lanes, unpack_blm
+from .blm import LANES, PackInfo, join_lanes, lane_groups, pack_blm, split_lanes, unpack_blm
 from .registry import register_format
 
 GROUP = 32
@@ -21,7 +21,7 @@ class INT8(Format):
     bytes_per_weight = 1.0 + 2.0 / GROUP
     weights_per_word = 16
     scale_group = GROUP
-    pack_k_multiple = 32 * GROUP
+    pack_k_multiple = 256           # a stripe narrower than a group shares the group's scale (see nvfp4)
     scale_unit_bytes = 2
     msl_decode = """
 #define WEIGHTS_PER_WORD 16u
@@ -62,15 +62,31 @@ static inline float decode_scale(thread const uint* sw, uint g) { return float(a
 
     def pack(self, spec: DequantSpec, layout: PackLayout) -> Tuple[bytes, PackInfo]:
         n, k = spec.shape
-        if (k // 32) % GROUP:
-            raise ValueError(f"int8: a lane's stripe must hold whole scale groups (K={k})")
+        if k % 256:
+            raise ValueError(f"int8: K must be a multiple of 256 for the decode kernels (K={k})")
         payload = split_lanes(spec.tensors["weight"].view(np.uint8), k, 1, 1)
-        scales = split_lanes(spec.tensors["weight_scale"].view(np.uint8).reshape(n, 2 * (k // GROUP)), k, 2, GROUP)
+        if (k // 32) % GROUP == 0:
+            scales = split_lanes(spec.tensors["weight_scale"].view(np.uint8).reshape(n, 2 * (k // GROUP)), k, 2, GROUP)
+        else:                                                                           # narrow stripes: the group(s) a lane touches
+            first, count, gpl = lane_groups(k, GROUP)
+            sc = np.zeros((n, LANES, gpl), np.float16)
+            for lane in range(LANES):
+                sc[:, lane, : count[lane]] = spec.tensors["weight_scale"][:, first[lane]: first[lane] + count[lane]]
+            scales = np.ascontiguousarray(sc).view(np.uint8).reshape(n, LANES, 2 * gpl)
         return pack_blm(payload, scales, layout, format="int8", k=k, scale_group=GROUP)
 
     def unpack_pack(self, data: bytes, info: PackInfo) -> DequantSpec:
         payload, scales = unpack_blm(data, info)
-        return DequantSpec("int8", (info.n, info.k),
+        n, k = info.n, info.k
+        if (k // 32) % GROUP == 0:
+            ws = join_lanes(scales).view(np.float16).reshape(n, k // GROUP)
+        else:
+            first, count, gpl = lane_groups(k, GROUP)
+            lanes16 = np.ascontiguousarray(scales).view(np.float16).reshape(n, LANES, gpl)
+            ws = np.zeros((n, k // GROUP), np.float16)
+            for lane in range(LANES):
+                ws[:, first[lane]: first[lane] + count[lane]] = lanes16[:, lane, : count[lane]]
+        return DequantSpec("int8", (n, k),
                            {"weight": join_lanes(payload).view(np.int8),
-                            "weight_scale": join_lanes(scales).view(np.float16).reshape(info.n, info.k // GROUP)},
+                            "weight_scale": ws},
                            {"group": GROUP})

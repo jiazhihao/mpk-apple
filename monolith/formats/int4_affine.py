@@ -19,7 +19,7 @@ from typing import Any, Mapping, Tuple
 import numpy as np
 
 from .base import DequantSpec, Format, PackLayout
-from .blm import LANES, PackInfo, join_lanes, pack_blm, split_lanes, unpack_blm
+from .blm import LANES, PackInfo, join_lanes, lane_groups, pack_blm, split_lanes, unpack_blm
 from .fp import bf16_to_f32, pack_nibbles, unpack_nibbles
 from .registry import register_format
 
@@ -27,15 +27,10 @@ GROUP = 64
 
 
 def _lane_groups(k: int, group: int) -> Tuple[np.ndarray, np.ndarray, int]:
-    """Per lane: the first group its stripe of ``K/32`` columns touches and how many it touches; the pack gives every
-    lane the max count of pairs (a stripe that starts inside a group touches one more than its length would)."""
+    """Per lane: the first group its stripe touches and how many (``blm.lane_groups``); K % 256 for the decode kernels."""
     if k % 256:
         raise ValueError(f"int4_affine: K must be a multiple of 256 (K={k})")
-    kl = k // LANES
-    start = np.arange(LANES) * kl
-    first = start // group
-    count = (start + kl - 1) // group - first + 1
-    return first, count, int(count.max())
+    return lane_groups(k, group)
 
 
 @register_format("int4_affine")

@@ -140,6 +140,9 @@ static inline uint unit_word(uint lane, uint r, uint j) {
   return (r * UNIT_WORDS + j) * 32u + lane;
 #endif
 }
+#ifdef LANES_PER_WORD
+#error "sub-word units are the shader GEMV's: the tile and the gather read whole-word units"
+#endif
 #ifndef SCALE_PLACEMENT
 #define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
 #endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)

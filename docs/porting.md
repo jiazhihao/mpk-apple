@@ -270,7 +270,8 @@ draft ops, the verify/accept kernels, the dynamic-T program) was the engine's wo
 the drafter's own rule) and `lower_context_update(g, taps, accepted)`. Register with `@register_drafter("<name>")`
 and import the package in `monolith/spec/__init__.py`. The target exposes taps through `Model.feature_taps()` and
 `tap_values`; `tools/pack_weights.py --drafter-kind <name>` packs the drafter next to the target's pack (a BF16
-drafter is re-quantized at pack time with `--quantize nvfp4 --quantize-keep embed_tokens,markov`: the format's
+drafter is re-quantized at pack time with `--quantize nvfp4 --quantize-keep embed_tokens,markov_w1` (the gathered
+tables stay; the Markov head's GEMV, K = 256, packs as NVFP4 through sub-word units): the format's
 `quantize`, the gathered tables kept as stored, a matrix whose K the format cannot pack — `pack_k_multiple` — kept
 too; the session binds the tree to the pack's formats, so the emitted draft ops carry the quantized kernels);
 `generate --drafter … --drafter-kind <name>` runs the round.
