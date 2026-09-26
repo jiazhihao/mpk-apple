@@ -292,6 +292,10 @@ does it (#100); the lane-row unit without its 16-byte padding, 9 % of the bytes 
 attention scoring, the norm dispatches, the dispatch count (#102); and the gate that matters on this machine (#103):
 **our per-token latency under speculative decoding against mlx-lm's own speculative decoding** (its draft-model
 path) on the same target bytes and the same draft length, with mlx-lm's plain decode as the floor.
+*#100 (2026-09-26):* MLX's decode is the default; 0.66 → 0.74× mlx-lm on plain decode (gemv-kernel-study.md §3e,
+decode-kernels.md §8) — the gate's "within 5 % of `qmv`" is not met by the decode alone: the wide shapes are within
+7 % in bus bytes once the pack's padding is counted (#101 closes that), the 4096-row shapes are occupancy-bound
+(the tile's K-split, next).
 
 
 *Status (2026-09-24, #33).* Per-op GPU timestamps exist: `Queue.profile` (one compute encoder per dispatch with
