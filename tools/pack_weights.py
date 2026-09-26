@@ -119,10 +119,12 @@ def main(argv=None) -> int:
     ap.add_argument("--num-layers-override", type=int, default=None)
     ap.add_argument("--lane-order", default="interleaved16", choices=["contiguous", "interleaved16"])
     ap.add_argument("--rows", type=int, default=16)
+    ap.add_argument("--scale-placement", default="inline", choices=["inline", "block"],
+                    help="block: the block's scales in their own region, a unit of whole payload words — the pack streams the weights' bytes (#101)")
     ap.add_argument("--quantize", default=None, help="quantize the checkpoint's BF16 / F32 matrices into this format at pack time (nvfp4, int8, fp8_e4m3, int4_affine)")
     ap.add_argument("--quantize-keep", default=None, help="comma-separated tensor-name substrings that stay as stored with --quantize (e.g. embed_tokens,markov)")
     a = ap.parse_args(argv)
-    layout = PackLayout(rows=a.rows, lane_order=a.lane_order)
+    layout = PackLayout(rows=a.rows, lane_order=a.lane_order, scale_placement=a.scale_placement)
     if a.drafter_kind is not None:
         return pack_from_drafter(a, layout)
     if a.plan is None:
@@ -134,7 +136,7 @@ def main(argv=None) -> int:
         pk.add_slab(SlabRequest(s["name"], s["format"], [_segment(x) for x in s["segments"]], layout, _perm(s.get("row_perm"))))
     for x in plan.get("aux", []):
         pk.add_aux(AuxRequest(x["name"], x["source"], x.get("transform")))
-    m = pk.write({"plan": str(a.plan), "layout": {"rows": a.rows, "lane_order": a.lane_order}})
+    m = pk.write({"plan": str(a.plan), "layout": {"rows": a.rows, "lane_order": a.lane_order, "scale_placement": a.scale_placement}})
     print(f"packed {len(m['slabs'])} slabs and {len(m['aux'])} aux tensors, {m['nbytes'] / 1e6:.1f} MB -> {a.out}")
     return 0
 

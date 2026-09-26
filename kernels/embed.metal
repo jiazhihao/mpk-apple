@@ -46,6 +46,22 @@ static inline uint unit_word(uint lane, uint r, uint j) {
   return (r * UNIT_WORDS + j) * 32u + lane;
 #endif
 }
+#ifndef SCALE_PLACEMENT
+#define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
+#endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
+#if SCALE_PLACEMENT
+#define SCALE_BASE (R * 32u * PAYLOAD_WORDS)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#else
+#define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
+#define SCALE_SOFF(ln) 0u
+#endif
+#if SCALE_PLACEMENT
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS + SCALE_REGION_WORDS)       // a block: its payload words then its scale region
+#else
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS)
+#endif
 #endif
 
 kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* table [[buffer(1)]], device uint4* h [[buffer(2)]],
@@ -69,11 +85,11 @@ kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* ta
   device uint4* out = h + (ulong)t * (p.k / 8u);
 #if EMBED_PACKED
   const uint b = tok / R, r = tok % R;
-  device const uint4* blk = table + (ulong)b * (R * 32u * UNIT_WORDS);
+  device const uint4* blk = table + (ulong)b * BLOCK_WORDS;
 #if EMBED_DEQUANT
   // the lane's stripe: PAYLOAD_WORDS words of codes, SCALE_WORDS words of group scales; out columns [lane·KL, +KL)
   uint scw[SCALE_WORDS * 4];
-  for (uint s = 0; s < SCALE_WORDS; s++) { uint4 q = blk[unit_word(lane, r, SCALE_W0 + s)]; scw[4 * s] = q.x; scw[4 * s + 1] = q.y; scw[4 * s + 2] = q.z; scw[4 * s + 3] = q.w; }
+  for (uint s = 0; s < SCALE_WORDS; s++) { uint4 q = blk[SCALE_WORD(lane, r, s)]; scw[4 * s] = q.x; scw[4 * s + 1] = q.y; scw[4 * s + 2] = q.z; scw[4 * s + 3] = q.w; }
   const uint kl = K / 32u, lane_off = (lane * kl) % SCALE_GROUP;     // a stripe may start inside a group (ragged K)
   device ushort* orow = (device ushort*)out + lane * kl;
   for (uint j = 0; j < PAYLOAD_WORDS; j++) {
@@ -83,9 +99,9 @@ kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* ta
       const uint c = j * WEIGHTS_PER_WORD + e;
       if (c >= kl) break;                                              // the padding of a partial last word
       const uint g = (lane_off + c) / SCALE_GROUP;
-      float v = wv[e] * decode_scale(scw + SCALE_UOFF, g);
+      float v = wv[e] * decode_scale(scw + SCALE_UOFF, SCALE_SOFF(lane) + g);
 #if SCALE_BIAS
-      v += decode_bias(scw + SCALE_UOFF, g);
+      v += decode_bias(scw + SCALE_UOFF, SCALE_SOFF(lane) + g);
 #endif
       uint u = as_type<uint>(v); u += 0x7FFFu + ((u >> 16) & 1u);
       orow[c] = ushort(u >> 16);

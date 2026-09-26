@@ -25,6 +25,7 @@ class Profile:
     gpu_cores: int
     nominal_gbps: float
     lane_order: str                   # "contiguous" | "interleaved16"
+    scale_placement: str = "inline"   # "inline" | "block": where a pack keeps its block scales (blm.py, #101)
     threadgroups_per_core: int = 1
     sibling_order: str = "either"     # "alu_first" | "bus_first" | "either"
     max_cb_ms: float = 16.0
@@ -75,6 +76,8 @@ class Profile:
                 raise ValueError(f"profile {name}: engine.{k} is required")
         if eng["lane_order"] not in ("contiguous", "interleaved16"):
             raise ValueError(f"profile {name}: engine.lane_order must be 'contiguous' or 'interleaved16'")
+        if eng.get("scale_placement", "inline") not in ("inline", "block"):
+            raise ValueError(f"profile {name}: engine.scale_placement must be 'inline' or 'block'")
         if eng.get("attention", "v1") not in ("v1", "v2"):
             raise ValueError(f"profile {name}: engine.attention must be 'v1' or 'v2'")
         if eng.get("accelerator", "off") not in ("on", "off"):
@@ -93,6 +96,7 @@ class Profile:
             gpu_cores=int(d["gpu_cores"]),
             nominal_gbps=float(d["nominal_gbps"]),
             lane_order=str(eng["lane_order"]),
+            scale_placement=str(eng.get("scale_placement", "inline")),
             threadgroups_per_core=int(eng.get("threadgroups_per_core", 1)),
             sibling_order=str(eng.get("sibling_order", "either")),
             max_cb_ms=float(eng.get("max_cb_ms", 16.0)),

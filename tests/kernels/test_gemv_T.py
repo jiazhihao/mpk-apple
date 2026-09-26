@@ -18,10 +18,10 @@ def dev():
     return nt.Device()
 
 
-def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None, K=K):
+def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None, K=K, placement="inline"):
     rng = np.random.default_rng(3)
     spec = random_spec(fmt, n, K, rng)
-    data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order))
+    data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
     x = rng.uniform(-1, 1, size=(t, K)).astype(np.float32)
     xb = f32_to_bf16(x)
     macros = kernels.gemv_macros(info, t=t)
@@ -75,3 +75,17 @@ def test_nvfp4_decode_variants_are_exact(dev, variant, rows, t):
     out, ref, _ = _run(dev, "nvfp4", 100, rows, t, "interleaved16", extra_macros={"NVFP4_DECODE": variant})
     chk = check_against_oracle(out, ref)
     assert chk.ok() and chk.max_rel_err < 1e-6, chk         # the decodes are bit-exact; only accumulation order differs
+
+
+@pytest.mark.parametrize("fmt,K", [("nvfp4", 4096), ("nvfp4", 5120), ("nvfp4", 12288), ("int8", 4096), ("int8", 5120), ("int4_affine", 4096), ("nvfp4", 3584)])
+@pytest.mark.parametrize("lane_order", ["interleaved16", "contiguous"])
+@pytest.mark.parametrize("rows,t", [(16, 1), (8, 4)])
+def test_gemv_block_scale_placement(dev, fmt, K, lane_order, rows, t):
+    """The block's scales in their own region (#101): a lane's run starting mid-word (K = 5120: 10 bytes per lane,
+    two words for some lanes), the K = 12288 run of 24 bytes, INT8's halves and INT4's float pairs, both lane orders;
+    the ragged K = 3584 stays inline (its tail half-word holds the scales)."""
+    out, ref, _ = _run(dev, fmt, 100, rows, t, lane_order, K=K, placement="block")
+    chk = check_against_oracle(out, ref)
+    assert chk.ok(), chk
+    inline, _, _ = _run(dev, fmt, 100, rows, t, lane_order, K=K, placement="inline")
+    assert np.array_equal(out, inline), "the same codes and scales in the same order must give the same bits whatever the placement"

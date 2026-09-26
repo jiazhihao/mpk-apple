@@ -543,6 +543,85 @@ token against 10.85 / 10.88 (8 SIMD-groups: 10.73). (2) The programs under the c
 never run a decode step at T = 1, so the compiler no longer emits the step's T = 1 shader variants (design §5.7;
 the tile's range starts at 0, a one-token prefill chunk runs on it; the injection's variants stay): 615 → 469
 dispatches. Together the round is at **10.4 ms per token** (math 7.3, code 9.2, chat 13.4, text 12.2), the step
-29.9 ms span, 28.2 busy — 0.65× mlx-lm's plain. What is left, in order: the Markov head's BF16 bytes (a compact
-unit for K = 256, #101), the permutes (writing the consumer's order from the producer's epilogue), the attention
-core (#102), and the target's bytes themselves (#101).
+29.9 ms span, 28.2 busy — 0.65× mlx-lm's plain.
+
+**The gate: mlx-lm's own speculative decoding (#103, 2026-09-26 [M]).** `tools/bench/spec_vs_mlx.py` runs both
+engines on the same target bytes and prompts (128 tokens, two alternating reps, the best per prompt), mlx-lm with a
+draft model — `mlx-community/Qwen3-0.6B-4bit`, the smallest same-tokenizer draft — at `num_draft_tokens` N, ours at
+fixed L = N and the cost-aware rule; wall-clock ms per token (mlx-lm's `generation_tps`, our decode wall time):
+
+| engine / mode | all | chat | code | math | text | tokens / step |
+|---|---|---|---|---|---|---|
+| mlx-lm plain | 16.18 | 16.16 | 16.20 | 16.20 | 16.14 | 1.00 |
+| mlx-lm draft N = 1 / 2 | 12.30 / 10.35 | 13.33 / 11.68 | 11.75 / 9.83 | 11.20 / 8.76 | 13.26 / 11.55 | 1.77 / 2.36 |
+| mlx-lm draft N = 3 (its best) | **9.44** | 11.47 | 8.46 | 7.27 | 11.10 | 2.94 |
+| mlx-lm draft N = 4 / 5 / 7 | 10.14 / 11.48 / 13.37 | 12.93 / 15.14 / 18.67 | 8.87 / 9.97 / 10.91 | 7.36 / 7.41 / 7.86 | 12.05 / 14.38 / 17.36 | 3.31 / 3.69 / 4.17 |
+| ours fixed L = 1 / 2 / 3 | 17.70 / 14.28 / 12.63 | 19.07 / 16.03 / 15.30 | 17.31 / 13.57 / 11.59 | 16.42 / 12.37 / 10.22 | 18.13 / 15.59 / 13.81 | 1.73 / 2.21 / 2.56 |
+| ours fixed L = 4 / 5 / 7 | 12.04 / 11.68 / 11.22 | 14.83 / 14.38 / 14.29 | 10.81 / 10.68 / 10.11 | 9.43 / 8.84 / 7.94 | 13.60 / 13.38 / 13.19 | 2.75 / 2.87 / 3.09 |
+| ours cost-aware (this run) | 11.21 | 14.27 | 10.11 | 7.94 | 13.20 | 3.09 |
+
+Two things the table says. (1) The 0.6B LM draft accepts more per step than DSpark's block drafter (4.17 vs 3.09
+tokens per step at N = L = 7; at its best N = 3 it takes 2.94 of 4), so the engine has to win on the step's cost,
+not on acceptance. (2) mlx-lm's step at N = 3 is 27.8 ms (9.44 × 2.94): a verify pass of ~16 ms at M = 4 plus
+~3.7 ms per drafted token; ours was 34.6 ms wall for 3.09 tokens — 30 ms of GPU step and ~2.3 ms of over-run per
+step (the pump's queued command buffers past the request, whose tokens are discarded: measured as wall − GPU).
+
+**With the block scale placement (§9) and `stop_at` (the program stops itself at the request; design §5.5).**
+Plain decode of the 8B on the padding-free pack: 47.97 tok/s (20.85 ms) against mlx-lm's 61.81 — **0.776×** (from
+0.740); the round (cost rule, GPU ms per token) 10.4 → **10.00** (chat 12.72, code 8.83, math 7.14, text 11.97),
+and the wall time now equals the GPU time (10.05). The gate re-run at mlx-lm's best N:
+
+| engine / mode | all | chat | code | math | text | tokens / step |
+|---|---|---|---|---|---|---|
+| ours cost-aware | **10.05** | 12.78 | 8.89 | 7.22 | 11.94 | 3.03 |
+| ours fixed L = 3 / 4 | 11.25 / 10.79 | 13.50 / 13.28 | 10.28 / 9.63 | 9.15 / 8.49 | 12.48 / 12.27 | 2.55 / 2.72 |
+| ours plain | 20.56 | | | | | 1.00 |
+| mlx-lm draft N = 3 / 4 | **9.25** / 10.02 | 11.27 / 12.81 | 8.29 / 8.74 | 7.10 / 7.23 | 10.87 / 11.95 | 2.94 / 3.31 |
+| mlx-lm plain | 15.95 | | | | | 1.00 |
+
+**Ours / mlx-lm's best = 1.087** (math 1.02, code 1.07, text 1.10, chat 1.13): not yet. Our step is 30.3 ms for
+3.03 tokens against their 27.2 for 2.94; of ours (the trace, min of 5 steps: 27.9 ms span with the profiler's
+encoder gaps, 26.4 busy), the verify pass is 16.6 ms (gate|up 7.74 at 263 GB/s, down 4.64 at 228, qkv 2.40 at
+212, o_proj 1.78 at 191; at the pack's 4.30 GB the bus bound is 14.0), `lm_head` × 2 2.4, the drafter 4.6 (its
+Markov head 1.9 ms of BF16: 7 chained 151936×256 GEMVs at 290 GB/s; its 5 layers 2.3, `fc` 0.2), the attention
+1.3, the permutes 0.8, the serial and small ops 0.4, and the 469 dispatch boundaries. The levers that remain, in
+order of size: the Markov head's 78 MB × 7 in NVFP4 through a sub-word unit (K = 256 is 8 columns per lane, 4
+bytes of nibbles: −1.3 ms) or FP8 (−0.9), the permutes of the un-normed inputs written by their producers'
+epilogues (−0.5), the attention core's T = 8 rows (#102, −0.5 to −0.7), the dispatch count.
+
+
+## 9. The lane-row unit without its padding (#101) — the block scale placement
+
+The inline unit `[payload | scales | pad16]` costs bus bytes: NVFP4 at K = 4096 is 64 + 8 → 80 bytes per lane-row
+(+11 %), and the 8B pack streamed 4.65 GB per token where mlx-lm streams 4.26 for the same weights (§8).
+`PackLayout(scale_placement="block")` keeps the unit to whole payload words and puts the block's scales in their own
+region after its payload words (`[row][lane][S]` bytes, padded to 16 plus an over-fetch margin): a lane's scales
+start `(lane·S) % 16` bytes into a word, the kernels (`gemv_T`, `gemm_tile`, `embed`) load `scale_words` words
+from `SCALE_WORD(lane, row, s)` and index the scales from `SCALE_SOFF(lane)`; the block stride grows by the region
+(`BLOCK_WORDS`). Measured 2026-09-26 [M] on the 8B's shapes (NVFP4, R = 16, min-of-3, GB/s of the weights' bytes —
+the same weights, so the rate is the speed-up):
+
+| shape | inline unit | shader T = 1 inline → block | tile TM 8 (K-split 2) inline → block |
+|---|---|---|---|
+| gate\|up 24576×4096 | 80 B (64 + 8) | 0.235 → **0.216 ms** (241 → 262 GB/s) | 0.234 → **0.215** (242 → 263) |
+| qkv 6144×4096 | 80 | 0.059 → **0.054** (241 → 261) | 0.064 → 0.060 (221 → 235) |
+| o_proj 4096×4096 | 80 | 0.046 → 0.044 (206 → 212) | 0.044 → **0.040** (216 → 234) |
+| lm_head 151936×4096 | 80 | 1.371 → **1.235** (255 → 284) | 1.415 → **1.228** (247 → 285) |
+| M1 17408×5120 | 96 (80 + 10) | 0.207 → 0.197 (242 → 255) | 0.206 → 0.222 (244 → 226) |
+| down 4096×12288 | 224 (192 + 24) | 0.127 → 0.130 (222 → 218) | 0.120 → 0.145 (236 → 196) |
+
+Where a lane's 8 scale bytes fit one word (K = 4096) the block placement is 3–11 % faster on both paths — the bytes
+it saves. Where the scales span two words per lane (K = 5120: 10 bytes, K = 12288: 24) it loses on the tile (two
+scale loads per row from a region far from the payload, against the inline tail word the payload stream already
+brought in) and ties on the shader, so the packer keeps those slabs inline; the rule is in `pack_blm` (one scale
+word per lane, and only where the inline unit has padding). The 8B's pack: 4.655 → 4.295 GB streamed per token —
+1.008× the checkpoint's bytes, #101's gate (≤ 1.01×) met; the down projection's 3.7 % of padding stays.
+The embedding gather and every format's oracle tests run on both placements; the placement is a profile value
+(`scale_placement`, the writer measures it at K = 4096) and a `pack_weights.py --scale-placement` flag. In the
+step (§8): plain decode 46.4 → 48.0 tok/s (0.740 → 0.776× mlx-lm), the round 10.4 → 10.0 ms per token. The
+placement is bit-exact (`test_gemv_block_scale_placement`: the same codes and scales give the same bits inline or in
+the region), so a token stream changes only where the autotuner's choices change the accumulation order — on the
+hash-map prompt the padding-free pack's plain decode diverges from the inline pack's at token 5 with the tuned
+geometries and not at all with the default ones, and plain vs speculative diverge at token 64 on the inline packs
+and at token 5 on these: near-tie flips within the numerics contract (≤ 2 ULP per op), not layout errors; a
+generation under shader validation reported nothing.

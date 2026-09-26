@@ -156,7 +156,7 @@ class Packer:
         entry = {
             "name": req.name, "format": req.format, "offset": off, "nbytes": len(data), "n": n, "k": k,
             "rows": r, "unit_bytes": info.unit_bytes, "payload_bytes": info.payload_bytes, "scale_bytes": info.scale_bytes,
-            "lane_order": info.lane_order, "scale_group": info.scale_group, "n_blocks": info.n_blocks,
+            "lane_order": info.lane_order, "scale_group": info.scale_group, "n_blocks": info.n_blocks, "scale_placement": info.scale_placement,
             "row_scales_offset": rs_off, "row_perm": req.row_perm is not None,
             "segments": [dict(s.describe(), rows=int(nr), tensor_scale=float(sc)) for s, nr, sc in zip(req.segments, seg_rows, scale_of_seg)],
         }
@@ -232,7 +232,7 @@ class PackFile:
     def slab_info(self, name: str) -> PackInfo:
         s = self.slabs[name]
         return PackInfo(s["format"], s["n"], s["k"], s["rows"], s["unit_bytes"], s["payload_bytes"], s["scale_bytes"],
-                        s["lane_order"], s["n_blocks"], 1.0, s["scale_group"])
+                        s["lane_order"], s["n_blocks"], 1.0, s["scale_group"], s.get("scale_placement", "inline"))
 
     def slab_bytes(self, name: str) -> np.ndarray:
         s = self.slabs[name]

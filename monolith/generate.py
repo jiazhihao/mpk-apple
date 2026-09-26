@@ -162,7 +162,8 @@ class Session:
             # the host writes each chunk's tokens and length; the advance emits only after the last chunk
             state = self.layout.unpack(st.read(0, self.layout.size))
             state.update(t_this_step=len(chunk), pending_tokens=chunk, prefill_left=len(chunks) - 1 - k,
-                         rng_lo=self.seed & 0xFFFFFFFF, rng_hi=(self.seed >> 32) & 0xFFFFFFFF)
+                         rng_lo=self.seed & 0xFFFFFFFF, rng_hi=(self.seed >> 32) & 0xFFFFFFFF,
+                         stop_at=max_new_tokens)                          # the program stops itself once the ring holds the request
             st.write(self.layout.pack(state), 0)
             r1 = pre.run(1, steps_per_cb=1, in_flight=1)
             prefill_ms += r1.gpu_ms
@@ -180,9 +181,9 @@ class Session:
                 done = False                               # every step commits ≥ 1 token: the remaining count bounds the steps
                 while len(tokens) < max_new_tokens and not done:
                     need = max_new_tokens - len(tokens)
-                    # short command buffers: a round is several plain steps long and the pump stops on the token count,
-                    # so the buffers still queued (in_flight × steps_per_cb steps) are the over-run past the request
-                    r2 = pre.run(need, steps_per_cb=min(steps_per_cb, 2), in_flight=min(in_flight, 2), max_tokens=need)
+                    # the program sets `done` itself when the ring reaches stop_at (accept_scan), so the steps still
+                    # queued behind it return at their first instruction: full command buffers, no over-run work
+                    r2 = pre.run(need, steps_per_cb=steps_per_cb, in_flight=in_flight, max_tokens=need)
                     tokens += r2.tokens
                     dec_ms += r2.gpu_ms; dec_wall += r2.wall_ms; host += r2.host_busy_ms; steps += r2.steps
                     done = r2.done or r2.steps == 0

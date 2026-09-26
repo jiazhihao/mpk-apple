@@ -43,6 +43,21 @@ def tile_rows(t: int) -> int:
 
 # ---- decisions ----------------------------------------------------------------------------------------------------
 
+def choose_scale_placement(gbps: Mapping[str, float], current: Optional[str] = None) -> Tuple[str, str]:
+    """``block`` when it streams a matrix faster than ``inline`` by more than the noise margin (it moves fewer bytes:
+    the unit's padding is gone), ``inline`` when it is slower by more than the margin; a tie keeps the file's value
+    (``inline`` for a file without one)."""
+    cur = current or "inline"
+    if not gbps or "inline" not in gbps or "block" not in gbps:
+        return cur, "no placement measurement: kept " + cur
+    ratio = gbps["block"] / gbps["inline"]
+    if ratio > 1 + NOISE:
+        return "block", f"block streams {ratio:.3f}x inline (the unit's padding gone)"
+    if ratio < 1 - NOISE:
+        return "inline", f"inline streams {1 / ratio:.3f}x block"
+    return cur, f"tie within {100 * NOISE:.0f} % ({ratio:.3f}x): kept {cur}"
+
+
 def choose_lane_order(gbps: Mapping[str, float], current: Optional[str] = None) -> Tuple[str, str]:
     """``(lane order, why)`` from the T = 1 GEMV rate per lane order: the faster one; within the noise margin the
     profile's current value (the Apple9 tie keeps its hand-derived choice), else interleaved16."""
@@ -125,6 +140,7 @@ def decide(measurements: Mapping[str, Any], current: Optional[Mapping[str, Any]]
     cur = dict(current or {})
     notes: Dict[str, str] = {}
     lane, notes["lane_order"] = choose_lane_order(measurements["lane_order_gbps"], cur.get("lane_order"))
+    placement, notes["scale_placement"] = choose_scale_placement(measurements.get("scale_placement_gbps") or {}, cur.get("scale_placement"))
     tgs, notes["threadgroups_per_core"] = choose_threadgroups(measurements["threadgroups_ms"], int(cur.get("threadgroups_per_core", 1)))
     shader = {cost_key(f): cost_table(ms) for f, ms in measurements["shader_ms"].items()}
     tile = {cost_key(f): {int(tm): round(ms / measurements["shader_ms"][f][1], 3) for tm, ms in rows.items()}
@@ -135,7 +151,7 @@ def decide(measurements: Mapping[str, Any], current: Optional[Mapping[str, Any]]
     cost_t: Dict[str, Dict[str, float]] = {k: {str(t): c for t, c in tbl.items()} for k, tbl in shader.items()}
     for k, rows in tile.items():
         cost_t[f"accelerator_{k}"] = {str(tm): c for tm, c in sorted(rows.items())}
-    engine = {"family": measurements["family"], "lane_order": lane, "threadgroups_per_core": tgs,
+    engine = {"family": measurements["family"], "lane_order": lane, "scale_placement": placement, "threadgroups_per_core": tgs,
               "sibling_order": cur.get("sibling_order", "either"), "max_cb_ms": cur.get("max_cb_ms", 16),
               "attention": attention, "accelerator": accel, "accelerator_min_t": min_t, "cost_T": cost_t,
               "note": "written by tools/profile_writer.py from the kernel harnesses (min-of-N over >= 2 GB streamed per point): cost_T = the "

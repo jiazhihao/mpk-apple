@@ -44,6 +44,7 @@ class INT4Affine(Format):
     weights_per_word = 32
     scale_group = GROUP
     pack_k_multiple = 256
+    scale_unit_bytes = 8            # a float32 (scale, bias) pair per group
     msl_decode = """
 #define WEIGHTS_PER_WORD 32u
 #define SCALE_GROUP 64u

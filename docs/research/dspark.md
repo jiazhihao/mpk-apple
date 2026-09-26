@@ -140,10 +140,12 @@ text and chat: the step is 94 % bus-bound now (decode-kernels.md §5), so what r
 that with the 27B's NVFP4 head).
 
 *2026-09-26:* on the MLX 8B pack (the bytes mlx-lm streams) with the V3 decode, the drafter re-quantized to
-NVFP4 at pack time, the tile's K-split, a wider `x_permute` and the T = 1 variants pruned, the cost-aware round is
-at **10.4 ms per token** (math 7.3, code 9.2, chat 13.4, text 12.2) against plain decode's 21.5 and mlx-lm plain's
-15.9 — the round's trace and the comparison are in decode-kernels.md §8; mlx-lm's own speculative decoding is still
-to be measured (#103).
+NVFP4 at pack time, the tile's K-split, a wider `x_permute`, the T = 1 variants pruned, the padding-free pack and
+the program stopping itself at the request, the cost-aware round is at **10.0 ms per token** (math 7.1, code 8.8,
+chat 12.7, text 12.0) against plain decode's 20.9 and mlx-lm plain's 16.0. mlx-lm's own speculative decoding with
+a Qwen3-0.6B 4-bit draft is at its best 9.25 ms per token at N = 3 (2.94 tokens per step: the LM draft accepts
+more than the block drafter, 4.17 vs 3.09 at N = L = 7) — ours / theirs = 1.087, the gate of #103 not yet met; the
+tables and the step budget are in decode-kernels.md §8.
 
 Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify(1 + L))`. With the llama.cpp accepted lengths above
 (2.7–4.1 at n-max 4) and the M5 Pro cost table, the break-even is comfortable on FP8 layers and marginal for the NVFP4

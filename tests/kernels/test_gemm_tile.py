@@ -68,10 +68,10 @@ def test_x_permute_column_order():
     assert perm[4] == 2 * kl and perm[8] == 4 * kl and perm[16] == 4 and perm[64] == 16 and perm[256] == 8 * kl
 
 
-def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1):
+def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1, placement="inline"):
     rng = np.random.default_rng(5)
     spec = random_spec(fmt, n, k, rng)
-    data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order))
+    data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
     f = FORMATS.get(fmt)
     x = rng.uniform(-1, 1, size=(t_act, k)).astype(np.float32)
     xb = f32_to_bf16(x)
@@ -371,3 +371,12 @@ def test_gemm_ksplit_epilogues_and_predication(dev, fmt, ksplit):
     assert check_against_oracle(out3[:6], ref[:6].astype(np.float32)).max_ulp_elementwise <= 1 and np.all(out3[6:] == 0)
     out4, _ = t.run(x, epilogue="residual", residual=res, step_state=(layout, {"t_this_step": 1}), t_range=(1, 8), ksplit=ksplit)
     assert np.all(out4 == 0)
+
+
+@pytest.mark.parametrize("fmt,k", [("nvfp4", 4096), ("nvfp4", 5120), ("int8", 4096), ("int4_affine", 4096), ("nvfp4", 2048)])
+@pytest.mark.parametrize("ksplit", [1, 2])
+def test_gemm_tile_block_scale_placement(dev, fmt, k, ksplit):
+    """The tile's cooperative fill reading the block's scale region (#101), with and without the scale cache and the K-split."""
+    out, ref = _run(dev, fmt, 272, k, 8, 8, "interleaved16", ksplit=ksplit, placement="block")
+    chk = check_against_oracle(out, ref)
+    assert chk.ok() and chk.max_rel_err < 2e-6, chk

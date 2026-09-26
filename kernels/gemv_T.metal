@@ -115,6 +115,22 @@ static inline uint unit_word(uint lane, uint r, uint j) {
   return (r * UNIT_WORDS + j) * 32u + lane;
 #endif
 }
+#ifndef SCALE_PLACEMENT
+#define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
+#endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
+#if SCALE_PLACEMENT
+#define SCALE_BASE (R * 32u * PAYLOAD_WORDS)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#else
+#define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
+#define SCALE_SOFF(ln) 0u
+#endif
+#if SCALE_PLACEMENT
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS + SCALE_REGION_WORDS)       // a block: its payload words then its scale region
+#else
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS)
+#endif
 
 static inline float bf16lo(uint u) { return as_type<float>(u << 16); }
 static inline float bf16hi(uint u) { return as_type<float>(u & 0xFFFF0000u); }
@@ -184,7 +200,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
     device const ushort* xrow = x;
     const uint t_tok = 0u, ocol0 = 0u;
 #endif
-    device const uint4* wb = w + (ulong)b * (R * 32u * UNIT_WORDS);
+    device const uint4* wb = w + (ulong)b * BLOCK_WORDS;
 #if STAT_OUT
     float ssq_out[T];
     for (uint t = 0; t < T; t++) ssq_out[t] = 0.0f;
@@ -198,7 +214,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if SCALE_GROUP > 0
       uint scw[RG][SCALE_WORDS * 4];
       for (uint i = 0; i < RG; i++) for (uint s = 0; s < SCALE_WORDS; s++) {
-        uint4 q = wb[unit_word(lane, r0 + i, SCALE_W0 + s)];
+        uint4 q = wb[SCALE_WORD(lane, r0 + i, s)];
         scw[i][4 * s] = q.x; scw[i][4 * s + 1] = q.y; scw[i][4 * s + 2] = q.z; scw[i][4 * s + 3] = q.w;
       }
 #endif
@@ -285,10 +301,10 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
                 part = fma(wv[ee], xv, part);
               }
 #if SCALE_GROUP > 0
-              const float s = decode_scale(scw[i] + SCALE_UOFF, GROUP_OF(j, g));
+              const float s = decode_scale(scw[i] + SCALE_UOFF, SCALE_SOFF(lane) + GROUP_OF(j, g));
               acc[i][t] = fma(part, s, acc[i][t]);
 #if SCALE_BIAS
-              acc[i][t] = fma(decode_bias(scw[i] + SCALE_UOFF, GROUP_OF(j, g)), xs[t][g], acc[i][t]);
+              acc[i][t] = fma(decode_bias(scw[i] + SCALE_UOFF, SCALE_SOFF(lane) + GROUP_OF(j, g)), xs[t][g], acc[i][t]);
 #endif
 #else
               acc[i][t] += part;

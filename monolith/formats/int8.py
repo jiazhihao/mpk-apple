@@ -22,6 +22,7 @@ class INT8(Format):
     weights_per_word = 16
     scale_group = GROUP
     pack_k_multiple = 32 * GROUP
+    scale_unit_bytes = 2
     msl_decode = """
 #define WEIGHTS_PER_WORD 16u
 #define SCALE_GROUP 32u
