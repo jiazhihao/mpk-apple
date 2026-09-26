@@ -331,13 +331,20 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   the GEMV adds `bias · Σx` per group), a quantized table can be gathered as the embedding (`EMBED_DEQUANT`), and a
   lane stripe may be *ragged* — not whole words, starting inside a scale group (K = 3584): the unit is
   `[payload | scales | pad]` with the scale bytes in the partial tail word, and the kernels index a stripe's groups
-  from its offset (`LANE_OFF`, `GROUP_SEG`). Next: MXFP4, GGUF K-quants.
+  from its offset (`LANE_OFF`, `GROUP_SEG`). The unit's padding to 16 bytes is bus bytes (NVFP4 at K = 4096: 64 + 8
+  → 80, 11 %), so a pack can keep the block's scales in their own region after its payload words instead
+  (`scale_placement: block`, #101): the unit is whole payload words, a lane's scales start `(lane·S) % 16` bytes
+  into a word of the region and the kernels load `scale_words` words from there (`SCALE_WORD`, `SCALE_SOFF`); the
+  packer keeps the inline form where it is already tight (INT4's 64 + 16, a ragged tail half-word). The placement
+  is a profile value. Next: MXFP4, GGUF K-quants.
 * **State.** KV cache per attention layer (BF16 in v1; FP8/INT8 later — at long context KV traffic overtakes the
   weights); GDN recurrent state FP32 `[48,128,128]` + conv state, each with `γ+1` checkpoint slots for speculative
   rollback; the drafter's injected-context KV (5 layers × 8 KV heads × 128 × K and V ≈ 20 KB per committed token,
   append-only: features of rejected positions are never appended, so it needs no rollback) and a feature-tap buffer
-  for the T positions of the verify pass; activation arena planned by liveness (a few MB); `StepState`; optional
-  trace buffer.
+  for the T positions of the verify pass; activation arena planned by liveness (a few MB); `StepState` (its
+  host-written `stop_at` is the ring head at which the closing serial op sets `done`, so the host can queue full
+  command buffers for a request of any length and the steps behind the request return at once — no over-run work,
+  as after an EOS); optional trace buffer.
 
 ### 5.6 Decode kernel library (v1)
 

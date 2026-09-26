@@ -120,6 +120,11 @@ def main(argv=None) -> int:
                         drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind)
     sess.generate(ids, 4)                                  # prefill + a few decode steps so the states are real
     dec = sess.engine(0 if sess.drafter is not None else 1)
+    layout = dec.program.layout                            # the request is served (stop_at → done): re-arm the program so the
+    stb = dec.buffers[dec.program.step_state]              # profiled steps do real work (they continue the generation)
+    state = layout.unpack(stb.read(0, layout.size))
+    state.update(done=0, stop_at=0)
+    stb.write(layout.pack(state), 0)
     runs = dec.profile(a.steps)
     timings = op_timings(dec.program, runs)
     print(f"# decode step of {Path(a.model).name} on {sess.dev.info().name}: {len(dec.program.ops)} dispatches, {a.steps} profiled steps")

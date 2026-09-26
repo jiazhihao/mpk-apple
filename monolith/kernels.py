@@ -39,8 +39,18 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
     if info.k % 256 or info.payload_bytes % 4:
         raise ValueError(f"decode kernels: K must be a multiple of 256 ({info.format}, K={info.k})")
     p, s = info.payload_bytes, info.scale_bytes
-    g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": str(p // 16), "SCALE_UOFF": str((p % 16) // 4),
-         "SCALE_WORDS": str(-(-(p + s) // 16) - p // 16 if s else 0)}
+    if info.scale_placement == "block" and s:
+        # the block's scale region after its payload words: a lane's S bytes start (lane·S) % 16 into a word; the
+        # kernels load scale_words words from there and index the scales by SCALE_SOFF (in the format's scale units)
+        unit_bytes = int(getattr(f, "scale_unit_bytes", 1))
+        if s % unit_bytes or 16 % unit_bytes:
+            raise ValueError(f"decode kernels: {info.format}'s scale run of {s} bytes is not whole {unit_bytes}-byte scales")
+        g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": "0", "SCALE_UOFF": "0", "SCALE_WORDS": str(info.scale_words),
+             "SCALE_PLACEMENT": "1", "SCALE_RUN": f"{s}u", "SCALE_UNIT_BYTES": f"{unit_bytes}u",
+             "SCALE_REGION_WORDS": f"{info.scale_region_bytes // 16}u"}
+    else:
+        g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": str(p // 16), "SCALE_UOFF": str((p % 16) // 4),
+             "SCALE_WORDS": str(-(-(p + s) // 16) - p // 16 if s else 0)}
     group = info.scale_group or getattr(f, "scale_group", 0)
     if group:
         g["GROUP_SEG"] = str(math.gcd(math.gcd(int(f.weights_per_word), info.k // 32), int(group)))

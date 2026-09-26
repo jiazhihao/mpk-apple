@@ -160,6 +160,8 @@ that needs anything else needs an op first (§3) — a separate PR, merged befor
 
 ```bash
 python tools/pack_weights.py --model ~/models/<ckpt> --out /tmp/pack           # slabs, aux, tables from the tree
+#   --scale-placement block: the block's scales in their own region (a unit of whole payload words) where that
+#   saves bytes — the M5 Pro profile's choice; --quantize <fmt>: BF16 matrices quantized at pack time
 python -m monolith.generate --model ~/models/<ckpt> --pack /tmp/pack --prompt "The capital of France is" -n 48
 python -m monolith.trace --model ~/models/<ckpt> --pack /tmp/pack --steps 5    # the per-op budget a token is made of
 ```

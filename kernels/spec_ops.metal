@@ -171,6 +171,7 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
   }
   if (p.log_cap) log[st->step % p.log_cap] = (committed << 16) | (L << 8) | acc;
   st->ring_head = head;
+  if (st->stop_at && head >= st->stop_at) stop = true;        // the request is served: the queued steps return at once
   st->accepted = acc;
   st->anchor = last;
   st->pending_tokens[0] = last;

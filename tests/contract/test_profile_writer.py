@@ -66,7 +66,8 @@ def test_decide_and_merge_produce_a_loadable_profile(tmp_path):
     assert engine["sibling_order"] == "alu_first" and engine["max_cb_ms"] == 16 and engine["attention"] == "v1"
     assert engine["accelerator"] == "on" and engine["accelerator_min_t"] == {"fp8": 2, "nvfp4": 2}
     assert engine["cost_T"]["fp8"] == {"1": 1.0, "2": 1.08, "4": 1.111, "8": 3.599} and engine["cost_T"]["nvfp4"]["4"] == pytest.approx(1.791)
-    assert engine["cost_T"]["accelerator_fp8"] == {"8": 1.09, "16": 1.16, "32": 2.099} and set(notes) == {"lane_order", "threadgroups_per_core", "accelerator", "attention"}
+    assert engine["cost_T"]["accelerator_fp8"] == {"8": 1.09, "16": 1.16, "32": 2.099} and set(notes) == {"lane_order", "scale_placement", "threadgroups_per_core", "accelerator", "attention"}
+    assert engine["scale_placement"] == "inline"                                          # no placement measurement: the default stays
     existing = {"chip": "Apple M5 Pro", "gpu_cores": 20, "nominal_gbps": 307.0, "measured": "2026-09-22", "streaming": {"probe": "p5b"},
                 "engine": {"family": "Apple10", "lane_order": "contiguous", "sibling_order": "alu_first"}}
     device = {"chip": "Apple M5 Pro", "gpu_family": "Apple10", "gpu_cores": 20, "memory_gb": 24, "os": "macOS 26.5.1", "gpu_working_set_gb": 19.07,

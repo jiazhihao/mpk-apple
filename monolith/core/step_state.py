@@ -59,6 +59,7 @@ class StepStateLayout:
             Field("ring_tail", DType.U32, doc="token ring: next slot the host reads (host-written)"),
             Field("prefill_left", DType.U32, doc="prompt chunks still to feed after this step; the advance emits a token only at 0"),
             Field("n_inject", DType.U32, doc="positions whose target features the drafter injects this step (prefill: the chunk; else accepted + 1)"),
+            Field("stop_at", DType.U32, doc="host-written: the ring head at which the program sets done (0 = never) — the steps queued behind it return at once"),
         ]
         self.offsets: Dict[str, int] = {}
         off = 0

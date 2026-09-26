@@ -140,6 +140,22 @@ static inline uint unit_word(uint lane, uint r, uint j) {
   return (r * UNIT_WORDS + j) * 32u + lane;
 #endif
 }
+#ifndef SCALE_PLACEMENT
+#define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
+#endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
+#if SCALE_PLACEMENT
+#define SCALE_BASE (R * 32u * PAYLOAD_WORDS)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#else
+#define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
+#define SCALE_SOFF(ln) 0u
+#endif
+#if SCALE_PLACEMENT
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS + SCALE_REGION_WORDS)       // a block: its payload words then its scale region
+#else
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS)
+#endif
 
 constexpr constant auto desc = matmul2d_descriptor(int(TM), int(TN), int(TK), false, true, false, matmul2d_descriptor::mode::multiply_accumulate);
 using tA_t = tensor<device bfloat, dextents<int, 2>, tensor_inline>;
@@ -214,7 +230,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
       for (uint s = 0; s < NS_B; s++) {
         const uint n = c1b + 8u * s;                                     // row inside the tile
         const uint b = tile * NB + n / R, r = n % R;                     // its pack block and row
-        device const uint4* wb = w + (ulong)b * (R * 32u * UNIT_WORDS);
+        device const uint4* wb = w + (ulong)b * BLOCK_WORDS;
         const uint c0 = CT * mq;                                         // this thread's first tile column
         const uint lw0 = c0 / WPW, e0 = c0 % WPW;                        // its first word inside the tile and code offset
         const uint ln0 = q * LPT + lw0;                                  // the lane holding that word
@@ -247,7 +263,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #if EXP_MODE == 5
               const uint4 v4 = uint4(0x38383838u + lane, 0x38383838u, 0x38383838u + kt, 0x38383838u);
 #else
-              const uint4 v4 = wb[unit_word(ln0 + i, r, SCALE_W0 + sc)];
+              const uint4 v4 = wb[SCALE_WORD(ln0 + i, r, sc)];
 #endif
               scc[s][i][4 * sc] = v4.x; scc[s][i][4 * sc + 1] = v4.y; scc[s][i][4 * sc + 2] = v4.z; scc[s][i][4 * sc + 3] = v4.w;
             }
@@ -260,7 +276,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #if EXP_MODE == 5
             const uint4 v4 = uint4(0x38383838u + lane, 0x38383838u, 0x38383838u + kt, 0x38383838u);
 #else
-            const uint4 v4 = wb[unit_word(ln0 + i, r, SCALE_W0 + sc)];
+            const uint4 v4 = wb[SCALE_WORD(ln0 + i, r, sc)];
 #endif
             scw[4 * sc] = v4.x; scw[4 * sc + 1] = v4.y; scw[4 * sc + 2] = v4.z; scw[4 * sc + 3] = v4.w;
           }
@@ -269,9 +285,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #pragma clang loop unroll(full)
           for (uint ch = 0; ch < ((CT < WPW) ? 1u : (WPW / 16u)); ch++) {
             const uint g = (LANE_OFF + j * WPW + e0 + 16u * ch) / SCALE_GROUP;
-            scv[i * (WPW / 16u) + ch] = decode_scale(scw + SCALE_UOFF, g);
+            scv[i * (WPW / 16u) + ch] = decode_scale(scw + SCALE_UOFF, SCALE_SOFF(ln) + g);
 #if SCALE_BIAS
-            bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, g);
+            bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, SCALE_SOFF(ln) + g);
 #endif
           }
         }

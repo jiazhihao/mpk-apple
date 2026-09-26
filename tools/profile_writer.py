@@ -78,6 +78,17 @@ def measure(*, shape: Tuple[int, int] = (17408, 5120), formats: Sequence[str] = 
         log(f"lane order {order:13s} {ref} T=1: {r['ms']:.3f} ms {r['gbps']:.0f} GB/s{'' if r['ok'] in (None, True) else '  ORACLE FAIL'}")
     lane = max(m["lane_order_gbps"], key=lambda o: m["lane_order_gbps"][o])
     m["lane_order_measured_with"] = lane
+    # 1b. the scale placement: a format with block scales at T = 1, the scales inline in the unit or in the block's
+    # region — on a K = 4096 stripe, where a lane's scales are one word (the packer keeps wider runs inline anyway)
+    scaled = next((f for f in ("nvfp4", "int8", "int4_affine") if f in formats), None)
+    m["scale_placement_gbps"] = {}
+    if scaled is not None:
+        for placement in ("inline", "block"):
+            r = b.run(scaled, n, 4096, t=1, lane_order=lane, copies=copies, reps=reps, placement=placement)
+            m["scale_placement_gbps"][placement] = r["gbps"]
+            log(f"scale placement {placement:7s} {scaled} T=1: {r['ms']:.3f} ms {r['gbps']:.0f} GB/s ({r['unit_bytes']}-byte units)"
+                f"{'' if r['ok'] in (None, True) else '  ORACLE FAIL'}")
+        m["scale_placement_measured_with"] = scaled
     # 2. threadgroups per core at T = 1
     m["threadgroups_ms"] = {}
     for g in (1, 2):

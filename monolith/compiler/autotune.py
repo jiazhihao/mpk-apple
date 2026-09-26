@@ -31,7 +31,7 @@ NOISE_MARGIN = 0.03           # a variant replaces the default only if faster by
 
 
 def gemv_key(info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool) -> str:
-    return f"gemv|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|T{t}|{epilogue or 'plain'}|{'norm' if norm_fed else 'raw'}"
+    return f"gemv|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|T{t}|{epilogue or 'plain'}|{'norm' if norm_fed else 'raw'}"
 
 
 def gdn_key(hv: int, hk: int, dk: int, dv: int, conv_width: int, t: int) -> str:
@@ -91,7 +91,7 @@ class Autotuner:
         nt = self.nt
         rng = np.random.default_rng(0)
         spec = random_spec(info.format, info.n, info.k, rng)
-        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order))
+        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order, scale_placement=info.scale_placement))
         copies = max(1, int((256 << 20) // max(len(data), 1)))           # ≥ 256 MB streamed per timing
         wbuf = nt.Buffer(self.dev, len(data) * copies)
         for c in range(copies):
@@ -155,14 +155,14 @@ class Autotuner:
         """The tile's geometry: one or two threadgroups per core (the sweep in decode-kernels.md §6 found either,
         by format) or the K-split (one tile per threadgroup of 2 or 4 SIMD-groups, for the shapes whose tiles cannot
         occupy the crew), timed on synthetic data like the GEMV variants."""
-        key = f"gemm2|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|TM{tm}|{epilogue or 'plain'}"
+        key = f"gemm2|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|TM{tm}|{epilogue or 'plain'}"
         if key in self.choices and not force:
             c = self.choices[key]
             return Choice(dict(c["macros"]), c["grid_mode"], False, c.get("ms", 0.0), c.get("default_ms", 0.0))
         nt = self.nt
         rng = np.random.default_rng(0)
         spec = random_spec(info.format, info.n, info.k, rng)
-        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order))
+        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order, scale_placement=info.scale_placement))
         copies = max(1, int((256 << 20) // max(len(data), 1)))
         wbuf = nt.Buffer(self.dev, len(data) * copies)
         for c in range(copies):
