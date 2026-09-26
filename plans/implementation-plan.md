@@ -287,6 +287,12 @@ GEMV (221 GB/s on the 8B's shapes, 86 % of the step); the follow-ups are MLX's o
 as a kernel variant and a denser unit layout. The engine's levers do not depend on the metric (the rule above); the 27B rows wait for
 a machine that hosts it.
 
+**Contingency (2026-09-26, #100–#103), the plan's rule for a missed gate made into tasks:** the NVFP4 decode as MLX
+does it (#100); the lane-row unit without its 16-byte padding, 9 % of the bytes (#101); the step's non-GEMV time —
+attention scoring, the norm dispatches, the dispatch count (#102); and the gate that matters on this machine (#103):
+**our per-token latency under speculative decoding against mlx-lm's own speculative decoding** (its draft-model
+path) on the same target bytes and the same draft length, with mlx-lm's plain decode as the floor.
+
 
 *Status (2026-09-24, #33).* Per-op GPU timestamps exist: `Queue.profile` (one compute encoder per dispatch with
 timestamp counter samples at the stage boundaries — the granularity Apple GPUs support — correlated to CPU time),

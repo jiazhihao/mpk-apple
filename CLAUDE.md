@@ -130,9 +130,11 @@ check` (same for `p14`) compiles every kernel variant without dispatching.
 
 ## Next steps
 
-0. **Keep building** — what is left on this machine: the staged multi-SIMD-group tile for T ≥ 32 and the K-split
-   for the down projection (decode-kernels.md §6), the attention core's SIMD-group-matrix scoring for the
-   long-context rows. The autotuner at install time is built (#49, `tools/profile_writer.py`: it measures the
+0. **Keep building** — the M5 contingency tasks (#100–#103): the NVFP4 GEMV decode as MLX does it, the lane-row
+   unit without its padding, the step's non-GEMV time, and the gate — our per-token latency under speculative
+   decoding below mlx-lm's own speculative decoding on the same target bytes and draft length. Then the staged
+   multi-SIMD-group tile for T ≥ 32 and the K-split for the down projection (decode-kernels.md §6), the attention
+   core's SIMD-group-matrix scoring for the long-context rows. The autotuner at install time is built (#49, `tools/profile_writer.py`: it measures the
    `engine` block from the kernel harnesses and merges it into `profiles/<chip>-<cores>c.json`; the other chips'
    profiles wait for the machines). Intra-op stealing (#44) is built, measured and off by
    default (decode-kernels.md §7). The M3 Pro and M4 tasks (#2, #3, #5, #8, #12's M3 Pro rows, #49's M4 chips) were

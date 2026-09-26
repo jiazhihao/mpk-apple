@@ -268,6 +268,38 @@ T("M5", "M5: go/no-go #2 — the plain-decode success metric", ["area:perf", "ga
   ["Paired alternating A/B, min-of-N, thermal state logged; same prompt set; tok/s with GB/s and % of bound"],
   ["The decision recorded in the plan"],
   [f"{PLAN} §0 success metrics, M5 exit"]),
+# ---- M5 contingency (2026-09-26): go/no-go #2 was a no-go on the M5 Pro (0.66x mlx-lm on equal bytes, #36) — the plan's rule
+#      for a missed gate: adopt what MLX does better, then measure the whole round against mlx-lm's own speculative decoding
+T("M5", "M5 (contingency): the NVFP4 GEMV decode — MLX's one-instruction nibble-to-half as a kernel variant", ["area:kernels", "area:perf", "hardware:m5-pro"],
+  "Go/no-go #2 was a no-go on the 8B (#36, decode-kernels.md §8): on equal bytes our plain decode is 0.66× mlx-lm; the 144 NVFP4 GEMVs are 86 % of the step at 221 GB/s (72 % of nominal) while mlx-lm's whole step streams at 268. Our decode is ALU-bound (the integer-table variant, gemv-kernel-study.md §3); MLX's `fp4.h` places a nibble's three magnitude bits straight into a half's exponent field (`as_type<half>(ushort((bits & 7) << 9))`, the sign a select) — one instruction per weight, the 2^-14 folded into the block scale.",
+  ["`NVFP4_DECODE = 3` in the nvfp4 plugin's MSL snippet: the half-bit-placement decode (and its half2 pair form), the 2^14 folded into `decode_scale`; exact against the plugin's oracle (`tests/contract/test_formats.py`, `tests/kernels/test_gemv_T.py`)",
+   "Measure in the M1 harness (`tools/bench/gemv_bench.py`) on 17408×5120 and the 8B's shapes (12288×4096 gate|up, 4096×12288 down, 5120×4096 qkv) at T = 1, 2, 4, 8, every geometry, against `tools/bench/mlx_baseline.py` on the same shapes and day; the autotuner then picks per op; the tile's cooperative fill (gemm_tile) takes the same decode",
+   "Re-run the plain baseline (`tools/bench/plain_baseline.py`) and the trace on the MLX 8B pack; update gemv-kernel-study.md §3 and decode-kernels.md §8",
+   "If the shader is still ALU-bound: the packed-half2 FMA path (two weights per instruction) and the per-op RG / geometry the autotuner does not try today"],
+  ["NVFP4 T = 1 GEMV within 5 % of mlx-lm's `qmv` rate on the same shapes (≥ 255 GB/s at 17408×5120) or a written account of why the shader path cannot; the variant the default where it wins; tokens unchanged"],
+  [f"{BLOB}/docs/research/decode-kernels.md §8", f"{BLOB}/docs/research/gemv-kernel-study.md §3", f"{DESIGN} §5.6"]),
+T("M5", "M5 (contingency): the pack's byte overhead — a lane-row unit without the 16-byte padding", ["area:kernels", "area:runtime", "area:perf"],
+  "Our NVFP4 pack streams 4.65 GB per token for the 8B where mlx-lm streams 4.26 for the same weights (+9 %): the lane-row unit pads its 64 payload + 8 scale bytes (K = 4096) to 80 so every word stays 16-byte aligned. At the bus bound that is 9 % of the step.",
+  ["Layouts measured in the M1 harness: (a) the block's scale bytes as their own contiguous stripe after the block's payload words (the payload stays 16-byte aligned, the scales are read once per block); (b) two-row units (144 bytes = 9 words, no pad); (c) the pad only where the tail word is not full. The format plugins keep their contract (`unit_geometry`, `unit_word`); gemm_tile's cooperative fill needs the same map",
+   "Bytes per token from the pack manifest within 1 % of the checkpoint's weight bytes for NVFP4 and FP8 slabs at K = 4096 / 5120 / 12288",
+   "Paired A/B of the decode step on the 8B before / after; the pack round-trip tests and the goldens"],
+  ["Pack bytes per token ≤ 1.01× the checkpoint's; the step faster by the saved bytes at the measured GB/s; goldens unchanged"],
+  [f"{DESIGN} D8, §5.6", f"{BLOB}/monolith/formats/blm.py", f"{BLOB}/docs/research/decode-kernels.md §8"]),
+T("M5", "M5 (contingency): the step's non-GEMV time on the 8B — attention scoring, the norm dispatches, the dispatch count", ["area:kernels", "area:compiler", "area:perf"],
+  "In the traced 8B step (decode-kernels.md §8) the 72 attention dispatches take 1.0 ms, the 73 un-fused norm_apply dispatches 0.74 ms and the boundaries of 295 dispatches ~0.4 ms — 2.2 ms of a 24 ms step, 10 % the GEMVs' bytes do not need. At 1 K context the attention core is latency-bound (4 rows per pass, decode-kernels.md §1).",
+  ["SIMD-group-matrix (or tensor-ops) scoring for the attention core's long-context rows and a lighter path for the short ones (the M9 follow-up)",
+   "A fused norm whose per-row rescale is cheaper than a separate dispatch on these shapes (the autotuner already charges the dispatch to the un-fused choice: the fused form must win on the kernel), or the norm applied in the previous GEMV's epilogue",
+   "Fewer dispatches: gqa_merge into the core where the chunk count is 1; the argmax pair; re-trace and update decode-kernels.md §3 / §8"],
+  ["Non-GEMV time ≤ 5 % of the 8B's step at 1 K context; tokens unchanged"],
+  [f"{BLOB}/docs/research/decode-kernels.md §1, §8", f"{DESIGN} §5.6"]),
+T("M5", "M5 gate (contingency): per-token latency under speculative decoding — ours vs mlx-lm's, same target bytes, same draft length", ["area:spec", "area:perf", "gate", "hardware:m5-pro"],
+  "The v1 metric on the machine we have: the speculative round on Qwen3-8B NVFP4 must decode faster per token than mlx-lm on the same target weights — plain (today 0.66×) and under speculation. mlx-lm speculates with a draft model (`--draft-model`, `--num-draft-tokens N`: a small same-tokenizer LM proposes N tokens, verified in one target pass); ours with the DSpark block drafter (verify length L, fixed or cost-aware). 'Same configuration' = the same target checkpoint bytes (the MLX NVFP4 conversion, read by both engines), the same prompt set, the same number of drafted tokens per step (L = N), greedy, paired alternating runs, min-of-N — with mlx-lm's plain decode as the floor either way. Today: ours 19.9 ms per token speculative (fixed L, the accelerator tile, the nvidia checkpoint) against mlx-lm plain 15.9; mlx-lm speculative is not yet measured here.",
+  ["`tools/bench/spec_vs_mlx.py`: mlx-lm with `--draft-model` (the smallest same-tokenizer Qwen3 draft in NVFP4 or 4-bit, Qwen3-0.6B) at N = 1 … 7 and ours at fixed L = N and the cost-aware rule, per prompt: ms per token, tokens per step, acceptance; both engines' plain rows in the same run",
+   "The per-op budget of our round on the MLX pack (`python -m monolith.trace --drafter …`): the drafter's GEMVs (1.9 GB of BF16 per round today — an INT8 or NVFP4 drafter pack is the lever), the target's verify pass at T = 1 + L on the tile, the serial ops — against the bytes bound",
+   "The plain-decode items land first (the decode variant, the unit padding, the non-GEMV time); then re-measure; the tile's cost at T = 2 … 8 (decode-kernels.md §6) is the next lever when the verify pass is the gap",
+   "Record in decode-kernels.md §8 and the plan's success metrics; the gate decision in the plan"],
+  ["On the prompt set, our ms per token under our best speculative setting ≤ mlx-lm's under its best (`--num-draft-tokens` swept) and ≤ mlx-lm plain, on the same target bytes; plain decode at parity; both recorded with the A/B protocol"],
+  [f"{SPARK} §3", f"{BLOB}/docs/research/decode-kernels.md §5, §8", f"{PLAN} §0 success metrics"]),
 # ---------------------------------------------------------------- M6
 T("M6", "M6: spec/dspark — the drafter as a Drafter module (layers, heads, weight map incl. GGUF naming)", ["area:spec", "area:models"],
   "The DSpark drafter is a `Drafter` plugin (design §5.14): 5 attention layers on the shared `GQAAttention`/`GatedMLP` library with a second KV source (the injected context), mask embeddings, the feature projection `Wc`, the rank-256 Markov head and the confidence head.",
@@ -477,7 +509,9 @@ def create(dry):
             print(f"milestone {title}"); r = gh.call("POST", f"/repos/{REPO}/milestones", {"title": title, "description": desc}); ms[title] = r.get("number")
     mnum = {key: ms.get(title) for key, title, _ in MILESTONES}
     # existing issues (idempotency by exact title)
-    issues = {i["title"]: i["number"] for i in gh.paged(f"/repos/{REPO}/issues", {"state": "all"}) if "pull_request" not in i} if tok else {}
+    all_issues = [i for i in gh.paged(f"/repos/{REPO}/issues", {"state": "all"}) if "pull_request" not in i] if tok else []
+    issues = {i["title"]: i["number"] for i in all_issues}
+    closed = {i["number"] for i in all_issues if i.get("state") == "closed"}
     master_title = "Roadmap: Monolith v1 — a megakernel inference engine for Apple silicon"
     if master_title in issues:
         master = issues[master_title]; print(f"master issue exists: #{master}")
@@ -494,7 +528,7 @@ def create(dry):
         numbers[t["title"]] = r.get("number"); print(f"created #{r.get('number')} {t['title']}")
         time.sleep(3)   # stay under GitHub's content-creation secondary rate limit
     if master:
-        gh.call("PATCH", f"/repos/{REPO}/issues/{master}", {"body": master_body(numbers)})
+        gh.call("PATCH", f"/repos/{REPO}/issues/{master}", {"body": master_body(numbers, closed)})
         print(f"master issue #{master} updated with {len(numbers)} tasks: https://github.com/{REPO}/issues/{master}")
 
 def update_master(dry):
