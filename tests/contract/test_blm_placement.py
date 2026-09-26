@@ -61,3 +61,40 @@ def test_block_placement_streams_the_weights_bytes():
     assert i8.scale_placement == "block" and i8.block_bytes == 16 * 32 * 128 + 16 * 32 * 8   # 8 scale bytes per lane: one word
     with pytest.raises(ValueError):
         PackLayout(rows=16, scale_placement="leading") and pack_spec(spec, PackLayout(rows=16, scale_placement="leading"))
+
+
+@pytest.mark.parametrize("fmt,k,unit,lpw", [("nvfp4", 256, 4, 4), ("nvfp4", 512, 8, 2), ("int8", 256, 8, 2), ("fp8_e4m3", 256, 8, 2), ("int4_affine", 256, 4, 4)])
+def test_sub_word_units(fmt, k, unit, lpw):
+    """A 4- or 8-byte payload per lane-row is not padded to a word under the block placement: lanes share a word, the
+    scales (the group a narrow stripe touches, shared with its neighbours) live in the region; the round trip, the
+    offsets and the macros; the inline placement keeps the padded unit."""
+    rng = np.random.default_rng(3)
+    spec = random_spec(fmt, 40, k, rng)
+    f = FORMATS.get(fmt)
+    d_bl, i_bl, _ = pack_spec(spec, PackLayout(rows=16, scale_placement="block"))
+    d_in, i_in, _ = pack_spec(spec, PackLayout(rows=16, scale_placement="inline"))
+    assert i_bl.unit_bytes == unit and i_bl.lanes_per_word == lpw and i_bl.payload_words == 1 and i_in.unit_bytes == 16
+    assert i_bl.block_bytes == 16 * 32 * unit + i_bl.scale_region_bytes and i_bl.nbytes < i_in.nbytes
+    p_bl, s_bl = unpack_blm(d_bl, i_bl)
+    p_in, s_in = unpack_blm(d_in, i_in)
+    assert np.array_equal(p_bl, p_in) and ((s_bl is None and s_in is None) or np.array_equal(s_bl, s_in))
+    assert np.array_equal(f.dequantize(f.unpack_pack(d_bl, i_bl)), f.dequantize(spec))
+    buf = np.frombuffer(d_bl, dtype=np.uint8)
+    for b, r, lane in ((0, 0, 0), (1, 3, 31), (2, 7, 5)):
+        if b * 16 + r < 40:
+            off = i_bl.unit_offset(b, r, lane)
+            assert off % unit == 0 and np.array_equal(buf[off: off + unit], p_bl[b * 16 + r, lane])
+    m = kernels.unit_geometry(i_bl)
+    assert m["LANES_PER_WORD"] == f"{lpw}u" and m["PAYLOAD_WORDS"] == "1" and kernels.unit_words(i_bl) == "1"
+    with pytest.raises(ValueError):
+        kernels.gemm_macros(i_bl, tm=8)                                              # the tile reads whole-word units
+    _, i_c, _ = pack_spec(spec, PackLayout(rows=16, lane_order="contiguous", scale_placement="block"))
+    assert i_c.lanes_per_word == 1                                                   # the contiguous order keeps padded units
+
+
+def test_markov_head_bytes():
+    """The DSpark Markov head (151936 × 256) in NVFP4 through sub-word units: 160 bytes per row (128 of nibbles and the
+    group byte stored once per lane, 32) — 24 MB against 78 in BF16."""
+    rng = np.random.default_rng(0)
+    _, info, _ = pack_spec(random_spec("nvfp4", 1024, 256, rng), PackLayout(rows=16, scale_placement="block"))
+    assert info.nbytes / 1024 == 128 + 32 == 160 and info.unit_bytes == 4 and info.scale_region_bytes == 16 * 32

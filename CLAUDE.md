@@ -54,10 +54,11 @@ row tile per threadgroup of 2 or 4 SIMD-groups, the partials reduced through thr
 projections 1.5–1.7× faster at T = 8, autotuned per op) to 10.8, and a wider `x_permute` plus the pruning of the
 T = 1 variants a cost-rule program never takes (615 → 469 dispatches) to 10.4, the padding-free pack (#101:
 `scale_placement: block` — the block's scales in their own region, the 8B pack 4.66 → 4.30 GB per token, 1.008×
-the checkpoint) and `StepState.stop_at` (the program stops itself at the request, no over-run) to **10.0** against
-mlx-lm plain's 16.0 — and against mlx-lm's own speculative decoding with a Qwen3-0.6B 4-bit draft, **9.25 at
-N = 3**: ours / theirs 1.087, the #103 gate not yet met (decode-kernels.md §6, §8, §9). Plain decode is at 0.776×
-mlx-lm. The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
+the checkpoint), `StepState.stop_at` (the program stops itself at the request, no over-run) and sub-word lane
+units (2 or 4 lanes share a payload word: the DSpark Markov head in NVFP4, 78 → 24 MB) to **9.6** against mlx-lm
+plain's 16.0 — and against mlx-lm's own speculative decoding with a Qwen3-0.6B 4-bit draft, **9.25 at N = 3**:
+ours / theirs 1.044 (ahead on math), the #103 gate not yet met (decode-kernels.md §6, §8, §9). Plain decode is at
+0.776× mlx-lm. The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
 8–133 ms compute buffers: `max_cb_ms` is a latency knob, not a pacing one.
 Model 3 (#46) is built as packages: the MoE ops (`ops/moe.py`: `moe_route`, `moe_gemv` = the GEMV template's pairs
 mode addressing expert blocks through the router's ids, `moe_combine`), the `SparseMoE` layer and the `qwen3_moe`

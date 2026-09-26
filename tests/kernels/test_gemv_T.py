@@ -89,3 +89,16 @@ def test_gemv_block_scale_placement(dev, fmt, K, lane_order, rows, t):
     assert chk.ok(), chk
     inline, _, _ = _run(dev, fmt, 100, rows, t, lane_order, K=K, placement="inline")
     assert np.array_equal(out, inline), "the same codes and scales in the same order must give the same bits whatever the placement"
+
+
+@pytest.mark.parametrize("fmt,K", [("nvfp4", 256), ("nvfp4", 512), ("fp8_e4m3", 256), ("int8", 256), ("int4_affine", 256)])
+@pytest.mark.parametrize("rows,t", [(16, 1), (8, 4)])
+def test_gemv_sub_word_units(dev, fmt, K, rows, t):
+    """Sub-word units (2 or 4 lanes per payload word, the scales in the block's region): the DSpark Markov head's
+    shape class (K = 256). Against the oracle, and bit-identical to the padded inline unit (the same codes and
+    scales in the same order)."""
+    out, ref, _ = _run(dev, fmt, 100, rows, t, "interleaved16", K=K, placement="block")
+    chk = check_against_oracle(out, ref)
+    assert chk.ok(), chk
+    inline, _, _ = _run(dev, fmt, 100, rows, t, "interleaved16", K=K, placement="inline")
+    assert np.array_equal(out, inline)

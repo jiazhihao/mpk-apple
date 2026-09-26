@@ -335,8 +335,11 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   → 80, 11 %), so a pack can keep the block's scales in their own region after its payload words instead
   (`scale_placement: block`, #101): the unit is whole payload words, a lane's scales start `(lane·S) % 16` bytes
   into a word of the region and the kernels load `scale_words` words from there (`SCALE_WORD`, `SCALE_SOFF`); the
-  packer keeps the inline form where it is already tight (INT4's 64 + 16, a ragged tail half-word). The placement
-  is a profile value. Next: MXFP4, GGUF K-quants.
+  packer keeps the inline form where it is already tight (INT4's 64 + 16, a ragged tail half-word). With the region
+  a 4- or 8-byte payload (K = 256 or 512 for NVFP4) is not padded to a word either: 4 or 2 lanes share one
+  (`LANES_PER_WORD`, the shader GEMV's `sub_word` select) and a stripe narrower than a scale group carries the group's
+  scale once per lane — the DSpark Markov head's 151936 × 256 in NVFP4 is 24 MB instead of 78. The placement is a
+  profile value. Next: MXFP4, GGUF K-quants.
 * **State.** KV cache per attention layer (BF16 in v1; FP8/INT8 later — at long context KV traffic overtakes the
   weights); GDN recurrent state FP32 `[48,128,128]` + conv state, each with `γ+1` checkpoint slots for speculative
   rollback; the drafter's injected-context KV (5 layers × 8 KV heads × 128 × K and V ≈ 20 KB per committed token,

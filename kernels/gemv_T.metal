@@ -108,18 +108,37 @@
 // of the slab, outputs (and STAT_OUT partials) relative to the range.
 struct GemvParams { uint n_rows; uint n_blocks; uint n_sg; uint t_active; float out_scale; float eps; uint stat_parts; uint block0; };
 
+#ifndef LANES_PER_WORD
+#define LANES_PER_WORD 1u                              // 2 or 4: a sub-word unit — lanes share one payload word (blm.py), interleaved order only
+#endif
 static inline uint unit_word(uint lane, uint r, uint j) {
+#if LANES_PER_WORD > 1
 #if LANE_ORDER == 0
+#error "gemv_T: sub-word units need the interleaved lane order"
+#endif
+  return (r * UNIT_WORDS + j) * (32u / LANES_PER_WORD) + lane / LANES_PER_WORD;   // the word LANES_PER_WORD lanes share
+#elif LANE_ORDER == 0
   return (lane * R + r) * UNIT_WORDS + j;
 #else
   return (r * UNIT_WORDS + j) * 32u + lane;
+#endif
+}
+// a lane's part of a shared payload word, moved to the front (the rest zero: their columns are past K_TAIL)
+static inline uint4 sub_word(uint4 q, uint lane) {
+#if LANES_PER_WORD == 2
+  return (lane & 1u) ? uint4(q.z, q.w, 0u, 0u) : uint4(q.x, q.y, 0u, 0u);
+#elif LANES_PER_WORD == 4
+  const uint s = lane & 3u;
+  return uint4((s == 0u) ? q.x : (s == 1u) ? q.y : (s == 2u) ? q.z : q.w, 0u, 0u, 0u);
+#else
+  return q;
 #endif
 }
 #ifndef SCALE_PLACEMENT
 #define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
 #endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
 #if SCALE_PLACEMENT
-#define SCALE_BASE (R * 32u * PAYLOAD_WORDS)
+#define SCALE_BASE (R * 32u * PAYLOAD_WORDS / LANES_PER_WORD)          // the block's payload words (sub-word units share words)
 #define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
 #define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
 #else
@@ -127,9 +146,9 @@ static inline uint unit_word(uint lane, uint r, uint j) {
 #define SCALE_SOFF(ln) 0u
 #endif
 #if SCALE_PLACEMENT
-#define BLOCK_WORDS (R * 32u * UNIT_WORDS + SCALE_REGION_WORDS)       // a block: its payload words then its scale region
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS / LANES_PER_WORD + SCALE_REGION_WORDS)   // a block: its payload words then its scale region
 #else
-#define BLOCK_WORDS (R * 32u * UNIT_WORDS)
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS / LANES_PER_WORD)
 #endif
 
 static inline float bf16lo(uint u) { return as_type<float>(u << 16); }
@@ -281,7 +300,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #endif
 #endif
         for (uint i = 0; i < RG; i++) {
-          uint4 q = wb[unit_word(lane, r0 + i, j)];
+          uint4 q = sub_word(wb[unit_word(lane, r0 + i, j)], lane);
           float wv[WPW];
           decode_word(q, wv);
           for (uint t = 0; t < T; t++) {
@@ -290,6 +309,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
             for (uint v = 0; v < XW; v++) { xw[4 * v] = xq[t][v].x; xw[4 * v + 1] = xq[t][v].y; xw[4 * v + 2] = xq[t][v].z; xw[4 * v + 3] = xq[t][v].w; }
 #endif
             for (uint g = 0; g < GPW; g++) {
+              if (g * WPG >= nvalid) break;                        // a partial word's padding segments: no scale of theirs is read
               float part = 0.0f;
               for (uint e = 0; e < WPG; e++) {
                 const uint ee = g * WPG + e;
