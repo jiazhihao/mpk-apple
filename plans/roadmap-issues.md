@@ -78,6 +78,10 @@ repo (design D15), model-agnostic by construction (D16, §5.14), DSpark not the 
 - [ ] M5: close the gap — fusion completeness, norm-stat hoisting, lm_head cost, barrier count, attention at 8K/32K, per-op autotune, math modes
 - [ ] M5: sibling overlap A/B per chip — the ALU-bound sibling encoded first
 - [ ] M5: go/no-go #2 — the plain-decode success metric
+- [ ] M5 (contingency): the NVFP4 GEMV decode — MLX's one-instruction nibble-to-half as a kernel variant
+- [ ] M5 (contingency): the pack's byte overhead — a lane-row unit without the 16-byte padding
+- [ ] M5 (contingency): the step's non-GEMV time on the 8B — attention scoring, the norm dispatches, the dispatch count
+- [ ] M5 gate (contingency): per-token latency under speculative decoding — ours vs mlx-lm's, same target bytes, same draft length
 
 **M6 — DSpark speculative decoding**
 - [ ] M6: spec/dspark — the drafter as a Drafter module (layers, heads, weight map incl. GGUF naming)
@@ -646,6 +650,79 @@ labels: area:perf, gate, hardware:m3-pro
 
 **References**
 - https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md §0 success metrics, M5 exit
+
+### M5 (contingency): the NVFP4 GEMV decode — MLX's one-instruction nibble-to-half as a kernel variant
+labels: area:kernels, area:perf, hardware:m5-pro
+
+Go/no-go #2 was a no-go on the 8B (#36, decode-kernels.md §8): on equal bytes our plain decode is 0.66× mlx-lm; the 144 NVFP4 GEMVs are 86 % of the step at 221 GB/s (72 % of nominal) while mlx-lm's whole step streams at 268. Our decode is ALU-bound (the integer-table variant, gemv-kernel-study.md §3); MLX's `fp4.h` places a nibble's three magnitude bits straight into a half's exponent field (`as_type<half>(ushort((bits & 7) << 9))`, the sign a select) — one instruction per weight, the 2^-14 folded into the block scale.
+
+**Work**
+- `NVFP4_DECODE = 3` in the nvfp4 plugin's MSL snippet: the half-bit-placement decode (and its half2 pair form), the 2^14 folded into `decode_scale`; exact against the plugin's oracle (`tests/contract/test_formats.py`, `tests/kernels/test_gemv_T.py`)
+- Measure in the M1 harness (`tools/bench/gemv_bench.py`) on 17408×5120 and the 8B's shapes (12288×4096 gate|up, 4096×12288 down, 5120×4096 qkv) at T = 1, 2, 4, 8, every geometry, against `tools/bench/mlx_baseline.py` on the same shapes and day; the autotuner then picks per op; the tile's cooperative fill (gemm_tile) takes the same decode
+- Re-run the plain baseline (`tools/bench/plain_baseline.py`) and the trace on the MLX 8B pack; update gemv-kernel-study.md §3 and decode-kernels.md §8
+- If the shader is still ALU-bound: the packed-half2 FMA path (two weights per instruction) and the per-op RG / geometry the autotuner does not try today
+
+**Done when**
+- NVFP4 T = 1 GEMV within 5 % of mlx-lm's `qmv` rate on the same shapes (≥ 255 GB/s at 17408×5120) or a written account of why the shader path cannot; the variant the default where it wins; tokens unchanged
+
+**References**
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/decode-kernels.md §8
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/gemv-kernel-study.md §3
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/design/design.md §5.6
+
+### M5 (contingency): the pack's byte overhead — a lane-row unit without the 16-byte padding
+labels: area:kernels, area:runtime, area:perf
+
+Our NVFP4 pack streams 4.65 GB per token for the 8B where mlx-lm streams 4.26 for the same weights (+9 %): the lane-row unit pads its 64 payload + 8 scale bytes (K = 4096) to 80 so every word stays 16-byte aligned. At the bus bound that is 9 % of the step.
+
+**Work**
+- Layouts measured in the M1 harness: (a) the block's scale bytes as their own contiguous stripe after the block's payload words (the payload stays 16-byte aligned, the scales are read once per block); (b) two-row units (144 bytes = 9 words, no pad); (c) the pad only where the tail word is not full. The format plugins keep their contract (`unit_geometry`, `unit_word`); gemm_tile's cooperative fill needs the same map
+- Bytes per token from the pack manifest within 1 % of the checkpoint's weight bytes for NVFP4 and FP8 slabs at K = 4096 / 5120 / 12288
+- Paired A/B of the decode step on the 8B before / after; the pack round-trip tests and the goldens
+
+**Done when**
+- Pack bytes per token ≤ 1.01× the checkpoint's; the step faster by the saved bytes at the measured GB/s; goldens unchanged
+
+**References**
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/design/design.md D8, §5.6
+- https://github.com/jiazhihao/mpk-apple/blob/main/monolith/formats/blm.py
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/decode-kernels.md §8
+
+### M5 (contingency): the step's non-GEMV time on the 8B — attention scoring, the norm dispatches, the dispatch count
+labels: area:kernels, area:compiler, area:perf
+
+In the traced 8B step (decode-kernels.md §8) the 72 attention dispatches take 1.0 ms, the 73 un-fused norm_apply dispatches 0.74 ms and the boundaries of 295 dispatches ~0.4 ms — 2.2 ms of a 24 ms step, 10 % the GEMVs' bytes do not need. At 1 K context the attention core is latency-bound (4 rows per pass, decode-kernels.md §1).
+
+**Work**
+- SIMD-group-matrix (or tensor-ops) scoring for the attention core's long-context rows and a lighter path for the short ones (the M9 follow-up)
+- A fused norm whose per-row rescale is cheaper than a separate dispatch on these shapes (the autotuner already charges the dispatch to the un-fused choice: the fused form must win on the kernel), or the norm applied in the previous GEMV's epilogue
+- Fewer dispatches: gqa_merge into the core where the chunk count is 1; the argmax pair; re-trace and update decode-kernels.md §3 / §8
+
+**Done when**
+- Non-GEMV time ≤ 5 % of the 8B's step at 1 K context; tokens unchanged
+
+**References**
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/decode-kernels.md §1, §8
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/design/design.md §5.6
+
+### M5 gate (contingency): per-token latency under speculative decoding — ours vs mlx-lm's, same target bytes, same draft length
+labels: area:spec, area:perf, gate, hardware:m5-pro
+
+The v1 metric on the machine we have: the speculative round on Qwen3-8B NVFP4 must decode faster per token than mlx-lm on the same target weights — plain (today 0.66×) and under speculation. mlx-lm speculates with a draft model (`--draft-model`, `--num-draft-tokens N`: a small same-tokenizer LM proposes N tokens, verified in one target pass); ours with the DSpark block drafter (verify length L, fixed or cost-aware). 'Same configuration' = the same target checkpoint bytes (the MLX NVFP4 conversion, read by both engines), the same prompt set, the same number of drafted tokens per step (L = N), greedy, paired alternating runs, min-of-N — with mlx-lm's plain decode as the floor either way. Today: ours 19.9 ms per token speculative (fixed L, the accelerator tile, the nvidia checkpoint) against mlx-lm plain 15.9; mlx-lm speculative is not yet measured here.
+
+**Work**
+- `tools/bench/spec_vs_mlx.py`: mlx-lm with `--draft-model` (the smallest same-tokenizer Qwen3 draft in NVFP4 or 4-bit, Qwen3-0.6B) at N = 1 … 7 and ours at fixed L = N and the cost-aware rule, per prompt: ms per token, tokens per step, acceptance; both engines' plain rows in the same run
+- The per-op budget of our round on the MLX pack (`python -m monolith.trace --drafter …`): the drafter's GEMVs (1.9 GB of BF16 per round today — an INT8 or NVFP4 drafter pack is the lever), the target's verify pass at T = 1 + L on the tile, the serial ops — against the bytes bound
+- The plain-decode items land first (the decode variant, the unit padding, the non-GEMV time); then re-measure; the tile's cost at T = 2 … 8 (decode-kernels.md §6) is the next lever when the verify pass is the gap
+- Record in decode-kernels.md §8 and the plan's success metrics; the gate decision in the plan
+
+**Done when**
+- On the prompt set, our ms per token under our best speculative setting ≤ mlx-lm's under its best (`--num-draft-tokens` swept) and ≤ mlx-lm plain, on the same target bytes; plain decode at parity; both recorded with the A/B protocol
+
+**References**
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/dspark.md §3
+- https://github.com/jiazhihao/mpk-apple/blob/main/docs/research/decode-kernels.md §5, §8
+- https://github.com/jiazhihao/mpk-apple/blob/main/plans/implementation-plan.md §0 success metrics
 
 ---
 ## Milestone M6 — DSpark speculative decoding
