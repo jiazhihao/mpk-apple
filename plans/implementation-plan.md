@@ -66,9 +66,10 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
 * [ ] Reference tooling: exact NVFP4/FP8 → BF16 dequantizer; HF golden scripts (adapt
       `mirage/tests/runtime_python/models/qwen38/hf_golden.py`): full goldens for the small model; per-layer goldens
       for the 27B produced layer-streamed (54 GB of BF16 does not fit in 36 GB) or on a larger machine.
-* [ ] On-screen frame-pacing check on the M5 Pro: compositor frame times while command buffers of 8 / 16 / 33 / 66 ms
-      run back to back → confirms the default `max_cb_ms` (16 ms from `p6`/`p6b`; the M5 Pro blocks foreign work for
-      whole command buffers in the usual case).
+* [x] On-screen frame-pacing check on the M5 Pro (`p15`, 2026-09-25; hardware report §6 P15): a window's frames kept
+      their 120 Hz vsync with 0 % late frames while ALU-bound compute command buffers of 8–133 ms ran back to back —
+      the display path is not the foreign work `p6b` measured, so `max_cb_ms` (16 ms) is a latency choice, not a
+      pacing constraint. The bus-bound pass waits for an unlocked screen.
 
 Exit: baseline table (plain and speculative), goldens, drafters on disk with recorded configs, ≥ 1 profile (two
 provisional profiles exist: `profiles/`).

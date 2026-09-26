@@ -41,6 +41,8 @@ every T > 1 GEMV runs on the tile as the predicated variant above T = 1, and the
 35.8 to 19.9 ms per token on the prompt set (1.80× the shader path, 1.36× plain: math 1.89×, code 1.60×, text
 1.24×, chat 0.99×; the step 94 % bus-bound), tokens equal to the golden (dspark.md §3) — the M6 gate is met on
 math and code on this chip. Speculative decoding targets a **DSpark** drafter, not the MTP head.
+The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
+8–133 ms compute buffers: `max_cb_ms` is a latency knob, not a pacing one.
 An intermittent model-tier failure (wrong tokens / a hang / an empty generation, never reproducible alone) was three
 out-of-bounds stores found with shader validation (#92): the GDN commit pass wrote its read-out through a 16-byte
 placeholder, the tile's permute wrote a slab's K into a scratch sized by a narrower input, a drafter appended past
@@ -111,8 +113,9 @@ its context cache — fixed, and a `Program` now carries a `context_capacity` th
 
 ## Probes
 
-`./probes/run_all.sh` builds and runs the 16 probes (~5 min, Xcode Command Line Tools only; shaders compile at runtime,
-including the MPP tensor ops of `p14`) and saves `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`.
+`./probes/run_all.sh` builds and runs the 17 probes (~6 min, Xcode Command Line Tools only; shaders compile at runtime,
+including the MPP tensor ops of `p14`; `p15` opens a window and needs the screen unlocked) and saves
+`probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`.
 `./probes/remote_run.sh user@host` does the same over SSH. Geometry is derived from the GPU core count (`GPU_CORES=<n>`
 overrides). Commit every results file. Measured so far: an M3 Pro (2026-09-19, 13 probes) and an M5 Pro (2026-09-22,
 all 16, repeats of `p6`/`p6b`/`p12`); the M5 Pro's profile is the writer's (`tools/profile_writer.py`), the M3 Pro's
