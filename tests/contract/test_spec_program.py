@@ -129,6 +129,13 @@ def test_verify_costs_and_cost_mode(pair):
     prm = prog.buffers[[b for b in vs.bindings if b[0] == 3][0][1]].init
     gamma, thr, t_max, mode = struct.unpack_from("<IfII", prm)
     assert mode == 1 and struct.unpack_from("<4f", prm, 16) == pytest.approx((1.0, 1.1, 1.2, 1.3))
+    # the cost rule never chooses L = 0: the target's T = 1 variants are not emitted (the next range starts at 0),
+    # the drafter's injection keeps its T = 1 variant (n_inject can be 1)
+    gate_up = [o for o in prog.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]
+    assert [o.meta["t_variant"] for o in gate_up] == [2, 4, 8] and [o.meta["t_range"] for o in gate_up] == [[0, 2], [2, 4], [4, 8]]
+    assert prog.kernels[gate_up[0].kernel].macros["T_LO"] == "0" and prog.kernels[gate_up[0].kernel].macros["T"] == "2"
+    fc = [o for o in prog.ops if o.name == "gemv:draft.fc.fc"]
+    assert [o.meta["t_variant"] for o in fc] == [1, 2, 4, 8]
     # the cost rule on a profile without the table falls back to the threshold rule at 0.5
     prog2 = compile_program(model, tp, PROF, dynamic_t=True, drafter=drafter, drafter_pack=dp)
     vs2 = [o for o in prog2.ops if o.name == "verify_select"][0]
@@ -141,6 +148,9 @@ def test_fixed_length_sts_and_logs(pair):
     vs = [o for o in prog.ops if o.name == "verify_select"][0]
     prm = prog.buffers[[b for b in vs.bindings if b[0] == 3][0][1]].init
     assert struct.unpack_from("<IfII", prm)[1:] == (2.0, 8, 2) and struct.unpack_from("<I", prm, 16 + 64)[0] == 65536
+    assert [o.meta["t_variant"] for o in prog.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"] == [2, 4, 8]   # a fixed L >= 1: no T = 1 step
+    prog0 = compile_program(model, tp, PROF, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="fixed", verify_length=0)
+    assert [o.meta["t_variant"] for o in prog0.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"] == [1, 2, 4, 8]  # L = 0: T = 1 steps
     assert any(b[0] == 4 and b[1] == "conf_log" for b in vs.bindings) and prog.buffers["conf_log"].nbytes == 65536 * 16 * 4
     with pytest.raises(ValueError):
         compile_program(model, tp, PROF, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="fixed")
@@ -189,11 +199,17 @@ PROF_ACCEL = Profile.from_dict("pa", {"gpu_cores": 20, "nominal_gbps": 307.0, "e
 def test_accelerator_plan_in_the_round_program(pair):
     """With the profile's accelerator on, a GEMV's per-T variants above min_t (2 by default) become one gemm_tile
     dispatch predicated on (1, t_max], fed by an x_permute the siblings share; static row counts take the tile whole;
-    the verify cost table takes the tile's row; the tile kernels ask for MSL 4.0."""
+    the verify cost table takes the tile's row; the tile kernels ask for MSL 4.0. Under the threshold rule (a step
+    can run at T = 1) the shader keeps its T = 1 variant; under the cost rule it is pruned and the tile's range
+    starts at 0."""
     from monolith import kernels
 
     model, drafter, tp, dp = pair
-    prog = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp)
+    cost_prog = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp)
+    only = [o for o in cost_prog.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]
+    assert [o.meta.get("t_variant") for o in only] == [8] and only[0].meta["t_range"] == [0, 8] and only[0].meta["accelerator"]
+    assert cost_prog.kernels[only[0].kernel].macros["T_LO"] == "0"
+    prog = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="threshold", verify_threshold=0.5)
     gate_up = [o for o in prog.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]
     assert [o.meta.get("t_variant") for o in gate_up] == [1, 8] and [o.meta["t_range"] for o in gate_up] == [[0, 1], [1, 8]]
     shader, tile = gate_up

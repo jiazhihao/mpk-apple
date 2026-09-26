@@ -22,7 +22,11 @@
 //     operand of a tile is one contiguous slice of x'.
 //
 // Geometry: the crew (n_sg SIMD-groups take static slices of the row tiles; S SIMD-groups per threadgroup share
-// nothing; more SIMD-groups per core hide more latency). Macros: K, R (rows per pack block, divides TN), TM (token
+// nothing; more SIMD-groups per core hide more latency), or with KSPLIT > 1 one row tile per threadgroup of KSPLIT
+// SIMD-groups, each streaming a contiguous K / KSPLIT slice of the tile and the partial tiles reduced through
+// threadgroup memory (the register layout is the same in every SIMD-group; SIMD-group 0 adds and runs the
+// epilogue) — the remedy for the shapes whose row tiles cannot occupy the crew (256 tiles of a 4096-row projection
+// against 480 SIMD-groups: decode-kernels.md §6). Macros: K, R (rows per pack block, divides TN), TM (token
 // rows: 8 leaves half of the accelerator's 16-row minimum unused, so 16 costs the same), TN, TK, LANE_ORDER,
 // UNIT_WORDS, PAYLOAD_WORDS, SCALE_W0, SCALE_UOFF, SCALE_WORDS (kernels.unit_geometry), Q_OUTER, SCALE_CACHE, OUT_BF16,
 // plus the snippet's. Requires K % (32*WPW) == 0 and K % TK == 0, T_act <= TM (rows beyond t_active are zero in x'
@@ -83,6 +87,9 @@ using namespace mpp::tensor_ops;
 #define SCALE_W0 PAYLOAD_WORDS
 #define SCALE_UOFF 0u
 #endif
+#ifndef KSPLIT
+#define KSPLIT 1u                                         // SIMD-groups per row tile, each a contiguous K slice (1, 2 or 4)
+#endif
 #ifndef TN
 #define TN 64u                                            // rows per tile (16, 32 or 64)
 #endif
@@ -103,6 +110,14 @@ using namespace mpp::tensor_ops;
 #define NS_B (TN / 8u)                                    // row slots per thread in the right operand
 #define NB_C ((TM > 16u) ? (TM / 16u) : 1u)               // 16-row blocks of the destination (its element order is
                                                           // q, slot (2), jump (TN/16), block — the right operand's is q, slot (8), jump)
+#define C_CAP (NB_C * TN / 2u)                            // destination elements per thread (16 · NB_C rows × TN over 32 lanes)
+#define KT_S (KT / KSPLIT)                                // K tiles per slice
+#if (KT % KSPLIT) != 0
+#error "gemm_tile: KSPLIT must divide the K tiles"
+#endif
+#if SCALE_CACHE && (KT_S % PAYLOAD_WORDS) != 0
+#error "gemm_tile: with the scale cache a K slice must be whole lane groups (KSPLIT divides 32 / LPT)"
+#endif
 #if SCALE_GROUP > 0
 #if (KL % SCALE_GROUP) == 0
 #define LANE_OFF 0u
@@ -148,8 +163,14 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint sg = gid / sw;
+#if KSPLIT > 1
+  const uint slice = sg % KSPLIT, sg_tile = sg / KSPLIT, n_tg = p.n_sg / KSPLIT;   // a threadgroup is the KSPLIT SIMD-groups of one tile
+  threadgroup float part[KSPLIT - 1][32][C_CAP];                            // the partial tiles of slices 1 … KSPLIT-1
+#else
+  const uint sg_tile = sg, n_tg = p.n_sg;
+#endif
 #if STEP_STATE
-  if (st->done) return;
+  if (st->done) return;                                                     // uniform over the threadgroup: no barrier is skipped
   const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
 #ifdef T_HI
   if (T_act > T_HI || T_act <= T_LO) return;
@@ -162,14 +183,18 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
   const uint c0b = 4u * ((lane & 1u) + 2u * ((lane >> 3) & 1u));      // this thread's column-run base
   const uint c1b = ((lane >> 1) & 3u) + 4u * ((lane >> 4) & 1u);      // this thread's row-slot base
   const uint mq = (lane & 1u) | (((lane >> 3) & 1u) << 1);            // its member id in the quad sharing those rows
-  for (uint tile = p.tile0 + sg; tile < p.tile0 + p.n_tiles; tile += p.n_sg) {
+  for (uint tile = p.tile0 + sg_tile; tile < p.tile0 + p.n_tiles; tile += n_tg) {
     auto bT = op.get_right_input_cooperative_tensor<bfloat, bfloat, float>();
     auto cT = op.get_destination_cooperative_tensor<tA_t, decltype(bT), float>();
     for (uint16_t i = 0; i < cT.get_capacity(); i++) cT[i] = 0.0f;
 #if SCALE_CACHE
     uint scc[NS_B][NW][SCALE_WORDS * 4];                                // the scale words of this thread's rows and lanes,
 #endif                                                                  // kept across the PAYLOAD_WORDS tiles of a lane group
+#if KSPLIT > 1
+    for (uint kt = slice * KT_S; kt < (slice + 1u) * KT_S; kt++) {      // this SIMD-group's K slice (whole lane groups under Q_OUTER)
+#else
     for (uint kt = 0; kt < KT; kt++) {
+#endif
       // a tile's row piece is LPT adjacent lanes' word j, LPT*16 bytes of a 128-byte line: when that is the whole line
       // (Q_OUTER) lane group q runs outer and word j inner, so the scale words can be kept across j; otherwise j runs
       // outer so the lane groups sharing a line are consecutive tiles
@@ -281,6 +306,24 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
       if (kt == KT - 1u) op.run(sA, bT, cT);                          // fill-only timing: one run so the fill is not dead
 #endif
     }
+#if KSPLIT > 1
+    // the slices' partial tiles meet in threadgroup memory: slices 1 … KSPLIT-1 write theirs, slice 0 adds them into
+    // its own (the same element order in every SIMD-group) and runs the epilogue alone; the second barrier keeps the
+    // next tile's writes behind this tile's reads. Every thread of the threadgroup reaches both barriers.
+    if (slice != 0u) {
+#pragma clang loop unroll(full)
+      for (uint16_t i = 0; i < C_CAP; i++) part[slice - 1u][lane][i] = cT[i];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (slice == 0u) {
+#pragma clang loop unroll(full)
+      for (uint s2 = 1; s2 < KSPLIT; s2++)
+#pragma clang loop unroll(full)
+        for (uint16_t i = 0; i < C_CAP; i++) cT[i] += part[s2 - 1u][lane][i];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (slice != 0u) continue;
+#endif
     // epilogue over the destination: element ((blk*(TN/16) + jump)*2 + s2) << 2 | q holds row n = c0b + 16*jump + q
     // and token m = 16*blk + c1b + 8*s2; a lane's 4 rows lie in one pack block, the block's other rows in the lanes
     // differing in bit 0 (and bit 3 when R = 16); rows beyond t_active and the range are not written

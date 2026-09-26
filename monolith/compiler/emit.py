@@ -59,6 +59,8 @@ class _Ctx:
     attention: str = "v1"                                                 # the attention kernel (profile / override)
     accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
     accel_min_t: Dict[str, int] = field(default_factory=dict)             # cost_T format key -> the smallest T the tile covers
+    t_min: int = 1                                                        # the smallest T a decode step of this program can take: the
+                                                                          # per-T variants whose whole range lies below it are not emitted
     tuner: Any = None                                                     # compiler.autotune.Autotuner or None
     shared: Dict[str, str] = field(default_factory=dict)                  # shared scratch name -> buffer (sized to the largest request)
     eos: int = -1
@@ -117,6 +119,9 @@ class _Ctx:
         """(n_sg, grid, threadgroup) for an autotuned geometry mode."""
         if mode == "block":
             return n_blocks, (-(-(n_blocks * 32) // 64), 1, 1), (64, 1, 1)
+        if mode.startswith("ksplit"):                                    # the tile's K-split: one tile per threadgroup of S SIMD-groups
+            n_sg, n_tg, tg = kernels.gemm_geometry(mode, n_blocks)
+            return n_sg, (n_tg, 1, 1), (tg, 1, 1)
         n_sg = self.n_sg * (2 if mode == "crew2" else 1)
         return n_sg, (-(-(n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
 
@@ -358,6 +363,7 @@ def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variant
     slab's format at or above its ``accel_min_t`` (default 2), the T in (min_t − 1, t_c] go to one tile dispatch at
     TM = gemm_tm(t_c); the shader keeps the variants below (T = 1 with the default). Static row counts take the tile
     whole when they reach min_t; a program without per-T variants (chunked prefill) is split the same way."""
+    variants = _prune_variants(ctx, variants, t_src)
     if ctx.accelerator != "on" or t_c < 2:
         return variants, None
     min_t = int(ctx.accel_min_t.get(COST_FORMAT.get(info.format, info.format), 2))
@@ -375,8 +381,18 @@ def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variant
         return variants, None                                          # the shape or the range is not the tile's: the shader path
     if t_src == STATIC_ROWS:
         return [], (0, t_c)                                            # a static row count: the tile alone, unpredicated
-    shader = [tv for tv in (variants if len(variants) > 1 else t_variants(t_c)) if tv < min_t]
-    return shader, (shader[-1] if shader else 0, t_c)
+    shader = [tv for tv in _prune_variants(ctx, variants if len(variants) > 1 else t_variants(t_c), t_src) if tv < min_t]
+    return shader, (shader[-1] if shader else 0, t_c)                  # the tile's range reaches down to 0: a prefill chunk of any size
+
+
+def _prune_variants(ctx: _Ctx, variants: List[int], t_src: int) -> List[int]:
+    """Drop the per-T variants of the step's row count (``t_this_step``) whose whole range lies below the program's
+    ``t_min`` (the next variant's range then starts at 0, so a prefill chunk that small still runs — on the next
+    variant up); a single variant stays, and the injection's variants (``n_inject`` can be 1) are never pruned."""
+    if len(variants) <= 1 or ctx.t_min <= 1 or t_src != 0:
+        return variants
+    kept = [tv for tv in variants if tv >= ctx.t_min]
+    return kept or variants[-1:]
 
 
 def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_src: int,
@@ -431,6 +447,10 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
                 t_range=[lo, hi] if predicated else None, normed=stat is not None)
     choice = ctx.tuner.tune_gemm(info, tm, epilogue) if ctx.tuner is not None else None
     mode = choice.grid_mode if choice else "crew"
+    ksplit = kernels.gemm_ksplit(mode)
+    if ksplit > 1:                                                       # the K-split's macro (validated for this slab's K tiles)
+        macros = kernels.gemm_macros(info, tm=tm, out_bf16=True, epilogue=epilogue, stat_out=stat_out is not None,
+                                     round_before_residual=bool(op.attrs.get("round_residual")), ksplit=ksplit)
     k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), "gemm_tile", dict(macros, **tmac), language_version=kernels.MSL_TENSOR_OPS)
     n_tiles = -(-n_rows // tn)
     n_sg, grid, tg = ctx.geometry(mode, n_tiles)
@@ -788,7 +808,7 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
                  layout: Optional[StepStateLayout] = None, eos: int = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
                  tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal",
-                 attention: Optional[str] = None, accelerator: Optional[str] = None) -> Program:
+                 attention: Optional[str] = None, accelerator: Optional[str] = None, t_min: int = 1) -> Program:
     """Check coverage on ``profile`` and emit the step program for a lowered (and passed) graph: for a static
     ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t_max`` read from StepState
     at run time (kernels compiled at ``t_max``). ``pack`` is the pack (or the packs: the target's, then a drafter's)
@@ -808,7 +828,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
     ctx = _Ctx(program, packs, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, values=g.values, dynamic_t=dynamic_t,
                speculative=speculative, attention=attention or profile.attention, accelerator=accelerator or profile.accelerator,
-               accel_min_t=dict(profile.accelerator_min_t), tuner=tuner, eos=eos, ring_capacity=ring_capacity)
+               accel_min_t=dict(profile.accelerator_min_t), tuner=tuner, eos=eos, ring_capacity=ring_capacity, t_min=max(1, int(t_min)))
     _pack_windows(ctx)
     ctx.ctx_cap_target, ctx.ctx_cap = _context_capacity(ctx, g)
     program.context_capacity = ctx.ctx_cap
@@ -900,7 +920,7 @@ def verify_costs(profile: Profile, pack: PackFile, gamma: int, t_max: int, accel
             out.append(profile.cost(key, t))
     except (KeyError, ValueError):
         return None
-    return out
+    return [c / out[0] for c in out]                                   # relative to the 1-token pass of the path that runs it
 
 
 def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Profile, *, cost: Optional[Sequence[float]] = None,
@@ -966,5 +986,9 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     g.check()
     for p in passes:
         p(g)
+    # a decode step of the round runs at T = 1 + L: the cost rule never chooses L = 0 (a draft with any confidence scores
+    # above the bare anchor) and a fixed L >= 1 never does, so their programs skip the T = 1 variants — 144 dispatches
+    # of the 8B's step that returned at once (decode-kernels.md §8); the threshold rule can pick L = 0 and keeps them
+    t_min = 2 if (cost is not None or (fixed is not None and fixed >= 1)) else 1
     return emit_program(g, pack=[pack, drafter_pack], profile=profile, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
-                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention, accelerator=accelerator)
+                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention, accelerator=accelerator, t_min=t_min)

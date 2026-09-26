@@ -135,7 +135,7 @@ def moe_combine_params(hidden: int, top_k: int, t_active: int) -> bytes:
 MSL_TENSOR_OPS = 4 << 16          # the language version the tensor-ops kernels need (MSL 4.0: <metal_tensor>, MPP)
 GEMM_TN = 16                      # rows per accelerator tile (the default up to 16 tokens; gemm_tile_shape)
 GEMM_TK = 256                     # columns per accelerator tile
-GEMM_PERM_SG = 4                  # SIMD-groups per row of x_permute (its grid is tm * GEMM_PERM_SG SIMD-groups of 32)
+GEMM_PERM_SG = 16                 # SIMD-groups per row of x_permute (its grid is tm * GEMM_PERM_SG SIMD-groups of 32)
 
 
 def gemm_source(fmt: str) -> str:
@@ -151,12 +151,13 @@ def gemm_tile_shape(tm: int) -> Tuple[int, int]:
 
 
 def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional[int] = None, tk: Optional[int] = None,
-                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False) -> Dict[str, str]:
+                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False, ksplit: int = 1) -> Dict[str, str]:
     """The specialization of gemm_tile for one slab geometry, ``tm`` token rows (8, 16 or 32 — the accelerator's
     16-row minimum makes 8 cost what 16 costs; the operation's T_act ≤ tm is a run-time parameter), the tile shape
     ``tn × tk`` (64×64, 32×128 or 16×256: 4096 weights, one per thread register; the measured default per ``tm``) and
     the GEMV fusions it takes over (``epilogue`` residual | silu_mul, ``stat_out``, ``round_before_residual``; the
-    input norm is applied by x_permute on the way in)."""
+    input norm is applied by x_permute on the way in). ``ksplit`` > 1: one row tile per threadgroup of that many
+    SIMD-groups, each a contiguous K slice, the partials reduced through threadgroup memory (``gemm_geometry``)."""
     f = FORMATS.get(info.format)
     wpw = int(f.weights_per_word)
     if tn is None or tk is None:
@@ -175,6 +176,8 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         raise ValueError(f"gemm_tile: R={info.rows} must divide the {tn}-row tile")
     if tm not in (8, 16, 32):
         raise ValueError(f"gemm_tile: TM must be 8, 16 or 32 (got {tm})")
+    if ksplit not in (1, 2, 4) or (info.k // tk) % ksplit:
+        raise ValueError(f"gemm_tile: KSPLIT={ksplit} must be 1, 2 or 4 and divide the {info.k // tk} K tiles")
     macros = {"K": str(info.k), "R": str(info.rows), "TM": str(tm), "TN": f"{tn}u", "TK": f"{tk}u",
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
               "UNIT_WORDS": str(info.unit_bytes // 16), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0",
@@ -187,8 +190,29 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         if info.scale_bytes:                                   # … and the scale words of a thread's rows and lanes can stay
             nw = max(1, (tk // 4) // wpw)                      #     in registers across the lane group's words (≤ 16 uints)
             if (tn // 8) * nw * int(macros["SCALE_WORDS"]) * 4 <= 16:
+                if ksplit > 1 and ((info.k // tk) // ksplit) % int(macros["PAYLOAD_WORDS"]):     # the cache is filled at a lane group's first word
+                    raise ValueError(f"gemm_tile: KSPLIT={ksplit} must leave whole lane groups per slice ({32 // lpt} groups of {macros['PAYLOAD_WORDS']} words)")
                 macros["SCALE_CACHE"] = "1"
+    if ksplit > 1:
+        macros["KSPLIT"] = f"{ksplit}u"
     return macros
+
+
+def gemm_geometry(mode: str, n_tiles: int, cores: Optional[int] = None, tg: int = 384) -> Tuple[int, int, int]:
+    """``(n_sg, threadgroups, threadgroup size)`` of a tile dispatch for an autotuned geometry mode: ``crew`` /
+    ``crew2`` (12 SIMD-groups per core, one or two threadgroups per core, static slices of the tiles; needs
+    ``cores``) or ``ksplit<S>`` (one tile per threadgroup of S SIMD-groups, the K-split; ``n_sg`` = tiles × S)."""
+    if mode.startswith("ksplit"):
+        s = int(mode[6:])
+        return n_tiles * s, n_tiles, 32 * s
+    if cores is None:
+        raise ValueError("gemm_geometry: the crew modes need the core count")
+    n_sg = (tg // 32) * cores * (2 if mode == "crew2" else 1)
+    return n_sg, -(-(n_sg * 32) // tg), tg
+
+
+def gemm_ksplit(mode: str) -> int:
+    return int(mode[6:]) if mode.startswith("ksplit") else 1
 
 
 def gemm_params(n_rows: int, n_tiles: int, n_sg: int, t_active: int, *, out_scale: float = 1.0, tile0: int = 0, n_blocks: int = 0) -> bytes:

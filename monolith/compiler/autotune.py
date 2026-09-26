@@ -153,8 +153,9 @@ class Autotuner:
     # ---- the tensor-ops tile (#51) -------------------------------------------------------------------------------
     def tune_gemm(self, info: PackInfo, tm: int, epilogue: Optional[str], *, force: bool = False) -> Choice:
         """The tile's geometry: one or two threadgroups per core (the sweep in decode-kernels.md §6 found either,
-        by format), timed on synthetic data like the GEMV variants."""
-        key = f"gemm|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|TM{tm}|{epilogue or 'plain'}"
+        by format) or the K-split (one tile per threadgroup of 2 or 4 SIMD-groups, for the shapes whose tiles cannot
+        occupy the crew), timed on synthetic data like the GEMV variants."""
+        key = f"gemm2|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|TM{tm}|{epilogue or 'plain'}"
         if key in self.choices and not force:
             c = self.choices[key]
             return Choice(dict(c["macros"]), c["grid_mode"], False, c.get("ms", 0.0), c.get("default_ms", 0.0))
@@ -170,6 +171,13 @@ class Autotuner:
         tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
         lib = nt.Library(self.dev, kernels.gemm_source(info.format), dict(macros, **kernels.x_permute_macros(False)), language_version=kernels.MSL_TENSOR_OPS)
         pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(lib, "x_permute")
+        psos = {"crew": pso, "crew2": pso}
+        for s in (2, 4):
+            try:
+                km = kernels.gemm_macros(pinfo, tm=tm, out_bf16=True, epilogue=epilogue, ksplit=s)
+            except ValueError:
+                continue                                               # the slab's K tiles do not split that way
+            psos[f"ksplit{s}"] = nt.Pipeline(nt.Library(self.dev, kernels.gemm_source(info.format), km, language_version=kernels.MSL_TENSOR_OPS), "gemm_tile")
         xb = f32_to_bf16(rng.uniform(-1, 1, size=(tm, info.k)).astype(np.float32))
         xbuf, rsbuf = nt.Buffer(self.dev, xb.tobytes()), nt.Buffer(self.dev, row_scales.tobytes())
         xp = nt.Buffer(self.dev, tm * info.k * 2)
@@ -179,15 +187,14 @@ class Autotuner:
         wpw = int(FORMATS.get(info.format).weights_per_word)
         n_tiles = -(-info.n // tn)
         results = []
-        for mode in ("crew", "crew2"):
-            tg = min(384, pso.max_threads_per_threadgroup)
-            n_sg = (tg // 32) * self.cores * (2 if mode == "crew2" else 1)
-            grid = (-(-(n_sg * 32) // tg), 1, 1)
+        for mode, mpso in psos.items():
+            n_sg, n_tg, tg = kernels.gemm_geometry(mode, n_tiles, self.cores, min(384, mpso.max_threads_per_threadgroup))
+            grid = (n_tg, 1, 1)
             prm = kernels.gemm_params(info.n, n_tiles, n_sg, tm, n_blocks=pinfo.n_blocks)
             pprm = kernels.x_permute_params(info.k, tm, tm, wpw, tk)
             ds = [nt.Dispatch().pipeline(ppso).buffer(0, xbuf).buffer(3, xp).bytes(4, pprm).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier()]
             for c in range(copies):
-                d = (nt.Dispatch().pipeline(pso).buffer(0, wbuf, c * len(data)).buffer(1, rsbuf).buffer(2, xp).buffer(3, ybuf).bytes(4, prm)
+                d = (nt.Dispatch().pipeline(mpso).buffer(0, wbuf, c * len(data)).buffer(1, rsbuf).buffer(2, xp).buffer(3, ybuf).bytes(4, prm)
                      .grid(*grid).threadgroup(tg, 1, 1))
                 if epilogue == "residual":
                     d.buffer(7, res)
