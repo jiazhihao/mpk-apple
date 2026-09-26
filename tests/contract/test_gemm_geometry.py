@@ -37,3 +37,10 @@ def test_ksplit_macro_follows_the_slab():
     _, info, _ = pack_spec(random_spec("bf16", 64, 512, rng), PackLayout(rows=16))      # 2 K tiles: 4 does not divide them
     with pytest.raises(ValueError):
         kernels.gemm_macros(info, tm=8, ksplit=4)
+    # the slices' partial tiles live in threadgroup memory: at TM = 32 (a 32 × 128 tile, 32 floats per lane) 16 slices
+    # need 61,440 bytes, over the 32 KiB limit — refused before a pipeline is built; 8 slices (28,672) fit
+    _, info, _ = pack_spec(random_spec("fp8_e4m3", 64, 4096, rng), PackLayout(rows=16))
+    assert kernels.gemm_macros(info, tm=32, ksplit=8)["KSPLIT"] == "8u"
+    with pytest.raises(ValueError, match="threadgroup memory"):
+        kernels.gemm_macros(info, tm=32, ksplit=16)
+    assert kernels.gemm_macros(info, tm=16, ksplit=16)["KSPLIT"] == "16u"                 # 15 × 32 × 8 × 4 = 15 KiB

@@ -347,6 +347,8 @@ def test_gemm_tile_ksplit_rejects_odd_splits():
         kernels.gemm_macros(info, tm=8, ksplit=4)
     _, info, _ = pack_spec(random_spec("nvfp4", 256, 4096, rng), PackLayout(rows=16))     # 16 K tiles, 4 words per lane: whole lane groups per slice
     assert kernels.gemm_macros(info, tm=8, ksplit=4)["KSPLIT"] == "4u"
+    with pytest.raises(ValueError, match="threadgroup memory"):                            # TM 32 × 16 slices: 60 KiB of partial tiles
+        kernels.gemm_macros(info, tm=32, ksplit=16, scale_cache=False)
 
 
 @pytest.mark.parametrize("fmt,ksplit", [("nvfp4", 2), ("fp8_e4m3", 4), ("int4_affine", 2)])

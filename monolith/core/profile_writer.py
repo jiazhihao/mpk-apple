@@ -135,8 +135,8 @@ def decide(measurements: Mapping[str, Any], current: Optional[Mapping[str, Any]]
     """The ``engine`` block from the writer's measurements (``tools/profile_writer.py`` builds the mapping:
     ``family``, ``lane_order_gbps`` {order: GB/s}, ``threadgroups_ms`` {count: ms}, ``shader_ms`` {format: {T: ms}},
     ``tile_ms`` {format: {TM: ms}} (the same T = 1 unit), ``attention_ms`` {"v1": {(ctx, T): ms}, "v2": …}) and the
-    current engine block (the values the measurement does not cover — sibling order, max_cb_ms — carry over).
-    Returns ``(engine, notes)``."""
+    current engine block (the values the measurement does not cover — sibling order, max_cb_ms, attention_rows —
+    carry over). Returns ``(engine, notes)``."""
     cur = dict(current or {})
     notes: Dict[str, str] = {}
     lane, notes["lane_order"] = choose_lane_order(measurements["lane_order_gbps"], cur.get("lane_order"))
@@ -153,10 +153,10 @@ def decide(measurements: Mapping[str, Any], current: Optional[Mapping[str, Any]]
         cost_t[f"accelerator_{k}"] = {str(tm): c for tm, c in sorted(rows.items())}
     engine = {"family": measurements["family"], "lane_order": lane, "scale_placement": placement, "threadgroups_per_core": tgs,
               "sibling_order": cur.get("sibling_order", "either"), "max_cb_ms": cur.get("max_cb_ms", 16),
-              "attention": attention, "accelerator": accel, "accelerator_min_t": min_t, "cost_T": cost_t,
+              "attention": attention, "attention_rows": int(cur.get("attention_rows", 4)), "accelerator": accel, "accelerator_min_t": min_t, "cost_T": cost_t,
               "note": "written by tools/profile_writer.py from the kernel harnesses (min-of-N over >= 2 GB streamed per point): cost_T = the "
                       "pass cost relative to a T = 1 shader pass at the best geometry per T; accelerator_<fmt> = gemm_tile at TM rows in "
-                      "the same unit; sibling_order and max_cb_ms are the probes' (p11, p6/p6b) and carry over"}
+                      "the same unit; sibling_order and max_cb_ms are the probes' (p11, p6/p6b) and attention_rows the file's: they carry over"}
     return engine, notes
 
 

@@ -180,6 +180,7 @@ MSL_TENSOR_OPS = 4 << 16          # the language version the tensor-ops kernels 
 GEMM_TN = 16                      # rows per accelerator tile (the default up to 16 tokens; gemm_tile_shape)
 GEMM_TK = 256                     # columns per accelerator tile
 GEMM_PERM_SG = 16                 # SIMD-groups per row of x_permute (its grid is tm * GEMM_PERM_SG SIMD-groups of 32)
+THREADGROUP_MEMORY_LIMIT = 32768  # bytes of threadgroup memory a dispatch may declare (Apple GPUs); a kernel needing more fails to build
 
 
 def gemm_source(fmt: str) -> str:
@@ -227,6 +228,10 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         raise ValueError(f"gemm_tile: TM must be 8, 16 or 32 (got {tm})")
     if ksplit not in (1, 2, 4, 8, 16) or (info.k // tk) % ksplit:
         raise ValueError(f"gemm_tile: KSPLIT={ksplit} must be 1, 2, 4, 8 or 16 and divide the {info.k // tk} K tiles")
+    part_bytes = (ksplit - 1) * 32 * (max(1, tm // 16) * tn // 2) * 4       # the slices' partial tiles (part[KSPLIT-1][32][C_CAP] floats)
+    if part_bytes > THREADGROUP_MEMORY_LIMIT:
+        raise ValueError(f"gemm_tile: KSPLIT={ksplit} at TM={tm} needs {part_bytes} bytes of threadgroup memory for the partial tiles "
+                         f"(the limit is {THREADGROUP_MEMORY_LIMIT})")
     macros = {"K": str(info.k), "R": str(info.rows), "TM": str(tm), "TN": f"{tn}u", "TK": f"{tk}u",
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
               "UNIT_WORDS": unit_words(info), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0",
@@ -404,7 +409,7 @@ GQA_V2_CHUNK_MIN = 32
 def gqa_v2_macros(head_dim: int, *, rmax: int, rg: int = 4) -> Dict[str, str]:
     """v2: ``rmax`` = the query rows per block (rep · T_max, ≤ 32: the threadgroup-memory query cache), ``rg`` =
     rows per pass of the scoring / P·V loop."""
-    if head_dim % 32 or not 1 <= rmax <= 32 or not 1 <= rg <= rmax or rmax * head_dim * 2 > 32768:
+    if head_dim % 32 or not 1 <= rmax <= 32 or not 1 <= rg <= rmax or rmax * head_dim * 2 > THREADGROUP_MEMORY_LIMIT:
         raise ValueError("gqa_decode_v2: head_dim a multiple of 32, 1 <= rg <= rmax <= 32, and rmax·D·2 bytes within threadgroup memory")
     return {"D": str(head_dim), "RMAX": f"{rmax}u", "RG": f"{rg}u"}
 
