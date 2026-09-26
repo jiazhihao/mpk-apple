@@ -52,10 +52,17 @@ class Value:
     consumers: List["Op"] = field(default_factory=list)
     is_input: bool = False
     is_weight: bool = False
+    is_state: bool = False       # persistent per-sequence buffer (KV cache, recurrent state): read and updated in place
+    is_const: bool = False       # a constant table or aux tensor from the pack (RoPE tables, norm weights, A_log …)
 
     @property
     def rank(self) -> int:
         return len(self.shape)
+
+    @property
+    def is_source(self) -> bool:
+        """Inputs, weights, states and constants are graph sources: nothing produces them."""
+        return self.is_input or self.is_weight or self.is_state or self.is_const
 
     def __repr__(self) -> str:
         fmt = f", format={self.format}" if self.format else ""
@@ -107,6 +114,19 @@ class Graph:
         v.is_weight = True
         return v
 
+    def state(self, name: str, shape: Sequence[Dim], dtype: DType) -> Value:
+        """A persistent per-sequence buffer. Ops read it as an input and declare in-place writes through the
+        ``updates=[...]`` attr (a list of state value names), which the barrier pass treats as a write."""
+        v = self.value(name, shape, dtype)
+        v.is_state = True
+        return v
+
+    def const(self, name: str, shape: Sequence[Dim], dtype: DType) -> Value:
+        """A constant tensor from the pack's aux section (tables, norm weights, small parameters)."""
+        v = self.value(name, shape, dtype)
+        v.is_const = True
+        return v
+
     # ---- ops ----------------------------------------------------------------------------------------------
     def op(
         self,
@@ -127,8 +147,14 @@ class Graph:
                 raise ValueError(f"graph {self.name}: output {v!r} does not belong to this graph")
             if v.producer is not None:
                 raise ValueError(f"graph {self.name}: {v!r} already has a producer {v.producer!r}")
-            if v.is_input or v.is_weight:
-                raise ValueError(f"graph {self.name}: {v!r} is an input/weight and cannot be produced by an op")
+            if v.is_source:
+                raise ValueError(f"graph {self.name}: {v!r} is a graph source and cannot be produced by an op")
+        for name in attrs.get("updates", ()):
+            sv = self.values.get(name)
+            if sv is None or not sv.is_state:
+                raise ValueError(f"graph {self.name}: op {kind} updates {name!r}, which is not a state of this graph")
+            if sv not in ins:
+                raise ValueError(f"graph {self.name}: op {kind} updates {name!r} without reading it (list it as an input)")
         op = Op(kind, ins, outs, domain, klass, dict(attrs), id=len(self.ops))
         for v in outs:
             v.producer = op
@@ -146,13 +172,16 @@ class Graph:
                 seen[v.producer.id] = v.producer
         return [seen[k] for k in sorted(seen)]
 
+    def states(self) -> List[Value]:
+        return [v for v in self.values.values() if v.is_state]
+
     def check(self) -> None:
-        """Every consumed value is an input, a weight or produced by an earlier op; every op has ≥ 1 output."""
+        """Every consumed value is a source or produced by an earlier op; every op has ≥ 1 output."""
         for op in self.ops:
             if not op.outputs:
                 raise ValueError(f"graph {self.name}: {op!r} has no outputs")
             for v in op.inputs:
-                if v.is_input or v.is_weight:
+                if v.is_source:
                     continue
                 if v.producer is None:
                     raise ValueError(f"graph {self.name}: {op!r} reads {v!r}, which nothing produces")

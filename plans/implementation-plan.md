@@ -172,6 +172,12 @@ max-abs (MPK's `test_layer_cores.py` bars).
 
 Exit: all leaf + composite gates green.
 
+*Status (2026-09-24).* The torch oracles of every op above except sampling variants and the drafter ops exist as the
+layer library's `forward()` (`monolith/nn/`), and the composite bars are already green **for the oracles**
+(`tests/layers/`: on the 0.8B's real weights, GDN prefill and continuation within 2.4e-4 of the HF module at scale
+0.1, attention within one BF16 ULP, MLP + residual within one ULP). The kernels themselves (#19–#25) are the
+remaining M3 work; each kernel test compares against these oracles fed with the pack's own aux tensors.
+
 ### M4 — Compiler and end-to-end decode · 4 ew
 
 * IR (typed graph, symbolic `T`/context, op metadata: reads/writes, block domain, class, cost).
@@ -190,6 +196,13 @@ Exit: all leaf + composite gates green.
 Exit: (a) small same-architecture model — 48 greedy tokens equal to the HF golden, in CI; (b) 27B-NVFP4 —
 `--num-layers-override 4/8` hidden-state gates, then full-model greedy equal to the reference; (c) decode tok/s ≥ the
 MLX baseline (parity); (d) host < 5 % of a core, no per-token synchronization.
+
+*Status (2026-09-24).* IR (with states, constants and in-place `updates`), the `nn` library, the registries and
+`models/qwen3_5` are in (#26–#28); the model lowers to the design's stage count (5 fused ops per layer + norm
+statistics + embed/lm_head/argmax: 172 ops for the 24-layer 0.8B before the fuse pass) and packs from its module
+tree (`tools/pack_weights.py --model`, 97 slabs + 135 aux tensors + RoPE tables for the 0.8B). Exit (a) holds on the
+**oracle path**: the model oracle reproduces the HF golden's 48 greedy tokens and every layer's hidden state at
+cos ≥ 0.9997 (`tests/models/qwen3_5/`); the GPU path needs the M3 kernels and the compiler passes (#29–#32).
 
 ### M5 — Performance pass · 3 ew · **go/no-go #2**
 

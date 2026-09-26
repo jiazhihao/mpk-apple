@@ -57,6 +57,22 @@ def compose(outer: np.ndarray, inner: np.ndarray) -> np.ndarray:
 
 
 def one_plus(w: np.ndarray, *, dtype_in: str = "BF16") -> np.ndarray:
-    """Gemma/Qwen3.5 RMSNorm weight ``(1 + w)`` in float32 (the kernels fold it into the following GEMV)."""
-    x = bf16_to_f32(w) if dtype_in == "BF16" else np.asarray(w, dtype=np.float32)
-    return (1.0 + x.astype(np.float32)).astype(np.float32)
+    """Gemma/Qwen3.5 RMSNorm weight ``(1 + w)`` in float32 (the kernels fold it into the following GEMV), from the
+    BF16-valued parameter (F32 inputs are rounded to BF16 first, as the reference model holds them)."""
+    return (1.0 + bf16_round_f32(w, dtype_in=dtype_in)).astype(np.float32)
+
+
+def bf16_round_f32(w: np.ndarray, *, dtype_in: str = "BF16") -> np.ndarray:
+    """The value a BF16-loaded reference model holds, widened to float32: BF16 inputs exactly, F32 inputs rounded to
+    BF16 first (the HF reference casts every floating parameter to its ``dtype``)."""
+    from ..formats.fp import f32_to_bf16
+
+    if dtype_in == "BF16":
+        return bf16_to_f32(w).astype(np.float32)
+    return bf16_to_f32(f32_to_bf16(np.asarray(w, dtype=np.float32))).astype(np.float32)
+
+
+def neg_exp(w: np.ndarray, *, dtype_in: str = "BF16") -> np.ndarray:
+    """``−exp(A_log)`` in float32 from the BF16-valued parameter: the Gated-DeltaNet decay coefficient the mixer
+    multiplies by ``softplus(a + dt_bias)``."""
+    return (-np.exp(bf16_round_f32(w, dtype_in=dtype_in))).astype(np.float32)
