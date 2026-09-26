@@ -15,10 +15,18 @@ def test_repo_profiles_load():
 
 
 def test_cost_tables_measured_points_and_interpolation():
+    """The measured points come back as written (the profile writer rewrites them, so the expectations are read from
+    the file's engine block, not hard-coded), the points in between are linear, nothing extrapolates."""
+    import json
+
     m5 = load_profiles()["apple-m5-pro-20c"]
-    assert m5.cost("fp8", 1) == 1.0 and m5.cost("fp8", 2) == pytest.approx(1.094) and m5.cost("nvfp4", 4) == pytest.approx(2.459)
-    assert m5.cost("fp8", 3) == pytest.approx((1.094 + 2.141) / 2)       # linear between T = 2 and T = 4
-    assert m5.cost("accelerator_fp8", 8) == pytest.approx(1.108) and m5.cost("accelerator_nvfp4", 16) == pytest.approx(1.356)   # gemm_tile rows (the writer, #49)
+    with open(profiles_dir() / "apple-m5-pro-20c.json") as f:
+        table = json.load(f)["engine"]["cost_T"]
+    assert m5.cost("fp8", 1) == 1.0 and m5.cost("fp8", 2) == pytest.approx(table["fp8"]["2"]) and m5.cost("nvfp4", 4) == pytest.approx(table["nvfp4"]["4"])
+    assert 1.0 < table["fp8"]["2"] < table["fp8"]["4"] < table["fp8"]["8"]                                      # a pass costs more with T
+    assert m5.cost("fp8", 3) == pytest.approx((table["fp8"]["2"] + table["fp8"]["4"]) / 2)                        # linear between T = 2 and T = 4
+    assert m5.cost("accelerator_fp8", 8) == pytest.approx(table["accelerator_fp8"]["8"])                          # gemm_tile rows (the writer, #49)
+    assert m5.cost("accelerator_nvfp4", 16) == pytest.approx(table["accelerator_nvfp4"]["16"]) and table["accelerator_nvfp4"]["8"] < 1.2
     with pytest.raises(ValueError):
         m5.cost("fp8", 9)                                                    # never extrapolate
     with pytest.raises(KeyError):
@@ -47,4 +55,4 @@ def test_accelerator_fields():
     with pytest.raises(ValueError):
         Profile.from_dict("p", dict(base, engine=dict(base["engine"], accelerator_min_t={"nvfp4": 0})))
     m5 = load_profiles()["apple-m5-pro-20c"]
-    assert m5.accelerator == "on" and m5.accelerator_min_t["nvfp4"] == 2 and m5.accelerator_min_t["bf16"] == 4 and m5.cost("accelerator_nvfp4", 8) == pytest.approx(1.348)
+    assert m5.accelerator == "on" and m5.accelerator_min_t["nvfp4"] == 2 and m5.accelerator_min_t["bf16"] == 4 and 0.9 < m5.cost("accelerator_nvfp4", 8) < 1.2   # the writer's row (1.04 with the V3 decode)

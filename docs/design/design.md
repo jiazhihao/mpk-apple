@@ -392,8 +392,12 @@ path.
   kernel (T_max = 1 + γ fixed at compile time; the crew geometry never changes). Where the best kernel differs by T —
   the shader GEMV at T = 1, the tensor-ops tile above it on Apple10 (the profile's `accelerator_min_t`, 2 on the
   M5 Pro for every format; #51) — both variants are encoded and the one
-  not selected returns at its first instruction (a predicated dispatch costs ~1.4 µs **[M]**); `executeCommandsIn
-  Buffer:indirectBuffer:`, which lets the GPU choose the ICB range, is the optimization if those µs ever matter.
+  not selected returns at its first instruction (a predicated dispatch costs ~1.4 µs **[M]**; 2.7 in the 8B's step);
+  `executeCommandsInBuffer:indirectBuffer:`, which lets the GPU choose the ICB range, is the optimization if those
+  µs ever matter. Variants a program can never take are not encoded: under the cost-aware or a fixed L ≥ 1 rule a
+  decode step runs at T = 1 + L ≥ 2, so the step's T = 1 variants are pruned and the next variant's range starts
+  at 0 (a prefill chunk of one token runs on it); the injection's variants (`n_inject` can be 1) and the threshold
+  rule's (L = 0 is possible) stay.
 
 ### 5.8 Speculative decoding with a DSpark drafter
 

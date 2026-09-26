@@ -68,25 +68,25 @@ def test_x_permute_column_order():
     assert perm[4] == 2 * kl and perm[8] == 4 * kl and perm[16] == 4 and perm[64] == 16 and perm[256] == 8 * kl
 
 
-def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None):
+def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1):
     rng = np.random.default_rng(5)
     spec = random_spec(fmt, n, k, rng)
     data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order))
     f = FORMATS.get(fmt)
     x = rng.uniform(-1, 1, size=(t_act, k)).astype(np.float32)
     xb = f32_to_bf16(x)
-    macros = kernels.gemm_macros(info, tm=tm, out_bf16=out_bf16, tn=tn, tk=tk)
+    macros = kernels.gemm_macros(info, tm=tm, out_bf16=out_bf16, tn=tn, tk=tk, ksplit=ksplit)
     tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
     lib = _lib(dev, fmt, macros)
     pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(_lib(dev, fmt, dict(macros, **kernels.x_permute_macros(False))), "x_permute")
     xp = nt.Buffer(dev, tm * k * 2)
     y = nt.Buffer(dev, tm * n * (2 if out_bf16 else 4)); y.fill(0)
-    tg = min(384, pso.max_threads_per_threadgroup)
-    n_sg = (tg // 32) * dev.info().gpu_cores
+    n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", kernels.gemm_tiles(n, tn), dev.info().gpu_cores,
+                                           min(384, pso.max_threads_per_threadgroup))
     d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(dev, xb.tobytes())).buffer(3, xp)
           .bytes(4, kernels.x_permute_params(k, t_act, tm, int(f.weights_per_word), tk)).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
     d1 = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, data)).buffer(1, nt.Buffer(dev, row_scales.tobytes())).buffer(2, xp).buffer(3, y)
-          .bytes(4, kernels.gemm_params(n, kernels.gemm_tiles(n, tn), n_sg, t_act)).grid(-(-(n_sg * 32) // tg)).threadgroup(tg))
+          .bytes(4, kernels.gemm_params(n, kernels.gemm_tiles(n, tn), n_sg, t_act)).grid(n_tg).threadgroup(tg))
     r = nt.Queue(dev).run([d0, d1])
     assert not r.error, r.error
     if out_bf16:
@@ -152,13 +152,13 @@ class Gemm:
         self.wbuf, self.rsbuf = nt.Buffer(dev, self.data), nt.Buffer(dev, self.row_scales.tobytes())
 
     def run(self, x_bf16, *, t_active=None, norm=None, epilogue=None, residual=None, stat_out=False, out_bf16=None,
-            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None):
+            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None, ksplit=1):
         """``norm`` = (stat [T, parts] float32, parts, norm_w [K]); ``row_range`` = (start, count) in slab rows;
         ``step_state`` = (layout, values) with ``t_range`` = (lo, hi) for a predicated variant."""
         t_act = self.tm if t_active is None else t_active
         if out_bf16 is None:
             out_bf16 = epilogue is not None
-        macros = kernels.gemm_macros(self.info, tm=self.tm, out_bf16=out_bf16, epilogue=epilogue, stat_out=stat_out, round_before_residual=round_residual)
+        macros = kernels.gemm_macros(self.info, tm=self.tm, out_bf16=out_bf16, epilogue=epilogue, stat_out=stat_out, round_before_residual=round_residual, ksplit=ksplit)
         tk = int(macros["TK"].rstrip("u"))
         pmacros = dict(kernels.x_permute_macros(norm is not None))
         src = kernels.gemm_source(self.fmt)
@@ -174,14 +174,14 @@ class Gemm:
         lib = nt.Library(self.dev, src, macros, language_version=kernels.MSL_TENSOR_OPS)
         plib = nt.Library(self.dev, src, {**macros, **pmacros}, language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
         pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(plib, "x_permute")
-        tg = min(384, pso.max_threads_per_threadgroup)
-        n_sg = (tg // 32) * self.dev.info().gpu_cores
         n = self.n
         if row_range is None:
             tile0, n_tiles, n_rows = 0, kernels.gemm_tiles(n, int(macros["TN"].rstrip("u"))), n
         else:
             tn = int(macros["TN"].rstrip("u"))
             tile0, n_tiles, n_rows = row_range[0] // tn, -(-row_range[1] // tn), row_range[1]
+        n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", n_tiles, self.dev.info().gpu_cores,
+                                               min(384, pso.max_threads_per_threadgroup))
         n_blocks = -(-n_rows // self.info.rows)
         n_out = n_rows // 2 if epilogue == "silu_mul" else n_rows
         xp = nt.Buffer(self.dev, self.tm * self.k * 2)
@@ -192,7 +192,7 @@ class Gemm:
         if norm:
             d0.buffer(1, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes())).buffer(2, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
         d1 = (nt.Dispatch().pipeline(pso).buffer(0, self.wbuf).buffer(1, self.rsbuf).buffer(2, xp).buffer(3, y)
-              .bytes(4, kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks)).grid(-(-(n_sg * 32) // tg)).threadgroup(tg))
+              .bytes(4, kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks)).grid(n_tg).threadgroup(tg))
         if epilogue == "residual":
             d1.buffer(7, nt.Buffer(self.dev, residual.tobytes()))
         so = None
@@ -320,3 +320,54 @@ def test_gemm_static_rows_source(dev):
     macros_extra = {"T_SRC": "2", "T_STATIC_ROWS": "3u"}
     y, _ = g.run(x, out_bf16=False, step_state=(layout, {"t_this_step": 1, "n_inject": 0}), extra_macros=macros_extra)
     assert check_against_oracle(y[:3], ref[:3]).ok() and np.all(y[3:] == 0)
+
+
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "int4_affine", "bf16"])
+@pytest.mark.parametrize("ksplit,tm,t_act", [(2, 8, 8), (4, 8, 5), (2, 16, 16), (2, 32, 30)])
+def test_gemm_tile_ksplit_matches_oracle(dev, fmt, ksplit, tm, t_act):
+    """The K-split (one tile per threadgroup of ``ksplit`` SIMD-groups, the partials reduced through threadgroup
+    memory): 272 rows (a partial last tile), K = 2048 (8 K tiles at TK = 256 — two lane groups per slice at 2, one
+    at 4), every format, the three TM."""
+    out, ref = _run(dev, fmt, 272, 2048, tm, t_act, "interleaved16", ksplit=ksplit)
+    chk = check_against_oracle(out[:t_act], ref)
+    assert chk.ok() and chk.max_rel_err < 2e-6, chk
+    assert np.all(out[t_act:] == 0)
+
+
+def test_gemm_tile_ksplit_rejects_odd_splits():
+    rng = np.random.default_rng(0)
+    _, info, _ = pack_spec(random_spec("nvfp4", 256, 1024, rng), PackLayout(rows=16))     # 4 K tiles of 256, one word per lane
+    kernels.gemm_macros(info, tm=8, ksplit=4)                                                # one K tile (one lane group) per slice
+    with pytest.raises(ValueError):
+        kernels.gemm_macros(info, tm=8, ksplit=3)
+    _, info, _ = pack_spec(random_spec("nvfp4", 256, 512, rng), PackLayout(rows=16))      # 2 K tiles: 4 does not divide them
+    with pytest.raises(ValueError):
+        kernels.gemm_macros(info, tm=8, ksplit=4)
+    _, info, _ = pack_spec(random_spec("nvfp4", 256, 4096, rng), PackLayout(rows=16))     # 16 K tiles, 4 words per lane: whole lane groups per slice
+    assert kernels.gemm_macros(info, tm=8, ksplit=4)["KSPLIT"] == "4u"
+
+
+@pytest.mark.parametrize("fmt,ksplit", [("nvfp4", 2), ("fp8_e4m3", 4), ("int4_affine", 2)])
+def test_gemm_ksplit_epilogues_and_predication(dev, fmt, ksplit):
+    """The K-split with the fusions the step uses on it: the residual epilogue with the statistic output, a row range
+    starting mid-slab, and the per-T predicate of a dynamic-T program (a variant outside its range writes nothing —
+    the barriers are behind the uniform early return)."""
+    from monolith.core import StepStateLayout
+
+    rng = np.random.default_rng(11)
+    t = Gemm(dev, fmt, 288, 2048, 8)
+    x = f32_to_bf16(rng.uniform(-1, 1, size=(8, 2048)).astype(np.float32))
+    res = f32_to_bf16(rng.standard_normal((8, 288)).astype(np.float32))
+    out, so = t.run(x, epilogue="residual", residual=res, stat_out=True, ksplit=ksplit)
+    prod = bf16_to_f32(x).astype(np.float64) @ t.w.T
+    ref = _rbf(prod + bf16_to_f32(res))
+    assert check_against_oracle(out, ref.astype(np.float32)).max_ulp_elementwise <= 1
+    blocks = ref.reshape(8, -1, t.info.rows)
+    assert np.allclose(so, (blocks.astype(np.float64) ** 2).sum(-1), rtol=1e-4, atol=1e-3)
+    out2, _ = t.run(x, epilogue="residual", residual=np.ascontiguousarray(res[:, 32:288]), row_range=(32, 256), ksplit=ksplit)   # range-relative residual
+    assert check_against_oracle(out2, ref[:, 32:288].astype(np.float32)).max_ulp_elementwise <= 1
+    layout = StepStateLayout(t_max=8, gamma_max=7)
+    out3, _ = t.run(x, epilogue="residual", residual=res, step_state=(layout, {"t_this_step": 6}), t_range=(1, 8), ksplit=ksplit)
+    assert check_against_oracle(out3[:6], ref[:6].astype(np.float32)).max_ulp_elementwise <= 1 and np.all(out3[6:] == 0)
+    out4, _ = t.run(x, epilogue="residual", residual=res, step_state=(layout, {"t_this_step": 1}), t_range=(1, 8), ksplit=ksplit)
+    assert np.all(out4 == 0)
