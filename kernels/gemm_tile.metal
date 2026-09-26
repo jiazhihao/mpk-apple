@@ -88,7 +88,7 @@ using namespace mpp::tensor_ops;
 #define SCALE_UOFF 0u
 #endif
 #ifndef KSPLIT
-#define KSPLIT 1u                                         // SIMD-groups per row tile, each a contiguous K slice (1, 2 or 4)
+#define KSPLIT 1u                                         // SIMD-groups per row tile, each a contiguous K slice (1 … 16)
 #endif
 #ifndef TN
 #define TN 64u                                            // rows per tile (16, 32 or 64)
@@ -389,7 +389,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
             const float vr = round_bf16(vv);
             ssq = fma(vr, vr, ssq);
-#if OUT_BF16
+#if PERM_OUT
+            y[(ulong)m * PERM_K + perm_dest(orow0 + qq)] = ushort(as_type<uint>(vr) >> 16);   // the consumer tile's x' (its K = n_out)
+#elif OUT_BF16
             y[(ulong)m * n_out + orow0 + qq] = ushort(as_type<uint>(vr) >> 16);
 #else
             y[(ulong)m * n_out + orow0 + qq] = vv;

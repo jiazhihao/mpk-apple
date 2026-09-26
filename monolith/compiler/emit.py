@@ -57,6 +57,7 @@ class _Ctx:
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
     attention: str = "v1"                                                 # the attention kernel (profile / override)
+    attn_rows: int = 4                                                    # v1's query rows per pass (the profile's attention_rows)
     accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
     accel_min_t: Dict[str, int] = field(default_factory=dict)             # cost_T format key -> the smallest T the tile covers
     t_min: int = 1                                                        # the smallest T a decode step of this program can take: the
@@ -395,6 +396,53 @@ def _prune_variants(ctx: _Ctx, variants: List[int], t_src: int) -> List[int]:
     return kept or variants[-1:]
 
 
+def _tile_alone(ctx: _Ctx, op: Op) -> Optional[Tuple[int, int, int, int, int, int]]:
+    """``(tm, wpw, tk, t_src, lo, hi)`` when GEMV ``op`` runs on the tile alone — every T of the program in one tile
+    dispatch, no shader variant — else None. The same decision ``_gemv`` makes, taken ahead of it for the op that
+    produces its input."""
+    if op.kind not in ("gemv", "lm_head") or op.attrs.get("norm"):
+        return None
+    try:
+        t_c, t_src = ctx.rows_of(op)
+        info = ctx.slab_info(op.inputs[1].name)
+    except (KeyError, ValueError):
+        return None
+    variants = t_variants(t_c) if (ctx.speculative and ctx.dynamic_t and t_src != STATIC_ROWS and t_c > 1) else [t_c]
+    shader, tile_range = _accel_plan(ctx, info, op, t_c, t_src, variants)
+    if tile_range is None or shader or tile_range[0] != 0:
+        return None
+    tm = gemm_tm(tile_range[1])
+    macros = kernels.gemm_macros(info, tm=tm, out_bf16=True, epilogue=op.attrs.get("epilogue"), stat_out=op.attrs.get("stat_value") is not None,
+                                 round_before_residual=bool(op.attrs.get("round_residual")))
+    return tm, int(FORMATS.get(info.format).weights_per_word), int(macros["TK"].rstrip("u")), t_src, tile_range[0], tile_range[1]
+
+
+def _fused_permute(ctx: _Ctx, v: Value) -> Optional[Tuple[str, Dict[str, str]]]:
+    """When value ``v`` feeds exactly one GEMV, un-normed, that runs on the tile alone, its producer can write x'
+    (x_permute's order) straight into that tile's scratch: returns ``(scratch, PERM_OUT macros)`` and registers the
+    scratch under the key the consumer's ``_gemm_tile`` looks up, so no permute dispatch is emitted for it."""
+    if len(v.consumers) != 1 or v.is_state or v.is_input:
+        return None
+    c = v.consumers[0]
+    if not c.inputs or c.inputs[0] is not v:
+        return None
+    plan = _tile_alone(ctx, c)
+    if plan is None:
+        return None
+    tm, wpw, tk, t_src, lo, hi = plan
+    kdim = ctx.shape(v)[1]
+    try:
+        macros = kernels.perm_out_macros(kdim, wpw, tk)
+    except ValueError:
+        return None
+    key = (ctx.buf(v), None, tm, wpw, tk, lo, hi, t_src)
+    xp = ctx.perm_scratch.get(key)
+    if xp is None:
+        xp = ctx.scratch(f"{c.outputs[0].name}.xp", tm * kdim * 2)
+        ctx.perm_scratch[key] = xp
+    return xp, macros
+
+
 def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_src: int,
                block0: int, n_blocks: int, n_rows: int, nbytes: int, vgroup: Optional[int]) -> None:
     """The tile dispatch of a GEMV for the T in ``t_range`` (design §5.7 predication): the input goes through
@@ -450,12 +498,17 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     ksplit = kernels.gemm_ksplit(mode)
     if ksplit > 1:                                                       # the K-split's macro (validated for this slab's K tiles)
         macros = kernels.gemm_macros(info, tm=tm, out_bf16=True, epilogue=epilogue, stat_out=stat_out is not None,
-                                     round_before_residual=bool(op.attrs.get("round_residual")), ksplit=ksplit)
+                                     round_before_residual=bool(op.attrs.get("round_residual")), ksplit=ksplit,
+                                     scale_cache=False if mode.endswith("nc") else None)
+    fused = _fused_permute(ctx, y) if (epilogue == "silu_mul" and lo == 0) else None    # the whole T range on this tile: its
+    y_binding = (fused[0], 0) if fused else ctx.buf(y)                                    # consumer reads x' from here
+    if fused:
+        tmac = dict(tmac, **fused[1])
     k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), "gemm_tile", dict(macros, **tmac), language_version=kernels.MSL_TENSOR_OPS)
     n_tiles = -(-n_rows // tn)
     n_sg, grid, tg = ctx.geometry(mode, n_tiles)
     prm = ctx.params("gemm", kernels.gemm_params(n_rows, n_tiles, n_sg, hi, tile0=block0 * info.rows // tn, n_blocks=n_blocks))
-    bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, xp, 0), (3, *ctx.buf(y)), (4, prm, 0)]
+    bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, xp, 0), (3, *y_binding), (4, prm, 0)]
     writes = [3]
     if residual is not None:
         bindings.append((7, *ctx.buf(residual)))
@@ -463,13 +516,13 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         bindings.append((8, stat_out, 0))
         writes.append(8)
     ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
-            accelerator=True, tm=tm, tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
+            accelerator=True, tm=tm, perm_out=bool(fused), tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
             variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
             row_range=[block0 * info.rows, n_rows] if op.attrs.get("row_range") is not None else None)
 
 
 def _gqa_src(ctx: _Ctx, v2: bool = False) -> str:
-    return kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_common.metal") + "\n" + kernels.template(
+    return kernels.PRELUDE + kernels.PERM_OUT_MSL + ctx.layout.to_msl() + "\n" + kernels.template("gqa_common.metal") + "\n" + kernels.template(
         "gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
 
 
@@ -485,7 +538,7 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     if v2:
         return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=4), STEP_STATE="1"), ctx.n_sg // 12, kernels.GQA_V2_CHUNK_MIN
     chunk = int(a.get("chunk", 64))
-    return dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1"), ctx.n_sg, chunk
+    return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows), STEP_STATE="1"), ctx.n_sg, chunk
 
 
 def _gqa(ctx: _Ctx, op: Op) -> None:
@@ -529,6 +582,9 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     core = part_o.producer
     ctx_max = ctx.shape(core.inputs[1])[0] if core is not None else 0
     macros, n_sg, chunk = _gqa_geometry(ctx, dict(a, chunk=core.attrs.get("chunk", 64) if core is not None else 64), ctx_max, v2)
+    fused = _fused_permute(ctx, out)                              # o_proj's tile reads the merge's output: written in its order
+    if fused:
+        macros = dict(macros, **fused[1])
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros)
     n_chunks_max = ctx.shape(part_o)[1] // (kv * rep * d)
     prm = ctx.params("gqa_merge", kernels.gqa_params(
@@ -537,8 +593,8 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
         n_chunks_max=n_chunks_max, rows_max=rep * ctx.t))
     st = ctx.program.step_state
     gb = ctx.buf(gate) if gate is not None else ctx.buf(part_o)
-    ctx.add(km, [(0, *ctx.buf(part_o)), (1, *ctx.buf(part_md)), (2, *gb), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
-            (ctx.t * heads, 1, 1), (32, 1, 1), op.kind, writes=[3])
+    ctx.add(km, [(0, *ctx.buf(part_o)), (1, *ctx.buf(part_md)), (2, *gb), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
+            (ctx.t * heads, 1, 1), (32, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
 
 
 def _draft_attn(ctx: _Ctx, op: Op) -> None:
@@ -553,9 +609,11 @@ def _draft_attn(ctx: _Ctx, op: Op) -> None:
         raise ValueError(f"draft_attn: a block of {gamma} rows exceeds the layout's gamma_max {ctx.layout.gamma_max}")
     ctx_max = ctx.shape(kc)[0]
     chunk = 64
-    macros = dict(kernels.gqa_macros(d, chunk=chunk), DRAFT="1", STEP_STATE="1")
+    macros = dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows), DRAFT="1", STEP_STATE="1")
     src = _gqa_src(ctx)
-    kd, km = ctx.kernel("gqa", src, "gqa_decode", macros), ctx.kernel("gqa", src, "gqa_merge", macros)
+    fused = _fused_permute(ctx, out)                              # the drafter's o_proj tile reads the merge's output
+    kd = ctx.kernel("gqa", src, "gqa_decode", macros)
+    km = ctx.kernel("gqa", src, "gqa_merge", dict(macros, **fused[1]) if fused else macros)
     rep = heads // kv
     n_chunks_max, rows_max = -(-ctx_max // chunk), rep * gamma
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
@@ -569,8 +627,8 @@ def _draft_attn(ctx: _Ctx, op: Op) -> None:
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, part_o, 0), (8, part_md, 0), (9, prm, 0), (11, *ctx.buf(kvp)),
                  (15, st, 0)], grid, tg, op.kind, writes=[1, 2, 7, 8])
-    ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, *ctx.buf(proj)), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
-            (gamma * heads, 1, 1), (32, 1, 1), "gqa_merge", writes=[3])
+    ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, *ctx.buf(proj)), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
+            (gamma * heads, 1, 1), (32, 1, 1), "gqa_merge", writes=[3], perm_out=bool(fused))
 
 
 def _gdn_macros(ctx: _Ctx, a: Dict[str, Any], commit: bool) -> Dict[str, str]:
@@ -827,7 +885,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     check_coverage(g, profile)
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
     ctx = _Ctx(program, packs, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, values=g.values, dynamic_t=dynamic_t,
-               speculative=speculative, attention=attention or profile.attention, accelerator=accelerator or profile.accelerator,
+               speculative=speculative, attention=attention or profile.attention, attn_rows=int(profile.attention_rows), accelerator=accelerator or profile.accelerator,
                accel_min_t=dict(profile.accelerator_min_t), tuner=tuner, eos=eos, ring_capacity=ring_capacity, t_min=max(1, int(t_min)))
     _pack_windows(ctx)
     ctx.ctx_cap_target, ctx.ctx_cap = _context_capacity(ctx, g)

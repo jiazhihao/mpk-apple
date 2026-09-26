@@ -13,7 +13,9 @@ def test_crew_and_ksplit_geometries():
     assert kernels.gemm_geometry("crew2", 256, 20) == (480, 40, 384)
     assert kernels.gemm_geometry("ksplit2", 256) == (512, 256, 64)          # n_sg = tiles × S, one tile per threadgroup of S SIMD-groups
     assert kernels.gemm_geometry("ksplit4", 1536) == (6144, 1536, 128)
-    assert kernels.gemm_ksplit("ksplit4") == 4 and kernels.gemm_ksplit("crew2") == 1
+    assert kernels.gemm_geometry("ksplit8", 256) == (2048, 256, 256)
+    assert kernels.gemm_ksplit("ksplit4") == 4 and kernels.gemm_ksplit("crew2") == 1 and kernels.gemm_ksplit("ksplit16nc") == 16
+    assert kernels.gemm_geometry("ksplit4nc", 256) == (1024, 256, 128)
     with pytest.raises(ValueError):
         kernels.gemm_geometry("crew", 256)                                  # the crew needs the core count
 

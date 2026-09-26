@@ -84,6 +84,7 @@ class Session:
 
         self.model, self.pack = model, PackFile(pack_dir)
         bind_pack_formats(model, self.pack)                    # a pack re-quantized at pack time differs from the checkpoint the tree was built from
+        self.spec_steps_per_cb, self.spec_in_flight = 1, 2     # the round's pump cadence (generate); the plain path takes the call's
         self.dev = nt.Device()
         info = self.dev.info()
         self.profile = profile or profile_for_device(info.gpu_cores, info.apple_family)
@@ -182,8 +183,11 @@ class Session:
                 while len(tokens) < max_new_tokens and not done:
                     need = max_new_tokens - len(tokens)
                     # the program sets `done` itself when the ring reaches stop_at (accept_scan), so the steps still
-                    # queued behind it return at their first instruction: full command buffers, no over-run work
-                    r2 = pre.run(need, steps_per_cb=steps_per_cb, in_flight=in_flight, max_tokens=need)
+                    # queued behind it return at their first instruction — but each such step still walks the ICB
+                    # (~0.8 ms for the 8B's 387 dispatches), so a round's command buffers hold one step with two in
+                    # flight: measured 1 % faster per token than 8 × 3 on the 8B (decode-kernels.md §9), the host
+                    # busy for 4 ms of a 128-token generation
+                    r2 = pre.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
                     tokens += r2.tokens
                     dec_ms += r2.gpu_ms; dec_wall += r2.wall_ms; host += r2.host_busy_ms; steps += r2.steps
                     done = r2.done or r2.steps == 0

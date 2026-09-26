@@ -178,7 +178,9 @@ def test_autotuner_picks_and_caches(dev, tmp_path):
     assert g.ms > 0 and g.macros["SL"] in ("4u", "8u", "16u")
     m = tuner.tune_gemm(info, 8, "residual")                                # the tensor-ops tile: the crew geometries or the K-split
     assert m.ms > 0 and m.grid_mode in ("crew", "crew2", "ksplit2", "ksplit4") and m.ms <= m.default_ms * 1.001
-    assert {mode for _, mode in tuner.choices[next(k for k in tuner.choices if k.startswith("gemm2|"))]["variants"]} == {"crew", "crew2", "ksplit2", "ksplit4"}
+    tried = {mode for _, mode in tuner.choices[next(k for k in tuner.choices if k.startswith("gemm3|"))]["variants"]}
+    assert {"crew", "crew2", "ksplit2", "ksplit4"} <= tried                                                                   # bf16: no scales, no cacheless twins
+    assert tried <= {"crew", "crew2", "ksplit2", "ksplit4", "ksplit8", "ksplit16"}                                             # finer where the K tiles allow
     tuner.save("test-chip")
     again = Autotuner(dev, dev.info().gpu_cores, str(cache))
     assert again.tune_gemv(info, 1, "residual", False).macros == c.macros and len(again.choices) == 4

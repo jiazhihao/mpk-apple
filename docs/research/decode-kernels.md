@@ -637,3 +637,59 @@ gather refuse sub-word slabs (they run at T = 1 on the shader, which is where th
 protocol): 10.00 → **9.58 ms per token** GPU (math 6.80, code 8.36, chat 12.30, text 11.50) at the same acceptance
 (3.06 tokens per step: the 4-bit head drafts as the BF16 one did), 9.66 wall against mlx-lm's 9.25 — **1.044×**, and
 ahead on math (6.91 vs 7.13); code 1.02, text 1.06, chat 1.10.
+
+**The fused permute (the same day).** A tile's input is read in `x_permute`'s order; when the input is un-normed
+and the GEMV runs on the tile alone (no shader variant: the cost-aware and fixed L ≥ 1 programs, and every static
+block GEMV of the drafter), its producer writes that order itself — `PERM_OUT` in the attention merge for `o_proj`
+and in the gate|up tile's silu·mul epilogue for `down`, through `perm_dest`, the inverse of the permute's
+`perm_source` — into the tile's scratch, and the permute dispatch is not emitted. The 8B's step: 469 → 387
+dispatches, the permutes 0.73 → 0.52 ms (the 86 normed ones stay: they apply the norm on the way), the round
+9.58 → **9.52 ms per token** GPU; the wall time did not move within noise (9.66 → 9.66 against mlx-lm's 9.26:
+1.043). A dispatch boundary in the ICB replay costs ~2.5 µs here, less than the profiler's ~4 suggested.
+
+**The round's pump cadence (the same day).** With `stop_at` a step queued past the request still walks the ICB
+— 387 predicated-off dispatches, ~0.8 ms — so command buffers of 8 steps with 3 in flight waste up to 23 such steps
+per generation. Measured on three prompts × 128 tokens (wall ms per token): 1 step per buffer, 2 in flight 10.47;
+1 × 3 10.49; 2 × 2 10.49; 2 × 3 10.50; 8 × 3 10.59 — the round now runs 1 × 2 (the host busy 3.7 ms of a
+generation, 0.4 %), the plain path keeps the caller's 8 × 3 (it runs exactly the steps it needs). The gap between
+the wall and the GPU time within a run is 0.4 ms per generation: the pump never starves the GPU.
+
+**mlx-lm's 8-bit draft** (`mlx-community/Qwen3-0.6B-8bit`, the same protocol): N = 2 / 3 / 4 at 10.58 / 9.86 /
+10.72 ms per token — more accepted per step than the 4-bit draft (3.01 vs 2.94 at N = 3) but twice the draft
+bytes; mlx-lm's best stays the 4-bit draft at N = 3.
+
+**The attention core's rows per pass** (`attention_rows`, v1's `RBMAX`; a profile value now): at T = 8 the 8B's
+32 query rows per kv head take 8 passes over each chunk at 4 rows; 8 rows per pass halves the passes but spills
+registers — the round at 4 / 8 / 16 rows: **9.44** / 9.97 / 13.36 ms per token GPU (paired, the same prompts).
+4 stays; the way past it is the design's SIMD-group-matrix scoring (#102).
+
+**The K-split without the scale cache.** A split finer than a slab's lane groups (8 or 16 at K = 4096) needs the
+cache off, so the cacheless tile was measured beside the cached one on the 8B's shapes (TM = 8, ms per matrix,
+min-of-3, the same run): qkv 0.058 (cached, 4) → 0.056 (4, no cache) / 0.057 (8) / 0.064 (16); o_proj 0.044 →
+0.041 / 0.041 / 0.045; gate|up 0.205 → 0.202 / 0.206 / 0.239; down 0.124 → 0.124 / **0.116** (8) / 0.120. The
+cache's registers cost more than the reload on these shapes — the cacheless twin of every split is an autotuner
+candidate now (`ksplit<S>nc`), chosen per op. In the step the re-tuned choices (gate|up `ksplit2nc`, down
+`ksplit8nc`, qkv `ksplit4nc`, o_proj `ksplit2nc`) changed nothing measurable — 29.5 ms per step against 29.3 —
+but the token stream: the new accumulation orders flip near-tie tokens, and on this prompt set the block drafter
+then accepted 3.03 per step instead of 3.06 (chat 2.15 instead of 2.27), so the gate read 9.75 instead of 9.56.
+**The gate's number moves ±2 % with the tile variants' rounding**, through acceptance, not through the step's cost;
+the step is 29.3–29.5 ms either way.
+
+The gate with everything above (the 1 × 2 pump included), the same protocol:
+
+| engine / mode | all | chat | code | math | text | tokens / step |
+|---|---|---|---|---|---|---|
+| ours cost-aware | **9.56** | 12.31 | 8.34 | 6.81 | 11.41 | 3.06 |
+| ours plain | 20.62 | | | | | 1.00 |
+| mlx-lm draft N = 3, 4-bit (its best) | **9.24** | 11.26 | 8.28 | 7.09 | 10.86 | 2.94 |
+| mlx-lm plain | 15.94 | | | | | 1.00 |
+
+**Ours / mlx-lm's best = 1.036** (1.055 with the re-tuned tile choices, below: the same step, fewer accepted
+tokens on chat) — ahead on math (0.96), even on code (1.01), behind on text (1.05) and chat (1.09): the categories
+where the block drafter accepts least. What remains engine-side is the attention core at T = 8 (1.0 ms plus 0.2 of
+merges: the v1 core re-streams a chunk once per 4 query rows — `attention_rows`, below — and the design's
+SIMD-group-matrix scoring, #102) and the dispatch boundaries (387 × ~2.5 µs); the verify pass is at the bus. The
+structural lever is acceptance: the 0.6B LM draft takes 4.17 tokens per step at N = 7 where the block drafter takes
+3.06, and our engine would run a draft token of it for ~2 ms (mlx-lm pays 3.7) — an autoregressive-LM drafter
+plugin projects to 8.5–8.7 ms per token at N = 5–7, 6–8 % under mlx-lm's best, at the cost of a second model's
+step program inside the round.

@@ -29,7 +29,12 @@ tie keeps the file's value) — `monolith/core/profile_writer.py`, tested withou
 
 Everything else in a profile is the measurement record; `engine` is the normalized part the compiler reads
 (`monolith.core.profile.Profile`): `family` (the kernel-binding key), `lane_order` of the weight pack
-(`contiguous` | `interleaved16`), `threadgroups_per_core`, `sibling_order` (`alu_first` | `bus_first` | `either`),
-`max_cb_ms`, and `cost_T` — per format, the cost of a T-token pass relative to T = 1, which the verify-length rule
+(`contiguous` | `interleaved16`), `scale_placement` (`inline` | `block`: where a pack keeps its block scales — the
+block region drops the lane-row unit's padding where a lane's scales fit one word, #101), `threadgroups_per_core`,
+`sibling_order` (`alu_first` | `bus_first` | `either`), `max_cb_ms`, `attention` (`v1` | `v2`) and
+`attention_rows` (v1's query rows per pass over a chunk, 4 by default), `accelerator` (`on` | `off`: T > 1 GEMVs on
+the tensor-ops tile) with `accelerator_min_t` per format, and `cost_T` — per format, the cost of a T-token pass
+relative to T = 1 (the shader rows, and `accelerator_<format>` rows at the tile's TM), which the verify-length rule
 (design §5.8) optimizes against. Costs are exact at measured T and linear between them; the loader refuses to
-extrapolate.
+extrapolate. The writer (`tools/profile_writer.py`) measures the lane order, the scale placement (at K = 4096),
+the threadgroups, the cost tables, the accelerator decision and the attention kernel; the rest carries over.

@@ -155,7 +155,7 @@ class Autotuner:
         """The tile's geometry: one or two threadgroups per core (the sweep in decode-kernels.md §6 found either,
         by format) or the K-split (one tile per threadgroup of 2 or 4 SIMD-groups, for the shapes whose tiles cannot
         occupy the crew), timed on synthetic data like the GEMV variants."""
-        key = f"gemm2|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|TM{tm}|{epilogue or 'plain'}"
+        key = f"gemm3|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|TM{tm}|{epilogue or 'plain'}"
         if key in self.choices and not force:
             c = self.choices[key]
             return Choice(dict(c["macros"]), c["grid_mode"], False, c.get("ms", 0.0), c.get("default_ms", 0.0))
@@ -172,12 +172,21 @@ class Autotuner:
         lib = nt.Library(self.dev, kernels.gemm_source(info.format), dict(macros, **kernels.x_permute_macros(False)), language_version=kernels.MSL_TENSOR_OPS)
         pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(lib, "x_permute")
         psos = {"crew": pso, "crew2": pso}
-        for s in (2, 4):
+        # the K-splits, each with the scale cache where it fits and without it (the cache's registers cost more than the
+        # reload on the 8B's shapes — measured, decode-kernels.md §9); a split finer than the lane groups needs it off
+        for s in (2, 4, 8, 16):
             try:
                 km = kernels.gemm_macros(pinfo, tm=tm, out_bf16=True, epilogue=epilogue, ksplit=s)
             except ValueError:
-                continue                                               # the slab's K tiles do not split that way
-            psos[f"ksplit{s}"] = nt.Pipeline(nt.Library(self.dev, kernels.gemm_source(info.format), km, language_version=kernels.MSL_TENSOR_OPS), "gemm_tile")
+                km = None                                              # the K tiles do not split that way, or the split needs the cache off
+            if km is not None:
+                psos[f"ksplit{s}"] = nt.Pipeline(nt.Library(self.dev, kernels.gemm_source(info.format), km, language_version=kernels.MSL_TENSOR_OPS), "gemm_tile")
+            if pinfo.scale_bytes and (km is None or "SCALE_CACHE" in km):   # a cacheless twin only where it differs
+                try:
+                    kmn = kernels.gemm_macros(pinfo, tm=tm, out_bf16=True, epilogue=epilogue, ksplit=s, scale_cache=False)
+                except ValueError:
+                    continue
+                psos[f"ksplit{s}nc"] = nt.Pipeline(nt.Library(self.dev, kernels.gemm_source(info.format), kmn, language_version=kernels.MSL_TENSOR_OPS), "gemm_tile")
         xb = f32_to_bf16(rng.uniform(-1, 1, size=(tm, info.k)).astype(np.float32))
         xbuf, rsbuf = nt.Buffer(self.dev, xb.tobytes()), nt.Buffer(self.dev, row_scales.tobytes())
         xp = nt.Buffer(self.dev, tm * info.k * 2)
@@ -205,8 +214,9 @@ class Autotuner:
         default_ms = [ms for ms, m in results if m == "crew"][0]
         if best_ms > default_ms * (1 - NOISE_MARGIN):
             best_ms, best_mode = default_ms, "crew"
-        choice = Choice({}, best_mode, False, best_ms, default_ms)
-        self.choices[key] = {"macros": {}, "grid_mode": best_mode, "ms": best_ms, "default_ms": default_ms, "variants": [(round(ms, 4), m) for ms, m in results]}
+        cmac = {"SCALE_CACHE": "0"} if best_mode.endswith("nc") else {}
+        choice = Choice(cmac, best_mode, False, best_ms, default_ms)
+        self.choices[key] = {"macros": cmac, "grid_mode": best_mode, "ms": best_ms, "default_ms": default_ms, "variants": [(round(ms, 4), m) for ms, m in results]}
         return choice
 
     # ---- GDN -----------------------------------------------------------------------------------------------------
