@@ -46,6 +46,9 @@ Go/no-go #2 (#36) is read on this machine: plain decode of the 8B NVFP4 on the w
 the pack's 9 % unit padding, and MLX's one-instruction nibble-to-half decode is the first follow-up. The nvfp4 plugin reads MLX's conversions (same codes,
 `scales` as U8, no tensor scale). The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
 8–133 ms compute buffers: `max_cb_ms` is a latency knob, not a pacing one.
+Model 3 (#46) is built as packages: the MoE ops (`ops/moe.py`: `moe_route`, `moe_gemv` = the GEMV template's pairs
+mode addressing expert blocks through the router's ids, `moe_combine`), the `SparseMoE` layer and the `qwen3_moe`
+package, proven on a synthetic checkpoint; the real Qwen3-MoE checkpoints do not fit this machine.
 An intermittent model-tier failure (wrong tokens / a hang / an empty generation, never reproducible alone) was three
 out-of-bounds stores found with shader validation (#92): the GDN commit pass wrote its read-out through a 16-byte
 placeholder, the tile's permute wrote a slab's K into a scratch sized by a narrower input, a drafter appended past

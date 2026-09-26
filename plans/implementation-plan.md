@@ -464,7 +464,12 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
   kernel or runtime edits allowed, the CI extension test enforces it, and the drafter contract is exercised with a
   second target–drafter pair.
 * Model 3, new ops (a Qwen3.5-MoE-class model: router + expert GEMV indexed by GPU-resident expert ids) — exercises the
-  new-op path and data-dependent indexing inside a static program. The survey shows this is where an overhead-free
+  new-op path and data-dependent indexing inside a static program. **Built 2026-09-26 (#46):** the ops `moe_route`,
+  `moe_gemv` (gemv_T's pairs mode) and `moe_combine` with oracle tests, the `SparseMoE` layer, and the `qwen3_moe`
+  package (`Qwen3MoeForCausalLM`), proven on a synthetic checkpoint (the block as a program matches its torch oracle;
+  the whole model lowers, passes coverage and emits static and dynamic-T programs). The real checkpoints of the class
+  (Qwen3-30B-A3B, 17 GB resident at NVFP4) exceed this machine's working set: the golden and the tok/s row wait for a
+  machine that hosts one. The survey shows this is where an overhead-free
   engine has the most headroom (today's engines reach only 36–55 % of the bound on 3B-active MoE).
 * Format 2 — **built (#47): affine INT4 groups** (`formats/int4_affine`, the MLX / AWQ / GPTQ family; mlx 0.32's
   quantizer reproduced bit-exactly). The plugin path held for the decode contract, but the port needed four

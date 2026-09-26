@@ -9,6 +9,7 @@ from .gdn import GatedDeltaNet
 from .linear import Linear, Part, Projection, SlabGroup
 from .lm_head import LMHead
 from .mlp import GatedMLP
+from .moe import Experts, SparseMoE
 from .module import LowerContext, Model, Module, StateEntry, StateSpec, WeightSpec, state_shape
 from .norm import NormInput, RMSNorm
 from .sampler import GreedySampler, StochasticSampler

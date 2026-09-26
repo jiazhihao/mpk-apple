@@ -229,6 +229,10 @@ so large synthetic shapes are cheap).
 
 ## 3. Adding an op
 
+The worked example is the mixture-of-experts path (`monolith/ops/moe.py`, porting-log.md's model 3): a routing op,
+an indirection mode of the GEMV template (the expert block comes from a GPU-resident ids buffer), a combine op — each
+with a numpy oracle — and the `SparseMoE` layer that composes them; the model package (`qwen3_moe`) then reuses it.
+
 This is the one addition that is an engine PR (`ops/`, `kernels/`, `compiler/`), never folded into a model PR.
 Today an op needs:
 

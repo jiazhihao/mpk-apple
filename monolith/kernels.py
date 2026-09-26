@@ -48,7 +48,8 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
 
 
 def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool = False, norm: bool = False,
-                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False) -> Dict[str, str]:
+                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False,
+                pairs: Optional[Tuple[int, int, bool]] = None) -> Dict[str, str]:
     """The compile-time specialization of gemv_T for one slab geometry, token count and set of fusions
     (``norm``: RMSNorm scaling on the input; ``epilogue``: ``residual`` | ``silu_mul``; ``stat_out``: per-block
     partial sums of squares of the outputs for the next norm; ``round_before_residual``: the product is rounded to
@@ -81,6 +82,14 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
         if epilogue != "residual":
             raise ValueError("gemv_T: round_before_residual needs the residual epilogue")
         macros["EPILOGUE_ROUND"] = "1"
+    if pairs is not None:
+        # the MoE expert mode (ops/moe.py): (top_k, blocks per expert, the input is per (token, slot) row); T = 1 per item
+        top_k, expert_blocks, x_slot = pairs
+        if t != 1 or norm or stat_out or epilogue == "residual":
+            raise ValueError("gemv_T pairs mode: T = 1 and no fused norm, statistic output or residual epilogue")
+        if top_k < 1 or expert_blocks < 1:
+            raise ValueError("gemv_T pairs mode: top_k and the blocks per expert must be positive")
+        macros.update({"PAIRS": "1", "K_TOPK": f"{top_k}u", "EXPERT_BLOCKS": f"{expert_blocks}u", "PAIRS_X_SLOT": "1" if x_slot else "0"})
     return macros
 
 
@@ -89,6 +98,36 @@ def gemv_params(n_rows: int, n_blocks: int, n_sg: int, t_active: int, *, out_sca
     """The ``GemvParams`` record (buffer 4); ``block0`` / ``n_blocks`` / ``n_rows`` describe a row range of the slab
     (a whole slab: 0 / all blocks / N)."""
     return struct.pack("<IIIIffII", n_rows, n_blocks, n_sg, t_active, out_scale, eps, stat_parts, block0)
+
+
+# ---- the MoE ops (ops/moe.py) -----------------------------------------------------------------------------------
+
+def moe_route_source() -> str:
+    return PRELUDE + template("moe_route.metal")
+
+
+def moe_route_macros(n_experts: int, renorm: bool) -> Dict[str, str]:
+    if n_experts < 1 or n_experts > 256:
+        raise ValueError(f"moe_route: 1..256 experts, got {n_experts}")
+    return {"MAX_PER_LANE": f"{-(-n_experts // 32)}u", "RENORM": "1" if renorm else "0"}
+
+
+def moe_route_params(n_experts: int, top_k: int, t_active: int) -> bytes:
+    if not 1 <= top_k <= 16 or top_k > n_experts:
+        raise ValueError(f"moe_route: top_k must be in 1..min(16, n_experts), got {top_k}")
+    return struct.pack("<IIII", n_experts, top_k, t_active, 0)
+
+
+def moe_combine_source() -> str:
+    return PRELUDE + template("moe_combine.metal")
+
+
+def moe_combine_macros(has_shared: bool, has_residual: bool) -> Dict[str, str]:
+    return {"HAS_SHARED": "1" if has_shared else "0", "HAS_RESIDUAL": "1" if has_residual else "0"}
+
+
+def moe_combine_params(hidden: int, top_k: int, t_active: int) -> bytes:
+    return struct.pack("<IIII", hidden, top_k, t_active, 0)
 
 
 # ---- the other decode kernels -------------------------------------------------------------------------------

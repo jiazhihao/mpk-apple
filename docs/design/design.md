@@ -505,7 +505,11 @@ diff check enforce it.
 
 MoE fits the static program: routing is a `REDUCE`+`SERIAL` pair writing expert ids to a buffer; expert GEMVs are `MAP`
 ops whose blocks index the expert slab through those ids (PR #278's `dyn` ops) — no re-encode, no CPU. Their uneven
-blocks are the natural first customer for intra-op stealing.
+blocks are the natural first customer for intra-op stealing. **Built (#46):** `moe_route` (one SIMD-group per token:
+softmax, top-k, the weights), `moe_gemv` (the GEMV template's *pairs mode*: the work items are (token, slot, block)
+and the slab block is `ids[token][slot] · blocks_per_expert + block`, so a step streams exactly the chosen experts'
+bytes; the experts of a layer are one row-stacked slab), `moe_combine` (the weighted sum, deterministic, no atomics),
+and the `SparseMoE` layer module the `qwen3_moe` package uses — all as op / layer / model packages, no engine edit.
 
 ### 5.12 Inter-op overlap: what MPK V2's software pipelining becomes here
 
