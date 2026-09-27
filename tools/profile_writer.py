@@ -133,7 +133,7 @@ def measure(*, shape: Tuple[int, int] = (17408, 5120), formats: Sequence[str] = 
         except Exception as e:  # noqa: BLE001
             m["tile_ms"], m["tile_error"] = {}, str(e)
             log(f"tile: not available on this device ({e})")
-    # 5. the attention kernel: v1 vs v2 over the contexts and T, v3 where its rows apply (rep · T ≤ 4)
+    # 5. the attention kernels v1, v2 and v3 over the contexts and T
     if attention is not None:
         heads, kv, d = attention
         m["attention_ms"] = {"v1": {}, "v2": {}, "v3": {}}
@@ -141,8 +141,6 @@ def measure(*, shape: Tuple[int, int] = (17408, 5120), formats: Sequence[str] = 
         for ctx in ctxs:
             for t in attn_ts:
                 for kind in ("v1", "v2", "v3"):
-                    if kind == "v3" and (heads // kv) * t > 4:
-                        continue
                     try:
                         r = gqa_bench.run(b.dev, heads, kv, d, ctx, t, 64, min(4, (heads // kv) * t) if kind == "v2" else 4, reps,
                                           v2=kind == "v2", v2_tg=2, v3=kind == "v3")

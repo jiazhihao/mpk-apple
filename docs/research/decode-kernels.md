@@ -998,8 +998,21 @@ vs the one dispatch, µs) [M]:
 
 Faster at every context (0.39–0.80×); at 8192 keys the 0.6B's 120 µs is 33 MB of KV at 280 GB/s — the bus — while the
 8B's 215 pays the rep = 4 re-reads of one kv head's K/V by its four rows' threadgroups (a per-kv-head block with rep
-rows would read once; M9's long-context item, with the SIMD-group-matrix scoring). For rows above 4 the per-core
-chain grows with rows · keys and v2 stays (its lane-per-key scoring has no per-(key, row) reduction).
+rows would read once; M9's long-context item, with the SIMD-group-matrix scoring). The expectation that v2 keeps the
+larger row counts (its lane-per-key scoring has no per-(key, row) reduction) did not survive measurement: in the
+`gqa_bench` harness (one core + merge pair per command buffer, so both sides carry its overhead) v3 is ahead at every
+row count to 32 and both contexts, and ahead of v1 at 16 and 32 rows where v1 had kept ~10 % over v2 [M]:
+
+| rows (rep · T) | keys | v2 core + merge | **v3** | v3 / v2 | v1 |
+|---|---|---|---|---|---|
+| 2 (0.6B, T = 1) | 128 / 1024 | 19.6 / 26.2 | **7.3 / 16.5** | 0.37 / 0.63 | |
+| 4 (0.6B T = 2, 8B T = 1) | 128 / 1024 | 24.4 / 35.6 | **10.2 / 28.8** | 0.42 / 0.81 | |
+| 8 (0.6B T = 4, 8B T = 2) | 128 / 1024 | 32.8 / 57.0 | **16.6 / 50.6** | 0.51 / 0.89 | |
+| 16 (0.6B T = 8, 8B T = 4) | 128 / 1024 | 50.4 / 100.0 | **27.0 / 85.9** | 0.54 / 0.86 | 79.1 / 246.7 |
+| 32 (8B T = 8) | 128 / 1024 | 85.8 / 186.7 | **47.0 / 153.6** | 0.55 / 0.82 | 85.7 / 380.2 |
+
+So the profile's `auto` is v3 at every row count (the rows-per-kernel rule is gone); v2 and v1 remain explicit
+choices, and the writer decides `auto` when v3 wins every point it measured.
 
 **In the layer** (the same protocol, T = 1) [M]: the 0.6B's attention 25.7 → 8.7 µs per layer, the layer
 82 → **62.4 (MLX 57.3, 1.09×)** over 128 tokens of context and 94 → 77.6 (MLX 60.3) over 1024, the step 2.67 → 2.19 ms
@@ -1043,3 +1056,33 @@ and a per-kv-head block with rep rows is the next attention item). The 8B's laye
 1.10×)** and 483 → 465.8 (MLX 420.2, 1.11×), the step 17.7 → 17.2 ms (mlx-lm 15.7, 0.91×): its GEMVs stream at
 250–265 GB/s in isolation (qkv 6144 × 4096 at 251, o 261, gate + up 272, down 260, lm_head 288) where MLX's step
 implies ~290 — the NVFP4 shader's remaining 10 %, the last item at T = 1.
+
+
+**Where the layers stand with v3 at every row count and the small-K GEMV** (the same protocol; the baseline column is
+#113's first measurement) [M]:
+
+| model | T | ctx | baseline µs / layer | **now** | mlx-lm | now / mlx | our step (baseline → now) | mlx-lm step |
+|---|---|---|---|---|---|---|---|---|
+| 0.6B 4-bit | 1 | 128 | 140 | **61** | 59 | **1.03** | 4.38 → 2.08 ms | 2.06 ms |
+| 0.6B 4-bit | 1 | 1024 | 147 | **74** | 57 | **1.29** | 4.57 → 2.45 ms | 2.51 ms |
+| 0.6B 4-bit | 4 | 128 | 252 | **105** | 70 | **1.50** | 7.97 → 3.32 ms | 2.41 ms |
+| 0.6B 4-bit | 4 | 1024 | 346 | **149** | 87 | **1.72** | 10.60 → 4.56 ms | 3.06 ms |
+| 0.6B 4-bit | 8 | 128 | 272 | **128** | 116 | **1.11** | 8.54 → 4.00 ms | 3.96 ms |
+| 0.6B 4-bit | 8 | 1024 | 442 | **206** | 143 | **1.43** | 13.26 → 6.16 ms | 5.02 ms |
+| 8B NVFP4 | 1 | 128 | 549 | **441** | 403 | **1.10** | 21.08 → 17.13 ms | 15.62 ms |
+| 8B NVFP4 | 1 | 1024 | 563 | **463** | 420 | **1.10** | 21.57 → 17.95 ms | 16.29 ms |
+| 8B NVFP4 | 4 | 128 | 1029 | **504** | 455 | **1.11** | 39.37 → 19.41 ms | 17.12 ms |
+| 8B NVFP4 | 4 | 1024 | 1212 | **583** | 521 | **1.12** | 45.98 → 22.26 ms | 19.35 ms |
+| 8B NVFP4 | 8 | 128 | 1085 | **544** | 904 | **0.60** | 41.57 → 20.79 ms | 33.96 ms |
+| 8B NVFP4 | 8 | 1024 | 1391 | **682** | 961 | **0.71** | 52.58 → 25.81 ms | 36.51 ms |
+
+At **T = 1** the 0.6B's layer is level with MLX's over 128 tokens of context (61.0 vs 59.1 µs, 1.03× — 1.00× in the
+previous run: the two are within the run-to-run band; the step 2.06–2.09 ms against MLX's 2.06–2.07) and 1.29× over
+1024 (its attention over 1024 keys), the 8B's 1.09–1.10×. At **T = 4** the 0.6B is 1.50× (from 1.73: the attention
+now 15 µs where it was 33; the tiles on its 1–3.5 MB slabs, 77 µs per layer at 130–175 GB/s, remain 1.6× MLX's `qmm` at
+T = 4) and the 8B 1.11–1.12×; at **T = 8** the 0.6B 1.11× (from 1.30) and the 8B **0.60× and 0.71×** (MLX's `qmm`
+doubles from T = 4 to 8, the tile costs the same). The per-step totals — what a token pays — put the 0.6B under MLX
+at T = 1 at both contexts (its long-context slope is an artifact of MLX's own non-linearity: its step over 1024
+tokens is 2.51 ms against our 2.45) and at T = 8 level (4.00 vs 3.96); the 8B step is 0.91× at T = 1 and 1.6× at
+T = 8. Open: the 8B at T = 1 (the NVFP4 shader's 250–265 GB/s against MLX's ~290), the small model at T = 4 (the
+tile on small slabs), and the attention over long contexts (a per-kv-head v3 block with rep rows).

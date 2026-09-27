@@ -56,7 +56,7 @@ class _Ctx:
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
-    attention: str = "v1"                                                 # the attention kernel (profile / override): v1 | v2 | v3 | auto
+    attention: str = "v1"                                                 # the attention kernel (profile / override): v1 | v2 | v3 | auto (= v3)
     attn_rows: int = 4                                                    # v1's query rows per pass (the profile's attention_rows)
     attn_v2_tg: int = 2                                                   # v2's threadgroups per core (the profile's attention_v2_threadgroups)
     accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
@@ -572,26 +572,17 @@ def _gqa_src(ctx: _Ctx, v2: bool = False, v3: bool = False) -> str:
         "gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
 
 
-GQA_V3_ROWS = 4                                                   # auto: v3 up to this many query rows per block (rep · T)
-
-
 def _gqa_kernel(ctx: _Ctx, heads: int, kv: int, lm_mode: int = 0, t_c: Optional[int] = None) -> str:
-    """The attention kernel of an op: the profile's (or the override's) ``v1`` / ``v2`` / ``v3``, or ``auto`` by the
-    op's query rows rep · T — T the rows the op compiles to (``rows_of``: the static program's T, a dynamic program's
-    t_max, an LM drafter's chain step's one row; the program's T when not given): v3 (core and merge in one dispatch, a
-    threadgroup per row) up to 4 rows — 0.39–0.80× v2's core + merge at T = 1 from 128 to 8192 keys; v2 up to 16 rows
-    (2–3× v1 at T = 1 and at 1024 keys); v1 above (~10 % ahead at 32 rows over a short context) — decode-kernels.md
-    §11. v2 has no LM modes; v1 and v3 have them."""
+    """The attention kernel of an op: the profile's (or the override's) ``v1`` / ``v2`` / ``v3``, or ``auto`` = v3 — core
+    and merge in one dispatch, a threadgroup per query row — which measured faster than v2's core + merge and than v1
+    at every query-row count (2–32) and context (128–8192 keys) tried on the M5 Pro (decode-kernels.md §11.1). v2
+    (up to 32 rows, no LM modes) and v1 stay as explicit choices; ``t_c`` is the rows the op compiles to (``rows_of``:
+    the static program's T, a dynamic program's t_max, an LM drafter's chain step's one row)."""
     rows = (heads // kv) * (ctx.t if t_c is None else t_c)
-    if ctx.attention == "v3":
+    if ctx.attention in ("v3", "auto"):
         return "v3"
     if ctx.attention == "v2":
         return "v2" if rows <= 32 and not lm_mode else "v1"
-    if ctx.attention == "auto":
-        if rows <= GQA_V3_ROWS:
-            return "v3"
-        if rows <= 16 and not lm_mode:
-            return "v2"
     return "v1"
 
 

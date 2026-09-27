@@ -313,7 +313,7 @@ def main(argv=None) -> int:
     ap.add_argument("--sts", default=None, help="STS temperatures JSON for the confidence chain (tools/bench/sts_calibrate.py)")
     ap.add_argument("--barriers", default="minimal", choices=["minimal", "all"], help="ICB barriers: only where a dependency needs one, or on every op")
     ap.add_argument("--attention", default=None, choices=["v1", "v2", "v3", "auto"],
-                    help="the attention kernel (default: the chip profile's; auto = v3 up to 4 query rows per block, v2 up to 16, v1 above)")
+                    help="the attention kernel (default: the chip profile's; auto = v3: core and merge in one dispatch, a threadgroup per query row)")
     ap.add_argument("--accelerator", default=None, choices=["on", "off"], help="T > 1 GEMVs on the tensor-ops tile (default: the chip profile's)")
     ap.add_argument("--math", default="safe", choices=["safe", "fast"], help="Metal math mode for the kernels")
     a = ap.parse_args(argv)

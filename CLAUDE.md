@@ -96,17 +96,19 @@ never shares a params record now. The INT4 pack keeps its (scale, bias) pairs as
 `scale_unit_bytes` in the manifest, older INT4 packs are refused). The attention at few query rows is a third
 kernel (`gqa_decode_v3`, §11.1): core and merge in one dispatch, a 1024-thread threadgroup per query row with the
 keys strided over its SIMD-groups and the fold in threadgroup memory — MLX's decode-attention structure — 0.39–0.80×
-v2's core + merge at T = 1 from 128 to 8192 keys; the profile's `auto` takes it up to 4 query rows, v2 to 16, v1 above.
+v2's core + merge at T = 1 from 128 to 8192 keys and 0.42–0.89× at 4–32 query rows (ahead of v1 there too), so the
+profile's `auto` is v3 at every row count; v2 and v1 stay as explicit choices.
 The small-K GEMVs then got the activation words hoisted ahead of the items (`X_HOIST`: converted and normed once per
 SIMD-group where a lane's columns fit 32 floats), one-row items (RG 1, RSPLIT 16) as tuner candidates and a norm fold
 that requests 16 partials per round — level with MLX's `quantized_matmul` per shape (11.6 / 6.2 / 17.0 / 8.5 µs on the
 0.6B's four against 10.9 / 5.7 / 17.1 / 8.3); the in-program excess over the isolated kernel is the chain's own
 (~0.65 µs per pipeline switch, the barriers, ~2 µs per dispatch), not the pack's file mapping or the StepState read.
-Per layer at T = 1 over 128 tokens of context the 0.6B is **level with MLX (60.1 vs 59.7 µs; the step 2.06 vs
-2.07 ms)** and the 8B 1.10× (443 vs 404; the step 17.2 ms, 0.91× mlx-lm); over 1024 tokens 1.27× and 1.11×; at
-T = 8 the 8B is 0.70× over 128 tokens and level at 1024 while the 0.6B is 1.3–1.4× — what remains of the layer gate
-(every layer strictly faster than MLX's): the attention over long contexts at T = 1 (v3 re-reads a kv head's K/V per
-query row), the NVFP4 shader's last 10 % to MLX's streaming rate on the 8B, and the T = 4 / 8 rows (§11.1).
+Per layer at T = 1 over 128 tokens of context the 0.6B is **level with MLX (60–61 vs 59–60 µs across runs; the step
+2.06–2.09 vs 2.06–2.07 ms)** and the 8B 1.09× (441 vs 403; the step 17.1 ms, 0.91× mlx-lm); over 1024 tokens 1.29×
+and 1.10×; at T = 4 the 0.6B 1.50× (the tile on its small slabs) and the 8B 1.11×; at T = 8 the 0.6B 1.11× and the
+8B **0.60× / 0.71×** — what remains of the layer gate (every layer strictly faster than MLX's): the NVFP4 shader's
+last 10 % to MLX's streaming rate on the 8B at T = 1, the tile on 1–3.5 MB slabs at T = 4, and the attention over long
+contexts (a per-kv-head v3 block with rep rows) (§11.1).
 
 ## Read these, in this order
 

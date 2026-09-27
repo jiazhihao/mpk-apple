@@ -48,17 +48,15 @@ def test_accelerator_plan_reproduces_the_m5_pro_decision():
 
 def test_attention_choice():
     assert attention_choice({(1024, 1): 0.10, (4096, 4): 0.30}, {(1024, 1): 0.08, (4096, 4): 0.25})[0] == "v2"
-    assert attention_choice({(1024, 1): 0.10, (4096, 4): 0.30}, {(1024, 1): 0.08, (4096, 4): 0.30})[0] == "v1"    # not everywhere, and (4096, 4) is 16 rows
-    assert attention_choice({(1024, 1): 0.10, (4096, 8): 0.30}, {(1024, 1): 0.08, (4096, 8): 0.30})[0] == "auto"  # faster up to 16 rows (rep 4), not at 32
-    assert attention_choice({(1024, 4): 0.10, (4096, 4): 0.30}, {(1024, 4): 0.08, (4096, 4): 0.30}, rep=8)[0] == "v1"  # rep 8 · T 4 = 32 rows: nothing in the small regime
-    assert attention_choice({(1024, 1): 0.10, (4096, 8): 0.30}, {(1024, 1): 0.11, (4096, 8): 0.25})[0] == "v1"    # slower where it would be used
+    assert attention_choice({(1024, 1): 0.10, (4096, 4): 0.30}, {(1024, 1): 0.08, (4096, 4): 0.30})[0] == "v1"    # not everywhere
     assert attention_choice({(1024, 1): 0.10}, {})[0] == "v1"
-    # v3 (rep 4: its regime is T = 1): auto when it beats both at every T = 1 point and v2 holds 5–16 rows; otherwise the v1 / v2 rule
+    # v3: auto (= v3) when it beats v1 and v2 at every point measured; otherwise the v1 / v2 rule
     v1m, v2m = {(1024, 1): 0.10, (4096, 1): 0.30, (4096, 4): 0.60}, {(1024, 1): 0.08, (4096, 1): 0.25, (4096, 4): 0.50}
-    assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.20})[0] == "auto"
-    assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.29})[0] == "v2"                     # v3 not faster than v2 at (4096, 1): the v1 / v2 rule
-    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.20})[0] == "v1"  # v2 loses the middle regime: not auto
-    assert attention_choice(v1m, v2m, v3={(4096, 4): 0.1})[0] == "v2"                                       # v3 measured only beyond its rows
+    assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.20, (4096, 4): 0.40})[0] == "auto"
+    assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.29})[0] == "v2"                     # not faster than v2 at (4096, 1)
+    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.20})[0] == "auto"  # v3 wins where measured; v2's loss elsewhere is moot
+    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.31})[0] == "v1"    # v3 loses a point, and so does v2: v1
+    assert attention_choice(v1m, v2m, v3={(8192, 8): 0.1})[0] == "v2"                                       # no common point
 
 
 def _measurements():

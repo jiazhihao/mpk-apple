@@ -104,11 +104,12 @@ def test_attention_kernel_follows_the_profile(tmp_path):
     assert len(v3) == 1 and not [o for o in prog_v3.ops if o.name == "gqa_merge"] and v3[0].meta["attention"] == "v3"
     assert v3[0].grid == (8 * 2, 1, 1) and v3[0].threadgroup == (8 * 32, 1, 1) and sorted(b for b, _, _ in v3[0].bindings) == [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 15]   # D = 32: 8 SIMD-groups
     assert [o for o in prog_v3.ops if o.name == "gqa_decode"] == v3
-    # auto: v3 at rep · T ≤ 4 rows (rep 4 here: T = 1), v2 up to 16 (T = 2..4), v1 above
+    # auto = v3 at every row count (it measured faster than v2 and v1 from 2 to 32 rows, 128 to 8192 keys); v2 / v1 explicit
     pa = Profile.from_dict("d", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "auto"}})
-    for t, fn in ((1, "gqa_decode_v3"), (2, "gqa_decode_v2"), (8, "gqa_decode")):
+    for t in (1, 2, 8):
         prog = compile_program(m, PackFile(tmp_path / "pack"), pa, t=t)
-        assert prog.kernels[[o for o in prog.ops if o.name == "gqa_decode"][0].kernel].function == fn, (t, fn)
+        assert prog.kernels[[o for o in prog.ops if o.name == "gqa_decode"][0].kernel].function == "gqa_decode_v3", t
+        assert not [o for o in prog.ops if o.name == "gqa_merge"]
     prog1 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2)
     prog2 = compile_program(m, PackFile(tmp_path / "pack"), p2, t=2)
     prog3 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2, attention="v2")

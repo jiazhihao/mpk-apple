@@ -119,25 +119,20 @@ def accelerator_plan(shader: Mapping[str, Mapping[int, float]], tile: Mapping[st
 
 
 def attention_choice(v1: Mapping[Any, float], v2: Mapping[Any, float], rep: int = 4, v3: Optional[Mapping[Any, float]] = None) -> Tuple[str, str]:
-    """``(attention, why)`` from the kernels' ms per (context, T). Without v3: v2 when faster than v1 at every measured
-    point by more than the margin; ``auto`` when faster at every point with rep · T ≤ 16 but not everywhere; v1
-    otherwise. With v3 measured: ``auto`` (v3 up to 4 query rows, v2 up to 16, v1 above — the emitter's rule) when v3
-    beats both at every point with rep · T ≤ 4 and v2 wins its own regime (or is not measured there); v3's points are
-    dropped from the decision otherwise, and the v1 / v2 rule stands."""
+    """``(attention, why)`` from the kernels' ms per (context, T). With v3 measured: ``auto`` (= v3, the emitter's rule)
+    when it beats v1 and, where measured, v2 at every point by more than the margin; otherwise — or without v3 — the
+    v1 / v2 rule: ``v2`` when it wins at every point, ``v1`` otherwise."""
     base, why = _attention_choice_v12(v1, v2, rep)
     if not v3:
-        return base, why
-    small3 = [k for k in v3 if rep * int(k[1]) <= 4 and k in v1]
-    if not small3:
-        return base, why + "; v3 not measured at ≤ 4 query rows"
-    if all(v3[k] < v1[k] * (1 - NOISE) and (k not in v2 or v3[k] < v2[k] * (1 - NOISE)) for k in small3):
-        middle = [k for k in v1 if k in v2 and 4 < rep * int(k[1]) <= 16]
-        if not middle or all(v2[k] < v1[k] * (1 - NOISE) for k in middle):
-            return "auto", ("v3 faster at every point up to 4 query rows (" + ", ".join(f"{k}: {v3[k]:.3f} vs v1 {v1[k]:.3f}" + (f" / v2 {v2[k]:.3f}" if k in v2 else "") + " ms" for k in small3)
-                            + "); " + why)
-        return base, why + "; v3 wins ≤ 4 rows but v2 does not win 5–16 rows: " + ", ".join(f"{k}: v2 {v2[k]:.3f} vs v1 {v1[k]:.3f} ms" for k in middle)
-    worst = max(small3, key=lambda k: v3[k] / v1[k])
-    return base, why + f"; v3 not faster at every small point (at {worst}: {v3[worst]:.3f} vs v1 {v1[worst]:.3f} ms)"
+        return base, why + "; v3 not measured"
+    common = [k for k in v3 if k in v1]
+    if not common:
+        return base, why + "; v3 measured at no common point"
+    if all(v3[k] < v1[k] * (1 - NOISE) and (k not in v2 or v3[k] < v2[k] * (1 - NOISE)) for k in common):
+        return "auto", "v3 faster than v1" + (" and v2" if any(k in v2 for k in common) else "") + " at every point: " + ", ".join(
+            f"{k}: {v3[k]:.3f} vs v1 {v1[k]:.3f}" + (f" / v2 {v2[k]:.3f}" if k in v2 else "") + " ms" for k in common)
+    worst = max(common, key=lambda k: v3[k] / min(v1[k], v2.get(k, v1[k])))
+    return base, why + f"; v3 not faster at every point (at {worst}: {v3[worst]:.3f} vs v1 {v1[worst]:.3f}" + (f" / v2 {v2[worst]:.3f}" if worst in v2 else "") + " ms)"
 
 
 def _attention_choice_v12(v1: Mapping[Any, float], v2: Mapping[Any, float], rep: int) -> Tuple[str, str]:
@@ -146,11 +141,6 @@ def _attention_choice_v12(v1: Mapping[Any, float], v2: Mapping[Any, float], rep:
         return "v1", "v2 not measured"
     if all(v2[k] < v1[k] * (1 - NOISE) for k in common):
         return "v2", "v2 faster at every point: " + ", ".join(f"{k}: {v2[k]:.3f} vs {v1[k]:.3f} ms" for k in common)
-    small = [k for k in common if rep * int(k[1]) <= 16]
-    if small and all(v2[k] < v1[k] * (1 - NOISE) for k in small):
-        worst = max(common, key=lambda k: v2[k] / v1[k])
-        return "auto", ("v2 faster at every point up to 16 query rows (" + ", ".join(f"{k}: {v2[k]:.3f} vs {v1[k]:.3f} ms" for k in small)
-                        + f"), not at {worst}: {v2[worst]:.3f} vs {v1[worst]:.3f} ms")
     worst = max(common, key=lambda k: v2[k] / v1[k])
     return "v1", f"v2 not faster everywhere (at {worst}: {v2[worst]:.3f} vs {v1[worst]:.3f} ms)"
 
