@@ -60,8 +60,9 @@ units (2 or 4 lanes share a payload word: the DSpark Markov head in NVFP4, 78 �
 tile inputs written by their producers (`PERM_OUT`) and a one-step pump to **9.56** against mlx-lm plain's 15.9 —
 and against mlx-lm's own speculative decoding with a Qwen3-0.6B 4-bit draft, **9.24 at N = 3**: ours / theirs
 1.036–1.055 (the range is the token stream's: near-tie tokens flip with the tile variants' rounding and the block
-drafter's acceptance with them; ahead on math, even on code, behind on chat and text), the #103 gate not yet met
-(decode-kernels.md §6, §8, §9). The step is at the bus on its GEMVs; the structural lever left is acceptance — an
+drafter's acceptance with them; ahead on math, even on code, behind on chat and text), the #103 gate not met then
+— it is **met on 2026-09-27 with #113's v3 attention in the verify pass and the small-K GEMV: 9.14 vs 9.25, 0.988**
+(math 0.89, code 0.95, text 1.03, chat 1.06; decode-kernels.md §6, §8, §9). The step is at the bus on its GEMVs; the structural lever left is acceptance — an
 LM-drafter plugin (a 0.6B Qwen3 step inside the round) projects 6–8 % under mlx-lm's best. Plain decode is at
 0.776× mlx-lm. The on-screen frame-pacing check (#7, `p15`) found the display path unaffected by
 8–133 ms compute buffers: `max_cb_ms` is a latency knob, not a pacing one.
@@ -74,12 +75,15 @@ placeholder, the tile's permute wrote a slab's K into a scratch sized by a narro
 its context cache — fixed, and a `Program` now carries a `context_capacity` the serial ops enforce.
 The M5 contingency (#100–#103) took the round on the 8B from 18.4 to 9.56 ms per token wall (V3 NVFP4 decode, the
 padding-free pack, the K-split tile, the fused permutes, `stop_at`, the 1 × 2 pump) against mlx-lm's own speculative
-decoding at 9.24 — 1.036×, ahead on math, behind on chat/text (decode-kernels.md §8–§9). The second drafter plugin
+decoding at 9.24 — 1.036× then, 0.988× (9.14 vs 9.25) with #113's kernels on 2026-09-27, ahead on math and code,
+behind on chat/text (decode-kernels.md §8–§9). The second drafter plugin
 (`monolith/spec/lm`, #103): any registered model package built with a `prefix` runs as the classical draft model
 inside the round (the same `Qwen3-0.6B-4bit` mlx-lm drafts with; token-identical to plain decode, mlx-lm's
 acceptance), with graph activation scopes and per-pass mixer modes; it exposed the small-model step: our 0.6B decodes
-at 4.1 ms per token where MLX takes 2.1 (row-split GEMV items and the attention's load-ahead brought it from 4.6),
-so the LM round costs more than mlx-lm's until the per-layer gap closes (decode-kernels.md §10). That comparison
+at 4.1 ms per token where MLX took 2.1 (row-split GEMV items and the attention's load-ahead brought it from 4.6),
+so the LM round cost more than mlx-lm's until the per-layer gap closed (decode-kernels.md §10) — with #113's kernels
+the 0.6B step is 2.06 ms and **the LM round is the best path: 8.97 ms per token at N = 5, 0.971 of mlx-lm's 9.24**
+(math 0.83, code 0.92, chat 1.04, text 1.06). That comparison
 is #113: `tools/bench/layer_vs_mlx.py` measures a decoder layer's cost on both engines as the slope of the step over
 the layer count (decode-kernels.md §11) — at T = 1 the 0.6B's layer was 140 µs against MLX's 59 and the 8B's 549
 against 400; the attention core at T = 1 over a short context was the largest loss (16–24 blocks of 64 keys over 240

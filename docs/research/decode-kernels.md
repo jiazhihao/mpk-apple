@@ -694,6 +694,21 @@ structural lever is acceptance: the 0.6B LM draft takes 4.17 tokens per step at 
 plugin projects to 8.5–8.7 ms per token at N = 5–7, 6–8 % under mlx-lm's best, at the cost of a second model's
 step program inside the round.
 
+**The gate re-read on 2026-09-27** with #113's engine changes in the round — the v3 attention for the verify pass
+(rep · T = 16 rows: 26 vs 50 µs per layer for v2's core + merge) and the small-K GEMV — the same protocol, the same
+day for both engines [M]:
+
+| engine / mode | all | chat | code | math | text | tokens / step |
+|---|---|---|---|---|---|---|
+| ours cost-aware | **9.14** | 11.90 | 7.85 | 6.34 | 11.15 | 3.06 |
+| ours fixed N = 3 | 10.12 | 12.33 | 9.15 | 8.01 | 11.40 | 2.52 |
+| ours plain | 17.09 | | | | | 1.00 |
+| mlx-lm draft N = 3, 4-bit (its best) | **9.25** | 11.27 | 8.29 | 7.11 | 10.87 | 2.94 |
+| mlx-lm plain | 15.93 | | | | | 1.00 |
+
+**Ours / mlx-lm's best = 0.988 — the gate of #103 is met**, by 1.2 %: ahead on math (0.89) and code (0.95), behind on
+text (1.03) and chat (1.06), where the block drafter accepts least. Plain decode is at 1.07× mlx-lm's (17.09 vs 15.93).
+
 ## 10. The LM drafter and the small-model step (#103, 2026-09-26) — `apple-m5-pro-20c_spec_vs_mlx.jsonl`
 
 The second drafter plugin (`monolith/spec/lm`, design §5.8) runs a registered model package as the draft model of
@@ -788,6 +803,24 @@ chip. Also in this run: the re-tuned plain decode of the 8B is 21.02 (§9: 20.62
 the 4096-row projections (RSPLIT 8, crew2: 0.036 vs 0.081 ms in isolation for o_proj, cold and streamed) and the
 step did not follow; the autotuner's isolated timings are a follow-up of their own (the same blind spot as the
 gate|up pick above). The rows are in `apple-m5-pro-20c_spec_vs_mlx.jsonl` with `"drafter": "lm"`.
+
+**Re-read on 2026-09-27 with #113's kernels** — the 0.6B's chain steps on the v3 attention and the small-K GEMV (its
+step 4.1 → 2.06 ms per token), the target's verify pass on v3 — the same protocol, both engines the same day [M]:
+
+| engine / mode | all | chat | code | math | text | tokens / step |
+|---|---|---|---|---|---|---|
+| ours LM drafter, cost (= N = 5) | **8.97** | 11.71 | 7.61 | 5.91 | 11.51 | 3.77 |
+| ours LM drafter, N = 3 | 9.42 | 11.52 | 8.35 | 7.10 | 11.35 | 2.94 |
+| ours LM drafter, N = 7 | 9.29 | 12.88 | 7.47 | 5.53 | 12.28 | 4.35 |
+| ours plain | 17.07 | | | | | 1.00 |
+| mlx-lm draft N = 3 (4-bit 0.6B, its best) | **9.24** | 11.26 | 8.28 | 7.09 | 10.86 | 2.94 |
+| mlx-lm draft N = 5 / N = 7 | 11.38 / 13.26 | 15.02 / 18.55 | 9.86 / 10.83 | 7.31 / 7.79 | 14.28 / 17.21 | 3.69 / 4.17 |
+| mlx-lm plain | 15.93 | | | | | 1.00 |
+
+**Ours / mlx-lm's best = 0.971 — the LM-drafter round is the best speculative path on this machine and meets the
+gate of #103 by 2.9 %** (the DSpark round the same day: 9.14, 0.988, §8): ahead on math (0.83) and code (0.92),
+behind on chat (1.04) and text (1.06), where both drafters accept least; 12.83 → 8.97 since the plugin landed. The
+arithmetic above asked for a chain step at ≤ ~2.5 ms — it is 2.06.
 
 ## 11. The layer-level comparison against MLX (#113, 2026-09-26) — `apple-m5-pro-20c_layers_vs_mlx.jsonl`
 
