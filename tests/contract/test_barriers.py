@@ -110,6 +110,28 @@ def test_attention_kernel_follows_the_profile(tmp_path):
         prog = compile_program(m, PackFile(tmp_path / "pack"), pa, t=t)
         assert prog.kernels[[o for o in prog.ops if o.name == "gqa_decode"][0].kernel].function == "gqa_decode_v3", t
         assert not [o for o in prog.ops if o.name == "gqa_merge"]
+    # v3 allots no partial workspace: the graph's part_o / part_md values are not allocated (nothing binds them)
+    assert not [n for n in prog_v3.buffers if n.endswith("part_o") or n.endswith("part_md")]
+    prog_v1 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=1)
+    assert [n for n in prog_v1.buffers if n.endswith("part_o")] and [n for n in prog_v1.buffers if n.endswith("part_md")]
+    # v2's threadgroups come from the core count times attention_v2_threadgroups, whatever the crew's threadgroups per core
+    p2x = Profile.from_dict("e", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "v2", "threadgroups_per_core": 2,
+                                                     "attention_v2_threadgroups": 2}})
+    prog2x = compile_program(m, PackFile(tmp_path / "pack"), p2x, t=2)
+    core2x = [o for o in prog2x.ops if o.name == "gqa_decode"][0]
+    assert core2x.grid == (20 * 2, 1, 1) and prog2x.kernels[core2x.kernel].function == "gqa_decode_v2"
+    # a crew larger than the layer sized its partials for (GQA_CREW_MAX): the params' chunk count is the values' capacity
+    import struct
+    big = Profile.from_dict("f", {**base, "gpu_cores": 1000, "engine": {"family": "Apple10", "lane_order": "interleaved16", "threadgroups_per_core": 2}})
+    m_long = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=65536)
+    prog_big = compile_program(m_long, PackFile(tmp_path / "pack"), big, t=1)
+    core_big = [o for o in prog_big.ops if o.name == "gqa_decode"][0]
+    prm_big = prog_big.buffers[[b for i, b, _ in core_big.bindings if i == 9][0]].init
+    n_chunks_max = struct.unpack("<IIIIIIIIIIIIffIIIIII", prm_big[:80])[15]
+    part_o = m_long.blocks[1].mixer.prefix + "part_o" if hasattr(m_long.blocks[1].mixer, "prefix") else None
+    cap = [v for v in prog_big.buffers if v.endswith("part_o")]
+    assert n_chunks_max == 65536 // 64 == 1024, n_chunks_max            # ceil(ctx_max / 64): what the layer allotted (the 16-key floor caps the small-chunk rule at 482 < 1024)
+    assert cap
     prog1 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2)
     prog2 = compile_program(m, PackFile(tmp_path / "pack"), p2, t=2)
     prog3 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2, attention="v2")

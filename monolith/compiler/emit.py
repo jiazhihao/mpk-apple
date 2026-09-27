@@ -50,6 +50,7 @@ class _Ctx:
     t: int
     n_sg: int
     tg: int
+    cores: int = 20                                                       # the GPU cores (n_sg carries the profile's threadgroups per core as well)
     values: Dict[str, Value] = field(default_factory=dict)
     windows: Dict[str, Tuple[str, int]] = field(default_factory=dict)      # pack entry name -> (buffer, offset)
     row_scales: Dict[str, Tuple[str, int]] = field(default_factory=dict)
@@ -419,7 +420,9 @@ def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variant
         norm_in = op.attrs.get("norm")
         parts_in = ctx.stat_parts.get(op.inputs[2].name, 1) if norm_in else 1
         shader_ms = ctx.tuner.tune_gemv(info, t_c, op.attrs.get("epilogue"), bool(norm_in), stat_parts=parts_in).ms
-        tile_ms = ctx.tuner.tune_gemm(info, tm, op.attrs.get("epilogue")).ms
+        # the tile path of a norm-fed input is a permute dispatch (the norm applied on the way) plus the tile; an
+        # un-normed input is written permuted by its producer (the attention merge, the silu·mul tile) — no permute
+        tile_ms = ctx.tuner.tune_gemm(info, tm, op.attrs.get("epilogue"), permute=bool(norm_in), norm_fed=bool(norm_in), stat_parts=parts_in).ms
         if shader_ms > 0 and tile_ms > 0 and shader_ms < tile_ms:
             return variants, None
     if t_src == STATIC_ROWS or not ctx.dynamic_t:
@@ -595,7 +598,9 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     rep = heads // kv
     if v2:
-        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=min(4, rep * ctx.t)), STEP_STATE="1"), (ctx.n_sg // 12) * ctx.attn_v2_tg, kernels.GQA_V2_CHUNK_MIN
+        # v2's threadgroups: attention_v2_threadgroups per core — from the core count, not the crew (n_sg already carries the
+        # profile's threadgroups_per_core: dividing it by 12 doubled v2's grid on a two-threadgroup profile)
+        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=min(4, rep * ctx.t)), STEP_STATE="1"), ctx.cores * ctx.attn_v2_tg, kernels.GQA_V2_CHUNK_MIN
     chunk = int(a.get("chunk", 64))
     lm_mode, chain_i = int(a.get("lm_mode", 0)), int(a.get("chain_i", 0))
     if v2 and lm_mode:
@@ -620,10 +625,8 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     kd = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_decode_v2" if v2 else "gqa_decode", macros)
     rep = heads // kv
     t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
-    n_chunks_max, rows_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, n_sg), rep * t_c   # the merge derives the same count
-    po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
-    if _value_bytes(part_o, ctx.t) < po or _value_bytes(part_md, ctx.t) < pm:
-        raise ValueError(f"gqa_decode: the partial values are too small for {kv} kv heads × {n_chunks_max} chunks × {rows_max} rows")
+    rows_max = rep * t_c
+    n_chunks_max = _gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, chunk, n_sg)   # the merge derives the same count
     prm = ctx.params("gqa", kernels.gqa_params(
         heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
         v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
@@ -633,6 +636,18 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *ctx.buf(part_o)), (8, *ctx.buf(part_md)), (9, prm, 0), (15, st, 0)],
             grid, tg, op.kind, writes=[1, 2, 7, 8], attention="v2" if v2 else "v1")
+
+
+def _gqa_chunk_capacity(ctx: _Ctx, part_o: Value, part_md: Value, ctx_max: int, kv: int, rep: int, d: int, chunk: int, n_sg: int) -> int:
+    """The chunk count the core's and the merge's params carry: the run-time chunk rule (``pick_chunk``, bounded by
+    ``n_chunks_max``) for this dispatch's crew, capped at the partial values the layer allotted — it sized them for a
+    crew of ``GQA_CREW_MAX`` SIMD-groups, and a larger profile (more cores, two threadgroups per core) would otherwise
+    ask for more chunks than they hold. The values must hold the chunks of the compiled ``chunk`` at least."""
+    cap_o, cap_md = ctx.shape(part_o)[1] // (kv * rep * d), ctx.shape(part_md)[1] // (kv * rep * 2)
+    cap = min(cap_o, cap_md)
+    if cap < -(-ctx_max // chunk):
+        raise ValueError(f"gqa_decode: the partial values hold {cap} chunks, the context needs {-(-ctx_max // chunk)} of {chunk} keys")
+    return min(kernels.gqa_chunks_max(ctx_max, kv, chunk, n_sg), cap)
 
 
 def _gqa_merge(ctx: _Ctx, op: Op) -> None:
@@ -656,9 +671,8 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     if fused:
         macros = dict(macros, **fused[1])
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros)
-    n_chunks_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, n_sg) if core is not None else ctx.shape(part_o)[1] // (kv * rep * d)
-    if n_chunks_max * kv * rep * d > ctx.shape(part_o)[1]:
-        raise ValueError(f"gqa_merge: the partial values hold {ctx.shape(part_o)[1] // (kv * rep * d)} chunks, the core writes {n_chunks_max}")
+    n_chunks_max = (_gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, chunk, n_sg) if core is not None
+                    else ctx.shape(part_o)[1] // (kv * rep * d))
     t_c, _ = ctx.rows_of(op)
     prm = ctx.params("gqa_merge", kernels.gqa_params(
         heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
@@ -1000,7 +1014,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
         raise ValueError(f"emit_program: T = {t} must be within 1..t_max = {layout.t_max}")
     check_coverage(g, profile)
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
-    ctx = _Ctx(program, packs, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, values=g.values, dynamic_t=dynamic_t,
+    ctx = _Ctx(program, packs, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, cores=profile.gpu_cores, values=g.values, dynamic_t=dynamic_t,
                speculative=speculative, attention=attention or profile.attention, attn_rows=int(profile.attention_rows), accelerator=accelerator or profile.accelerator,
                attn_v2_tg=int(profile.attention_v2_threadgroups),
                accel_min_t=dict(profile.accelerator_min_t), tuner=tuner, eos=eos, ring_capacity=ring_capacity, t_min=max(1, int(t_min)))
@@ -1041,6 +1055,12 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
                 writes=[1, 2])
     elif tail is not None:
         raise ValueError(f"emit_program: unknown tail {tail!r}")
+    # an arena value no dispatch binds is not allocated: the graph allots the attention's partial workspaces for the
+    # two-dispatch kernels, and with v3 (core and merge in one) nothing reads or writes them — the 8B's part_o alone
+    # is 8 MiB per layer at a 32K context
+    bound = {name for op in program.ops for _, name, _ in op.bindings}
+    for name in [n for n, spec in program.buffers.items() if spec.role == "arena" and n not in bound]:
+        del program.buffers[name]
     place_barriers(program, barriers)
     return program
 

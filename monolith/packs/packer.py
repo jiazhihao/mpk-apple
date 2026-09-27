@@ -157,7 +157,7 @@ class Packer:
             "name": req.name, "format": req.format, "offset": off, "nbytes": len(data), "n": n, "k": k,
             "rows": r, "unit_bytes": info.unit_bytes, "payload_bytes": info.payload_bytes, "scale_bytes": info.scale_bytes,
             "lane_order": info.lane_order, "scale_group": info.scale_group, "n_blocks": info.n_blocks, "scale_placement": info.scale_placement,
-            "scale_unit_bytes": info.scale_unit_bytes,
+            "scale_unit_bytes": info.scale_unit_bytes, "scale_dtype": info.scale_dtype,
             "row_scales_offset": rs_off, "row_perm": req.row_perm is not None,
             "segments": [dict(s.describe(), rows=int(nr), tensor_scale=float(sc)) for s, nr, sc in zip(req.segments, seg_rows, scale_of_seg)],
         }
@@ -234,7 +234,8 @@ class PackFile:
         s = self.slabs[name]
         return PackInfo(s["format"], s["n"], s["k"], s["rows"], s["unit_bytes"], s["payload_bytes"], s["scale_bytes"],
                         s["lane_order"], s["n_blocks"], 1.0, s["scale_group"], s.get("scale_placement", "inline"),
-                        int(s.get("scale_unit_bytes", 8 if (s["format"] == "int4_affine" and s["scale_bytes"]) else 0)))   # older INT4 packs: FP32 pairs
+                        int(s.get("scale_unit_bytes", 8 if (s["format"] == "int4_affine" and s["scale_bytes"]) else 0)),   # older INT4 packs: FP32 pairs
+                        s.get("scale_dtype", "bf16" if (s["format"] == "int4_affine" and s["scale_bytes"] and int(s.get("scale_unit_bytes", 8)) == 4) else ""))   # 4-byte pairs before scale_dtype: BF16
 
     def slab_bytes(self, name: str) -> np.ndarray:
         s = self.slabs[name]

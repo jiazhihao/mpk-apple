@@ -96,8 +96,9 @@ query rows per step). A static-T program emitted the T = 1 shader variant beside
 program was never affected. A session shares its programs' buffers by name, and a static T = 8 program's params
 records collided with the dynamic program's (both compile at T = 8): three o_proj tiles ran another GEMV's record —
 out-of-bounds loads and stores, the bench's 16 s steps and stall; params names carry the program kind and `Engine`
-never shares a params record now. The INT4 pack keeps its (scale, bias) pairs as BF16 (the checkpoint's bytes;
-`scale_unit_bytes` in the manifest, older INT4 packs are refused). The attention at few query rows is a third
+never shares a params record now. The INT4 pack keeps its (scale, bias) pairs in the checkpoint's own 16-bit dtype, BF16 or F16 (the
+checkpoint's bytes and its exact dequantization; `scale_unit_bytes` / `scale_dtype` in the manifest, older INT4 packs
+are refused). The attention at few query rows is a third
 kernel (`gqa_decode_v3`, §11.1): core and merge in one dispatch, a 1024-thread threadgroup per query row with the
 keys strided over its SIMD-groups and the fold in threadgroup memory — MLX's decode-attention structure — 0.39–0.80×
 v2's core + merge at T = 1 from 128 to 8192 keys and 0.42–0.89× at 4–32 query rows (ahead of v1 there too), so the
@@ -192,19 +193,19 @@ check` (same for `p14`) compiles every kernel variant without dispatching.
 
 ## Next steps
 
-0. **Keep building** — the M5 contingency tasks (#100–#103): the NVFP4 GEMV decode as MLX does it, the lane-row
-   unit without its padding, the step's non-GEMV time, and the gate — our per-token latency under speculative
-   decoding below mlx-lm's own speculative decoding on the same target bytes and draft length. Then the staged
-   multi-SIMD-group tile for T ≥ 32 and the K-split for the down projection (decode-kernels.md §6), the attention
-   core's SIMD-group-matrix scoring for the long-context rows. The autotuner at install time is built (#49, `tools/profile_writer.py`: it measures the
-   `engine` block from the kernel harnesses and merges it into `profiles/<chip>-<cores>c.json`; the other chips'
-   profiles wait for the machines). Intra-op stealing (#44) is built, measured and off by
-   default (decode-kernels.md §7). The M3 Pro and M4 tasks (#2, #3, #5, #8, #12's M3 Pro rows, #49's M4 chips) were
-   dropped from the roadmap on 2026-09-25 — this M5 Pro is the only machine. Still open and needing a machine this
-   one is not: the 27B items (#31's 27B rows, #36, #40's 27B rows, #46 — the smallest MoE checkpoint in a format we
-   read, `nvidia/Qwen3-30B-A3B-NVFP4`, is ~18.5 GB resident against this machine's ~18–19 GB GPU working set), #42 (a
-   GPU box), #43 (Max-class parts), #49's other M5 chips and #52 (macOS 27). Doable here: #7, the on-screen
-   frame-pacing check.
+0. **Keep building.** The M5 contingency tasks (#100–#103) are done and closed (2026-09-27): the gate is met at 8.97
+   (LM drafter) / 9.14 (DSpark) ms per token against mlx-lm's 9.24. Open on this machine: #113's remaining items —
+   the 8B's 9 % at T = 1 (the dispatch chain: switches, barriers, cold starts, and the attention nothing overlaps),
+   the small model at T = 4 (the tile's fixed cost on 1–3.5 MB slabs), the attention over long contexts (a per-kv-head
+   v3 block with rep rows) — then the staged multi-SIMD-group tile for T ≥ 32 and the K-split for the down projection
+   (decode-kernels.md §6), the attention core's SIMD-group-matrix scoring for the long-context rows; and merging the
+   #109–#114 stack. The autotuner at install time is built (`tools/profile_writer.py`: it measures the `engine`
+   block from the kernel harnesses and merges it into `profiles/<chip>-<cores>c.json`). Intra-op stealing (#44) is
+   built, measured and off by default (decode-kernels.md §7). Everything this M5 Pro cannot host was dropped from the
+   roadmap and its issues closed as not planned: the M3 Pro and M4 tasks (2026-09-25) and, on 2026-09-27, the 27B
+   items (#31's 27B rows, #36's and #40's), #46 (the smallest MoE checkpoint in a format we read,
+   `nvidia/Qwen3-30B-A3B-NVFP4`, is ~18.5 GB resident against this machine's ~18–19 GB GPU working set), #42 (a GPU
+   box), #43 (Max-class parts), #49's other M5 chips and #52 (macOS 27) — they reopen with the machine.
 1. A new chip, if one arrives: run the suite, commit the results, fill its column in the hardware report §1, walk
    H1–H10 in §4, run `tools/profile_writer.py`, and update the design where a hypothesis fails (D4, D5, D6, D8, D14
    are the chip-sensitive decisions).

@@ -41,8 +41,8 @@ Best geometry per shape and T; the crew ×1 number in the last column:
 Also at the crew geometry, T = 1, 17408×5120: BF16 284 GB/s (93 %), INT8 266 GB/s (87 %).
 
 The INT4 affine rows (format 2, #47, 2026-09-24, the same sweep: 126 points, every point ≤ 1 ULP of the oracle) are
-the plugin's own decode — nibble → float, one (scale, bias) pair per group of 64 (FP32 when this was measured, BF16
-since #113: 0.5625 bytes per weight instead of 0.625), the bias folded in as `bias · Σx` per group. At T = 1 it
+the plugin's own decode — nibble → float, one (scale, bias) pair per group of 64 (FP32 when this was measured, the
+checkpoint's 16-bit dtype — BF16 or F16 — since #113: 0.5625 bytes per weight instead of 0.625), the bias folded in as `bias · Σx` per group. At T = 1 it
 streams at 75–85 % of nominal, a third above NVFP4's
 LUT decode (47–60 %) and within 10 % of FP8; the best geometry at T = 1 was one block per SIMD-group on every shape
 (the crew ×1 column is 158–220). At T = 2 and 4 it falls to the ALU bound like the other formats (37–51 %, 23–32 %).

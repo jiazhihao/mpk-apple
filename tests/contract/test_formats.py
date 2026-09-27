@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
 
+from monolith import kernels
 from monolith.formats import FORMATS, PackLayout
 from monolith.formats.blm import LANES
-from monolith.formats.fp import e2m1_to_f32, e4m3_to_f32, unpack_nibbles
+from monolith.formats.fp import bf16_to_f32, e2m1_to_f32, e4m3_to_f32, f32_to_bf16, unpack_nibbles
 
 rng = np.random.default_rng(0)
 K = 1024   # every stripe holds whole scale groups: K/32 = 32 columns per lane
@@ -123,8 +124,10 @@ def test_int4_affine_matches_mlx_and_the_checkpoint_layout():
     mx = pytest.importorskip("mlx.core")
     w = _w(n=8, k=1024)
     q, sc, bi = mx.quantize(mx.array(w), group_size=64, bits=4)
-    q, sc, bi = np.array(q), np.array(sc.astype(mx.float32)), np.array(bi.astype(mx.float32))
+    sc, bi = sc.astype(mx.bfloat16), bi.astype(mx.bfloat16)                                  # an MLX BF16 checkpoint's pairs (FP32 pairs
+    q, sc, bi = np.array(q), np.array(sc.astype(mx.float32)), np.array(bi.astype(mx.float32))   # not exact in 16 bits are refused)
     ours = f.unpack({"weight": q, "scales": sc, "biases": bi}, shape=(8, 1024))
+    assert ours.params["pair_dtype"] == "bf16"
     codes = unpack_nibbles(ours.tensors["weight"])
     mine = f.quantize(w)
     assert np.array_equal(codes, unpack_nibbles(mine.tensors["weight"]))                      # the same nibble order and rule
@@ -136,3 +139,32 @@ def test_int4_affine_matches_mlx_and_the_checkpoint_layout():
     with pytest.raises(ValueError):
         f.pack(f.quantize(_w(n=4, k=256), group=32), PackLayout(rows=4))                     # the kernel decode is compiled for 64
 
+
+
+def test_int4_affine_keeps_the_checkpoint_pair_dtype(tmp_path):
+    """The (scale, bias) pairs are packed in the checkpoint's own 16-bit dtype — F16 for AWQ / GPTQ / F16 MLX models,
+    BF16 for BF16 ones — and dequantize to the checkpoint's values to the bit; FP32 pairs are kept when one of the two
+    holds them exactly and refused otherwise (the pack keeps 16-bit pairs; re-quantize instead)."""
+    f = FORMATS.get("int4_affine")
+    n, k = 32, 1024
+    rng = np.random.default_rng(11)
+    codes = rng.integers(0, 2 ** 32, size=(n, k // 8), dtype=np.uint64).astype(np.uint32)
+    sc16 = (rng.uniform(0.5, 2.0, size=(n, k // 64)) * 0.02 / 7.5).astype(np.float16)
+    bi16 = (-7.5 * sc16.astype(np.float32) * rng.uniform(0.8, 1.2, size=sc16.shape)).astype(np.float16)
+    spec = f.unpack({"weight": codes, "scales": sc16, "biases": bi16}, shape=(n, k))
+    assert spec.params["pair_dtype"] == "f16"
+    for placement in ("inline", "block"):
+        data, info = f.pack(spec, PackLayout(rows=16, scale_placement=placement))
+        assert info.scale_dtype == "f16" and info.scale_unit_bytes == 4
+        back = f.unpack_pack(data, info)
+        assert np.array_equal(back.tensors["scales"], sc16.astype(np.float32)) and np.array_equal(back.tensors["biases"], bi16.astype(np.float32))
+        assert np.array_equal(f.dequantize(back), f.dequantize(spec))
+        assert kernels.unit_geometry(info).get("SCALE_F16") == "1"
+    # BF16 bit patterns (the reader's uint16) stay BF16; exact FP32 pairs take BF16 first, then F16; inexact ones are refused
+    bf = f32_to_bf16(sc16.astype(np.float32) * 1.001)
+    assert f.unpack({"weight": codes, "scales": bf, "biases": bf}, shape=(n, k)).params["pair_dtype"] == "bf16"
+    assert kernels.unit_geometry(f.pack(f.unpack({"weight": codes, "scales": bf, "biases": bf}, shape=(n, k)), PackLayout(rows=16))[1]).get("SCALE_F16") is None
+    assert f.unpack({"weight": codes, "scales": bf16_to_f32(bf), "biases": bf16_to_f32(bf)}, shape=(n, k)).params["pair_dtype"] == "bf16"
+    assert f.unpack({"weight": codes, "scales": sc16.astype(np.float32), "biases": bi16.astype(np.float32)}, shape=(n, k)).params["pair_dtype"] == "f16"
+    with pytest.raises(ValueError, match="neither BF16 nor F16"):
+        f.unpack({"weight": codes, "scales": sc16.astype(np.float32) * np.float32(1.0000001), "biases": bi16.astype(np.float32)}, shape=(n, k))

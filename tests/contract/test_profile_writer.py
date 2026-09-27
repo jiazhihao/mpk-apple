@@ -54,9 +54,10 @@ def test_attention_choice():
     v1m, v2m = {(1024, 1): 0.10, (4096, 1): 0.30, (4096, 4): 0.60}, {(1024, 1): 0.08, (4096, 1): 0.25, (4096, 4): 0.50}
     assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.20, (4096, 4): 0.40})[0] == "auto"
     assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.29})[0] == "v2"                     # not faster than v2 at (4096, 1)
-    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.20})[0] == "auto"  # v3 wins where measured; v2's loss elsewhere is moot
-    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.31})[0] == "v1"    # v3 loses a point, and so does v2: v1
+    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.20, (4096, 4): 0.40})[0] == "auto"  # v3 wins everywhere; v2's loss is moot
+    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.31, (4096, 4): 0.40})[0] == "v1"    # v3 loses a point, and so does v2: v1
     assert attention_choice(v1m, v2m, v3={(8192, 8): 0.1})[0] == "v2"                                       # no common point
+    assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.20})[0] == "v2"                     # a v1 point v3 could not run: not auto
 
 
 def _measurements():

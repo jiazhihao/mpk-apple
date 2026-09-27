@@ -70,6 +70,7 @@ class PackInfo:
     scale_group: int = 0      # weights per block scale (0 = no block scales)
     scale_placement: str = "inline"   # "inline": scales inside the unit; "block": the block's scale region after its payload words
     scale_unit_bytes: int = 0 # bytes per block-scale entry as the pack was written (0 = the format's; a pack from an older format layout is refused)
+    scale_dtype: str = ""    # the block-scale entries' dtype where a format keeps more than one (int4_affine: "bf16" or "f16" pairs; "" = the format's default)
 
     @property
     def lanes_per_word(self) -> int:
@@ -133,7 +134,7 @@ def _pad16(x: int) -> int:
 
 
 def pack_blm(payload: np.ndarray, scales: Optional[np.ndarray], layout: PackLayout, *, format: str, k: int,
-             tensor_scale: float = 1.0, scale_group: int = 0) -> Tuple[bytes, PackInfo]:
+             tensor_scale: float = 1.0, scale_group: int = 0, scale_dtype: str = "") -> Tuple[bytes, PackInfo]:
     """``payload``: uint8 ``[N, 32, P]`` (lane ℓ's stripe bytes per row); ``scales``: uint8 ``[N, 32, S]`` or None."""
     payload = np.ascontiguousarray(payload, dtype=np.uint8)
     if payload.ndim != 3 or payload.shape[1] != LANES:
@@ -173,7 +174,7 @@ def pack_blm(payload: np.ndarray, scales: Optional[np.ndarray], layout: PackLayo
 
     info = PackInfo(format, n, k, r, unit, p_bytes, s_bytes, layout.lane_order, n_blocks, float(tensor_scale),
                     scale_group, "block" if block_scales else "inline",
-                    int(getattr(FORMATS.get(format), "scale_unit_bytes", 1)) if s_bytes else 0)
+                    int(getattr(FORMATS.get(format), "scale_unit_bytes", 1)) if s_bytes else 0, scale_dtype if s_bytes else "")
     payload_region = np.ascontiguousarray(data).reshape(n_blocks, r * LANES * unit)
     if not block_scales:
         return payload_region.tobytes(), info

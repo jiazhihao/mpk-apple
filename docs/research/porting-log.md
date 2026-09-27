@@ -52,7 +52,7 @@ Recorded as it happens, with the time and the files touched, so the porting guid
 ## Format 2: affine INT4 groups (`formats/int4_affine`, MLX / AWQ / GPTQ) — 2026-09-24
 
 * **The plugin (`monolith/formats/int4_affine.py`, ~150 lines):** `unpack` (U32 nibbles, F16/BF16 scales and
-  biases → pairs: FP32 then, BF16 — the checkpoint's own dtype and half the bytes — since #113), `dequantize`,
+  biases → pairs: FP32 then, the checkpoint's own 16-bit dtype (BF16 or F16) and half the bytes since #113), `dequantize`,
   `quantize` (mlx 0.32's `affine_quantize` rule reproduced bit-exactly in FP32, the pair rounded to BF16 last —
   the edge of larger magnitude snapped to an integer code, so it is *not* a fixed point under re-quantization; the
   contract test bounds the drift instead of asking for identity), `pack` / `unpack_pack` (FP32 (scale, bias) pairs per
