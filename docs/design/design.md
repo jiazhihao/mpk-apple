@@ -231,7 +231,10 @@ exists yet to confirm it.*
   not replayable **[S]**, so the ICB is the replay mechanism under both Metal 3 and Metal 4 encoders. ICBs have no
   `setBytes`, and their buffer-bind offsets are 32-bit **[R]**: every op reads a small parameter record from a buffer,
   and large weight buffers are addressed through 64-bit GPU addresses stored in that record (tier-2 argument buffers +
-  one residency set) rather than through bind offsets.
+  one residency set) rather than through bind offsets. A session's programs (the dynamic-T program; a static one per
+  T the bench or a test asks for) share buffers **by name** — weights, states, StepState, the ring, activations — and
+  a parameter record is the one thing never shared: its name carries the program kind and `Engine` allocates its own
+  (two programs' counters once met on one name, and three tiles ran another GEMV's record, #113).
 * Prior art: tinygrad replays a per-step ICB; OpenAI's gpt-oss Metal reference encodes N decode iterations with GPU
   sampling and on-GPU token feedback into one command buffer; uzu and Apple's Core AI sample engine keep 1–3 steps in
   flight **[R]**. None compiles a general model into a replayed, self-advancing program; that is the gap this engine

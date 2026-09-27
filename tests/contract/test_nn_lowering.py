@@ -361,3 +361,25 @@ def test_attention_norm_scale_flag():
     assert std.qkv.n == 8 * 32 + 2 * 2 * 32 and gem.qkv.n == 8 * 2 * 32 + 2 * 2 * 32
     import numpy as np
     assert np.array_equal(std.qkv.row_perm[: 8 * 32], np.arange(8 * 32))      # full RoPE: the head-dim permutation is the identity
+
+
+def test_params_records_are_per_program(tmp_path):
+    """A session shares its programs' buffers by name (Engine): the dynamic-T program and a static program at its
+    t_max both compile with T = t_max, and their params records must not share a name — a static T = 8 program's
+    o_proj tiles once read another GEMV's record through the shared name (#113)."""
+    from monolith.compiler import compile_program
+    from monolith.core import StepStateLayout
+    from monolith.core.profile import Profile
+
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
+    layout = StepStateLayout()
+    dyn = compile_program(m, PackFile(tmp_path / "pack"), prof, dynamic_t=True, layout=layout)
+    static = compile_program(m, PackFile(tmp_path / "pack"), prof, t=layout.t_max, layout=layout)
+    params = lambda prog: {k for k, v in prog.buffers.items() if v.role == "params"}       # noqa: E731
+    assert params(dyn) and params(static) and not (params(dyn) & params(static))
+    for name in dyn.buffers.keys() & static.buffers.keys():                            # a shared name is the same bytes
+        a, b = dyn.buffers[name], static.buffers[name]
+        assert a.init == b.init, name

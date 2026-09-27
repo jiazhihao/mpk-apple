@@ -17,6 +17,7 @@ context and steps; every number is the best of ``reps`` paired alternations.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
 import time
@@ -29,6 +30,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 # ---- ours -------------------------------------------------------------------------------------------------------------
+
+def swap_used_mb() -> float:
+    import subprocess
+
+    try:
+        out = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=5).stdout
+        return float(out.split("used = ")[1].split("M")[0])
+    except Exception:  # noqa: BLE001
+        return float("nan")
+
 
 def our_model(model_dir: str, k: Optional[int], max_context: int):
     from monolith.models import resolve_model
@@ -238,6 +249,9 @@ def main() -> int:
                     for eng in order:
                         if eng == "ours":
                             g, w = our_step_ms(sess, prompts[c], t, a.steps)
+                            if g > 1000.0:                                                 # a step of seconds is a paged-out pack, not a measurement
+                                print(f"  WARNING: layers {k} T {t} ctx {c}: {g:.0f} ms per step — memory pressure (swap {swap_used_mb():.0f} MB); skipping", flush=True)
+                                break
                             ours_gpu, ours_wall = min(ours_gpu, g), min(ours_wall, w)
                         elif mlx_model is not None:
                             mlx_wall = min(mlx_wall, mlx_step_ms(mlx_model, mlx_tok, prompts[c], t, a.steps))
@@ -258,7 +272,9 @@ def main() -> int:
                         print(f"  mlx per-layer ops at T {t} ctx {c} (ms per call): " + ", ".join(f"{kk} {v:.4f}" for kk, v in sorted(mp.items())), flush=True)
                         rows.append({"chip": info.name, "model": name, "T": t, "ctx": c, "engine": "mlx", "per_layer_ops": {kk: round(v, 5) for kk, v in mp.items()}})
         sess.engines.clear()
-        del sess
+        sess.buffers = None                                                # the pack's file-backed windows and the arenas go with the session:
+        del sess                                                           # two 8B sessions beside mlx-lm's model paged the pack out (16 s steps)
+        gc.collect()
     # the per-layer slopes
     print("\n| model | T | ctx | ours ms / layer (GPU) | ours (wall) | mlx-lm ms / layer (wall) | ours / mlx | ours step (all layers, wall) | mlx step |")
     print("|---|---|---|---|---|---|---|---|---|")

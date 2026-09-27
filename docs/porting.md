@@ -249,8 +249,10 @@ Today an op needs:
 3. `monolith/kernels.py`: the `*_source`, `*_macros` and `*_params` helpers that assemble the MSL and the parameter
    struct — the same code the tests and the emitter use.
 4. `monolith/compiler/emit.py`: a handler in `HANDLERS[kind]` that binds buffers (`ctx.buf(value)`), scratch
-   (`ctx.scratch`), the grid, and declares which bindings the kernel **writes** (`ctx.add(..., writes=[...])`) —
-   the barrier pass (`compiler/barriers.py`) places ICB barriers from these; an undeclared write is a race.
+   (`ctx.scratch`), its parameter record (`ctx.params`: the program's own bytes — a session shares its programs'
+   buffers by name, a params record never), the grid, and declares which bindings the kernel **writes**
+   (`ctx.add(..., writes=[...])`) — the barrier pass (`compiler/barriers.py`) places ICB barriers from these; an
+   undeclared write is a race.
 5. A library module that lowers to it (`monolith/nn/`), with its torch oracle in `monolith/nn/oracle.py`.
 6. Tests: the kernel against a numpy model of its contract and against the layer oracle (`tests/kernels/`,
    the DSpark ops in `test_draft_ops.py` are the pattern), the lowering and coverage without a GPU

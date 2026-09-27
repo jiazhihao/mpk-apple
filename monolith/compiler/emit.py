@@ -92,7 +92,10 @@ class _Ctx:
         return k
 
     def params(self, name: str, data: bytes) -> str:
-        bname = f"params.T{self.t}.{name}.{self.counter}"          # per-T: programs share buffers by name, params must not
+        # programs share a session's buffers by name (Engine): a params record must never be shared — the dynamic-T
+        # program and a static one at its t_max both said "T8", and a static T = 8 program's o_proj tiles read another
+        # GEMV's record (24576 rows into a 4096-row output: out-of-bounds loads and stores, 16 s steps, #113)
+        bname = f"params.{'D' if self.dynamic_t else 'S'}{self.t}.{name}.{self.counter}"
         self.counter += 1
         self.program.buffers[bname] = BufferSpec(len(data), data, "params")
         return bname
@@ -419,8 +422,11 @@ def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variant
         tile_ms = ctx.tuner.tune_gemm(info, tm, op.attrs.get("epilogue")).ms
         if shader_ms > 0 and tile_ms > 0 and shader_ms < tile_ms:
             return variants, None
-    if t_src == STATIC_ROWS:
-        return [], (0, t_c)                                            # a static row count: the tile alone, unpredicated
+    if t_src == STATIC_ROWS or not ctx.dynamic_t:
+        # a static row count, or a static-T program (T fixed at compile time: the T-variant predication lives behind
+        # STEP_STATE, so a shader variant emitted beside the tile would run whole — every slab streamed twice; the
+        # static T > 1 programs of the layer bench measured 2× the round's tiles until this, decode-kernels.md §11)
+        return [], (0, t_c)                                            # the tile alone, unpredicated
     shader = [tv for tv in _prune_variants(ctx, variants if len(variants) > 1 else t_variants(t_c), t_src) if tv < min_t]
     return shader, (shader[-1] if shader else 0, t_c)                  # the tile's range reaches down to 0: a prefill chunk of any size
 

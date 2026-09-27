@@ -355,7 +355,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
       const uint bb = (tile - p.tile0) * (TN / R) + (n / R);             // the range-relative pack block
       float rs[4];
 #pragma clang loop unroll(full)
-      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? row_scale[row + qq] * p.out_scale : 0.0f;
+      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? row_scale[min(row + qq, p.tile0 * TN + p.n_rows - 1u)] * p.out_scale : 0.0f;   // in bounds even when hoisted
 #pragma clang loop unroll(full)
       for (uint blk = 0; blk < NB_C; blk++)
 #pragma clang loop unroll(full)
@@ -377,6 +377,11 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
           const uint orow0 = rrow, n_out = p.n_rows;
           const bool writer = m < T_act;
 #endif
+          // the rows m >= T_act of the 16-row destination are never written, but a load behind `continue` may still be
+          // issued ahead of the branch (the compiler hoists a side-effect-free load): every address below stays inside
+          // its binding whether or not the lane writes — shader validation caught the residual read at rows 8–15 of
+          // an 8-row value (#113), a fault waiting for an unmapped neighbour
+          const uint m_in = min(m, T_act - 1u);
           float ssq = 0.0f;
 #pragma clang loop unroll(full)
           for (uint qq = 0; qq < 4u; qq++) {
@@ -386,7 +391,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #if EPILOGUE_ROUND
             vv = round_bf16(vv);
 #endif
-            vv += as_type<float>(uint(residual[(ulong)m * n_out + orow0 + qq]) << 16);
+            vv += as_type<float>(uint(residual[(ulong)m_in * n_out + min(orow0 + qq, n_out - 1u)]) << 16);
 #endif
             const float vr = round_bf16(vv);
             ssq = fma(vr, vr, ssq);
