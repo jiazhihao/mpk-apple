@@ -171,8 +171,9 @@ def test_t_active_and_slice_width(dev):
 
 def test_state_slots_and_commit_pass(dev):
     """SLOTS=2: a step reads slot (step & 1) and writes the other; the COMMIT variant, after the accept scan advanced
-    ``step``, recomputes the recurrence for n_inject tokens from the slot the step read and overwrites the slot it
-    wrote — the state of a rejected draft never survives; the next step continues from the committed state."""
+    ``step``, recomputes the recurrence for the committed tokens (``checkpoint_index``) from the slot the step read
+    and overwrites the slot it wrote — the state of a rejected draft never survives; the next step continues from the
+    committed state."""
     torch = pytest.importorskip("torch")
     from monolith.core.step_state import StepStateLayout
 
@@ -233,11 +234,11 @@ def test_state_slots_and_commit_pass(dev):
     c1, r1 = slot(1)
     _check(got, ref, r1, s_all["l.rec_state"].numpy(), c1, s_all["l.conv_state"].float().numpy())
     assert np.all(slot(0)[1] == 0)                                    # the read slot is untouched
-    # the accept scan committed two tokens (step → 1, n_inject = 2): the commit pass rewrites slot 1 from slot 0
+    # the accept scan committed two tokens (step → 1, checkpoint_index = 2): the commit pass rewrites slot 1 from slot 0
     s_two = fresh()
     with torch.no_grad():
         m.mix(proj[:2], s_two)
-    run(proj, {"step": 1, "n_inject": 2}, commit=True)
+    run(proj, {"step": 1, "checkpoint_index": 2}, commit=True)
     assert o_commit.read(0, len(sentinel)) == sentinel                  # no read-out: the placeholder is untouched
     c1, r1 = slot(1)
     assert np.array_equal(c1, s_two["l.conv_state"].float().numpy())

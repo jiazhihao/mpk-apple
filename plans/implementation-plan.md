@@ -296,6 +296,19 @@ path) on the same target bytes and the same draft length, with mlx-lm's plain de
 decode-kernels.md §8) — the gate's "within 5 % of `qmv`" is not met by the decode alone: the wide shapes are within
 7 % in bus bytes once the pack's padding is counted (#101 closes that), the 4096-row shapes are occupancy-bound
 (the tile's K-split, next).
+*#101, #103 (2026-09-26):* the padding-free pack streams 1.008× the checkpoint's bytes (#101 met); plain decode
+0.776× mlx-lm; the round 10.0 ms per token (the drafter as NVFP4, the K-split, the pruned variants, `stop_at`)
+against mlx-lm's own speculative decoding at 9.24 (a Qwen3-0.6B 4-bit draft, N = 3) — 1.087×, then 9.6 with the
+Markov head in NVFP4 (sub-word lane units), then 9.56–9.75 with the fused permutes and a one-step pump (the
+range: near-tie tokens flip with the tile variants' rounding, and the block drafter's acceptance with them):
+**1.036–1.055×, ahead on math and even on code, the gate not yet met** on chat and text at that point; with #113's
+v3 attention in the verify pass and the small-K GEMV (2026-09-27) it reads **9.14 vs 9.25 — 0.988, met** (math 0.89,
+code 0.95, text 1.03, chat 1.06), and the LM-drafter plugin (#112) with the same kernels **8.97 at N = 5 — 0.971**
+(math 0.83, code 0.92, chat 1.04, text 1.06). Before that the step's GEMVs were at
+the bus; the levers left are the attention core at T = 8 (#102, ~2 %) and, structurally, acceptance — the 0.6B LM
+draft takes 4.17 tokens per step at N = 7 where the block drafter takes 3.06, and an LM-drafter plugin (its step
+program inside the round, ~2 ms per draft token here against mlx-lm's 3.7) projects 6–8 % under mlx-lm's best
+(decode-kernels.md §8, §9).
 
 
 *Status (2026-09-24, #33).* Per-op GPU timestamps exist: `Queue.profile` (one compute encoder per dispatch with

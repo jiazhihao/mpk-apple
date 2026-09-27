@@ -38,13 +38,14 @@ class Gemv:
         self.wbuf, self.rsbuf = nt.Buffer(dev, self.data), nt.Buffer(dev, self.row_scales.tobytes())
         self.n_sg = 12 * dev.info().gpu_cores
 
-    def run(self, x_bf16, *, norm=None, epilogue=None, residual=None, stat_out=False, t_active=None, out_bf16=None):
+    def run(self, x_bf16, *, norm=None, epilogue=None, residual=None, stat_out=False, t_active=None, out_bf16=None, rsplit=1, rg=None):
         """``x_bf16`` uint16 [T, K]; ``norm`` = (stat float32 array, parts, norm_w float32 [K]); returns
-        ``(y, stat_out)`` with y float32 [T, N] (or [T, N/2] for silu_mul)."""
+        ``(y, stat_out)`` with y float32 [T, N] (or [T, N/2] for silu_mul); ``rsplit`` work items per block (the
+        statistic then has n_blocks · rsplit partials per token)."""
         t, n = self.t, self.n
         if out_bf16 is None:
             out_bf16 = epilogue is not None
-        macros = kernels.gemv_macros(self.info, t=t, norm=norm is not None, epilogue=epilogue, stat_out=stat_out, out_bf16=out_bf16)
+        macros = kernels.gemv_macros(self.info, t=t, norm=norm is not None, epilogue=epilogue, stat_out=stat_out, out_bf16=out_bf16, rsplit=rsplit, rg=rg)
         pso = nt.Pipeline(nt.Library(self.dev, kernels.gemv_source(self.fmt), macros), "gemv_T")
         n_out = n // 2 if epilogue == "silu_mul" else n
         y = nt.Buffer(self.dev, t * n_out * 4); y.fill(0)
@@ -59,14 +60,41 @@ class Gemv:
             d.buffer(7, nt.Buffer(self.dev, residual.tobytes()))
         so = None
         if stat_out:
-            so = nt.Buffer(self.dev, t * self.info.n_blocks * 4); so.fill(0)
+            so = nt.Buffer(self.dev, t * self.info.n_blocks * rsplit * 4); so.fill(0)
             d.buffer(8, so)
         r = nt.Queue(self.dev).run([d])
         assert not r.error, r.error
         raw = y.read(0, t * n_out * (2 if out_bf16 else 4))
         out = bf16_to_f32(np.frombuffer(raw, dtype=np.uint16)).reshape(t, n_out) if out_bf16 else np.frombuffer(raw, dtype=np.float32).reshape(t, n_out)
-        so_arr = np.frombuffer(so.read(0, t * self.info.n_blocks * 4), dtype=np.float32).reshape(t, self.info.n_blocks) if stat_out else None
+        so_arr = np.frombuffer(so.read(0, t * self.info.n_blocks * rsplit * 4), dtype=np.float32).reshape(t, self.info.n_blocks * rsplit) if stat_out else None
         return out, so_arr
+
+
+@pytest.mark.parametrize("fmt", ["nvfp4", "int4_affine"])
+@pytest.mark.parametrize("epilogue,rsplit", [(None, 2), (None, 8), (None, 16), ("residual", 4), ("residual", 16), ("silu_mul", 2), ("silu_mul", 4), ("silu_mul", 8)])
+def test_row_split_items_reproduce_the_whole(dev, fmt, epilogue, rsplit):
+    """RSPLIT work items per block (each a share of the block's rows; silu_mul: gate rows with their up partners):
+    bit-identical outputs to the unsplit kernel — the same per-row arithmetic — and STAT_OUT partials per item that
+    sum to the block's (the 0.6B's 1024-row projections are 64 blocks over 240 SIMD-groups: decode-kernels.md §10).
+    RSPLIT 16 (8 for silu_mul) is the one-row item, RG 1, at T = 1 with the hoisted activation (§11.1)."""
+    one_row = rsplit == 16 or (epilogue == "silu_mul" and rsplit == 8)
+    t, rows = (1 if one_row else 2), 16
+    n = 40 * rows
+    g = Gemv(dev, fmt, n, rows, t)
+    rng = np.random.default_rng(21)
+    x = f32_to_bf16(rng.uniform(-1, 1, size=(t, K)).astype(np.float32))
+    res = f32_to_bf16(rng.uniform(-1, 1, size=(t, n)).astype(np.float32)) if epilogue == "residual" else None
+    stat = epilogue != "silu_mul"
+    whole, so_w = g.run(x, epilogue=epilogue, residual=res, stat_out=stat, out_bf16=True, rg=2)
+    split, so_s = g.run(x, epilogue=epilogue, residual=res, stat_out=stat, out_bf16=True, rsplit=rsplit, rg=1 if one_row else 2)
+    assert np.array_equal(whole, split)
+    if stat:
+        assert so_s.shape == (t, g.info.n_blocks * rsplit)
+        np.testing.assert_allclose(so_s.reshape(t, g.info.n_blocks, rsplit).sum(axis=2), so_w, rtol=1e-5, atol=1e-6)
+    assert kernels.gemv_rsplits(16, 2, None) == [1, 2, 4, 8] and kernels.gemv_rsplits(16, 2, "silu_mul") == [1, 2, 4] and kernels.gemv_rsplits(16, 8, None) == [1, 2]
+    assert kernels.gemv_rsplits(16, 1, None) == [1, 2, 4, 8, 16] and kernels.gemv_rsplits(16, 1, "silu_mul") == [1, 2, 4, 8]
+    with pytest.raises(ValueError):
+        kernels.gemv_macros(g.info, t=t, rg=8, rsplit=4)
 
 
 def _norm_inputs(rng, t, scale=1.0):
@@ -89,7 +117,11 @@ def test_norm_input_matches_reference_norm(dev, fmt, t):
     ref = (x_ref.astype(np.float64) @ g.w.T).astype(np.float32)
     chk = check_against_oracle(y, ref)
     assert chk.ok(), chk
-    # T*WPW > 64 takes the word path (NVFP4 T=4 above already does); the preconvert path is BF16/FP8 T ≤ 8
+    # T*WPW > 64 takes the word path (NVFP4 T=4 above already does); the preconvert path is BF16/FP8 T ≤ 8; at T = 1 on
+    # this K (a lane's K / 32 columns × T ≤ 32 floats, whatever the format) the converted and normed activation is hoisted
+    # ahead of the items (X_HOIST, §11.1); at T = 4 it is not
+    macros = kernels.gemv_macros(g.info, t=t, norm=True)
+    assert macros["X_HOIST"] == ("1" if t == 1 else "0"), macros
 
 
 @pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])
@@ -171,14 +203,16 @@ def test_autotuner_picks_and_caches(dev, tmp_path):
     rng = np.random.default_rng(1)
     _, info, _ = pack_spec(random_spec("bf16", 512, K, rng), PackLayout(rows=16))
     c = tuner.tune_gemv(info, 1, "residual", False)
-    assert isinstance(c, Choice) and c.ms > 0 and c.ms <= c.default_ms * 1.001 and c.grid_mode in ("crew", "crew2", "block")
+    assert isinstance(c, Choice) and c.ms > 0 and c.ms <= c.default_ms * 1.001 and c.grid_mode in ("crew", "crew2", "crew3", "crew4", "block")
     cn = tuner.tune_gemv(info, 1, None, True)
     assert cn.ms > 0 and isinstance(cn.fuse_norm, bool)
     g = tuner.tune_gdn(4, 4, 128, 128, 4, 1)
     assert g.ms > 0 and g.macros["SL"] in ("4u", "8u", "16u")
     m = tuner.tune_gemm(info, 8, "residual")                                # the tensor-ops tile: the crew geometries or the K-split
     assert m.ms > 0 and m.grid_mode in ("crew", "crew2", "ksplit2", "ksplit4") and m.ms <= m.default_ms * 1.001
-    assert {mode for _, mode in tuner.choices[next(k for k in tuner.choices if k.startswith("gemm2|"))]["variants"]} == {"crew", "crew2", "ksplit2", "ksplit4"}
+    tried = {mode for _, mode in tuner.choices[next(k for k in tuner.choices if k.startswith("gemm3|"))]["variants"]}
+    assert {"crew", "crew2", "ksplit2", "ksplit4"} <= tried                                                                   # bf16: no scales, no cacheless twins
+    assert tried <= {"crew", "crew2", "ksplit2", "ksplit4", "ksplit8", "ksplit16"}                                             # finer where the K tiles allow
     tuner.save("test-chip")
     again = Autotuner(dev, dev.info().gpu_cores, str(cache))
     assert again.tune_gemv(info, 1, "residual", False).macros == c.macros and len(again.choices) == 4

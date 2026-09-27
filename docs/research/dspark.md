@@ -140,10 +140,17 @@ text and chat: the step is 94 % bus-bound now (decode-kernels.md §5), so what r
 that with the 27B's NVFP4 head).
 
 *2026-09-26:* on the MLX 8B pack (the bytes mlx-lm streams) with the V3 decode, the drafter re-quantized to
-NVFP4 at pack time, the tile's K-split, a wider `x_permute` and the T = 1 variants pruned, the cost-aware round is
-at **10.4 ms per token** (math 7.3, code 9.2, chat 13.4, text 12.2) against plain decode's 21.5 and mlx-lm plain's
-15.9 — the round's trace and the comparison are in decode-kernels.md §8; mlx-lm's own speculative decoding is still
-to be measured (#103).
+NVFP4 at pack time, the tile's K-split, a wider `x_permute`, the T = 1 variants pruned, the padding-free pack and
+the program stopping itself at the request, the Markov head in NVFP4 through sub-word units, the permutes fused
+into their producers and a one-step pump, the cost-aware round is at **9.56 ms per token** (math 6.8, code 8.3,
+chat 12.3, text 11.4) against plain decode's 20.6 and mlx-lm plain's 15.9. mlx-lm's own speculative decoding with
+a Qwen3-0.6B 4-bit draft is at its best 9.24 ms per token at N = 3 (2.94 tokens per step: the LM draft accepts more
+than the block drafter, 4.17 vs 3.09 at N = L = 7; its 8-bit draft is slower, 9.86) — ours / theirs = 1.036
+(ahead on math 0.96, even on code 1.01, text 1.05, chat 1.09), the gate of #103 not yet met then; the tables and the
+step budget are in decode-kernels.md §8, §9. With #113's v3 attention in the verify pass and the small-K GEMV
+(2026-09-27) the round is at **9.14 ms per token against mlx-lm's 9.25 — 0.988, the gate met** (math 0.89, code
+0.95, text 1.03, chat 1.06; decode-kernels.md §8), and the LM-drafter plugin (the 0.6B as the draft model, #112) with
+the same kernels at **8.97 (N = 5) — 0.971**, the best speculative path on this machine (decode-kernels.md §10).
 
 Tokens per second ≈ `(1 + E[accepted]) / (t_draft + t_verify(1 + L))`. With the llama.cpp accepted lengths above
 (2.7–4.1 at n-max 4) and the M5 Pro cost table, the break-even is comfortable on FP8 layers and marginal for the NVFP4

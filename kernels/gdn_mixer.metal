@@ -26,7 +26,7 @@
 // slot (step & 1) and writes the other, so the writer of a step never aliases the window its readers replay (with
 // one slot, a fast head could overwrite the conv window a slower block of the same head is still reading). In a
 // speculative program (design §5.8) the same kernel with COMMIT=1 runs after the accept scan (which advanced
-// `step`): it recomputes the recurrence for the committed n_inject tokens from the slot the step's pass read and
+// `step`): it recomputes the recurrence for the committed tokens (StepState.checkpoint_index) from the slot the step's pass read and
 // overwrites the slot the pass wrote — the rejected positions never reach the state — and writes no read-out: its
 // o_part binding is a placeholder the kernel never touches (an early version stored the read-out through it, past
 // the end of a 16-byte value: the source of an intermittent wrong-token / hang / empty-generation failure of the
@@ -124,7 +124,7 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
 #if STEP_STATE
   if (st->done) return;
 #if COMMIT
-  const uint T = st->n_inject;                               // the committed tokens of the step that just ended
+  const uint T = st->checkpoint_index;                       // the committed tokens of the step that just ended (n_inject is the drafter's row count)
 #else
   const uint T = st->t_this_step;
 #endif

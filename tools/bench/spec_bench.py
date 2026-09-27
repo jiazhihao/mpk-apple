@@ -56,6 +56,7 @@ def main() -> int:
     ap.add_argument("--drafter", required=True)
     ap.add_argument("--drafter-pack", required=True)
     ap.add_argument("--drafter-kind", default="dspark")
+    ap.add_argument("--draft-gamma", type=int, default=None, help="an LM drafter's chain length outside the fixed modes (default 5); fixed:N chains N")
     ap.add_argument("--modes", default="plain,cost,threshold:0.5,fixed:1,fixed:2,fixed:3,fixed:7")
     ap.add_argument("--prompts", default="code,math,chat,text")
     ap.add_argument("-n", "--max-new-tokens", type=int, default=128)
@@ -75,8 +76,11 @@ def main() -> int:
     for mode in a.modes.split(","):
         opts = parse_mode(mode)
         if opts:
+            dopts = None
+            if a.drafter_kind == "lm":
+                dopts = {"gamma": opts["verify_length"] if opts.get("verify") == "fixed" else (a.draft_gamma or 5)}
             sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1, drafter_dir=a.drafter, drafter_pack=a.drafter_pack,
-                                drafter_kind=a.drafter_kind, sts_path=a.sts, accelerator=a.accelerator, **opts)
+                                drafter_kind=a.drafter_kind, sts_path=a.sts, accelerator=a.accelerator, drafter_options=dopts, **opts)
         else:
             sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1, accelerator=a.accelerator)
         sessions[mode] = sess

@@ -27,7 +27,7 @@ from typing import Any, Mapping, Tuple
 import numpy as np
 
 from .base import DequantSpec, Format, PackLayout
-from .blm import PackInfo, join_lanes, pack_blm, split_lanes, unpack_blm
+from .blm import LANES, PackInfo, join_lanes, lane_groups, pack_blm, split_lanes, unpack_blm
 from .fp import (E2M1_MAX, E4M3_MAX, e2m1_to_f32, e4m3_to_f32, f32_to_e2m1, f32_to_e4m3, pack_nibbles,
                  unpack_nibbles)
 from .registry import register_format
@@ -40,7 +40,7 @@ class NVFP4(Format):
     bytes_per_weight = 0.5 + 1.0 / BLOCK
     weights_per_word = 32
     scale_group = BLOCK
-    pack_k_multiple = 32 * BLOCK
+    pack_k_multiple = 256           # the decode kernels' stripe granularity; a stripe narrower than a group shares the group's byte
     msl_decode = """
 #define WEIGHTS_PER_WORD 32u
 #define SCALE_GROUP 16u
@@ -162,18 +162,31 @@ static inline float decode_scale(thread const uint* sw, uint g) { return fp8_e4m
     def _lanes(self, spec: DequantSpec) -> Tuple[np.ndarray, np.ndarray]:
         n, k = spec.shape
         payload = split_lanes(spec.tensors["weight"], k, 1, 2)                          # [N, 32, K/64]
-        scales = split_lanes(spec.tensors["weight_scale"], k, 1, BLOCK)                 # [N, 32, K/512]
-        return payload, scales
+        if (k // 32) % BLOCK == 0:
+            return payload, split_lanes(spec.tensors["weight_scale"], k, 1, BLOCK)      # [N, 32, K/512]: whole groups per stripe
+        first, count, gpl = lane_groups(k, BLOCK)                                       # narrow stripes: the group(s) a lane touches
+        sc = np.zeros((n, LANES, gpl), np.uint8)
+        for lane in range(LANES):
+            sc[:, lane, : count[lane]] = spec.tensors["weight_scale"][:, first[lane]: first[lane] + count[lane]]
+        return payload, sc
 
     def pack(self, spec: DequantSpec, layout: PackLayout) -> Tuple[bytes, PackInfo]:
         n, k = spec.shape
-        if (k // 32) % BLOCK:
-            raise ValueError(f"nvfp4: a lane's stripe must hold whole scale groups (K={k})")
+        if k % 256:
+            raise ValueError(f"nvfp4: K must be a multiple of 256 for the decode kernels (K={k})")
         payload, scales = self._lanes(spec)
         return pack_blm(payload, scales, layout, format="nvfp4", k=k, tensor_scale=spec.params["weight_scale_2"],
                         scale_group=BLOCK)
 
     def unpack_pack(self, data: bytes, info: PackInfo) -> DequantSpec:
         payload, scales = unpack_blm(data, info)
-        return DequantSpec("nvfp4", (info.n, info.k), {"weight": join_lanes(payload), "weight_scale": join_lanes(scales)},
+        n, k = info.n, info.k
+        if (k // 32) % BLOCK == 0:
+            sc = join_lanes(scales)
+        else:
+            first, count, gpl = lane_groups(k, BLOCK)
+            sc = np.zeros((n, k // BLOCK), np.uint8)
+            for lane in range(LANES):                                                   # a group shared by lanes is stored by each, identically
+                sc[:, first[lane]: first[lane] + count[lane]] = scales[:, lane, : count[lane]]
+        return DequantSpec("nvfp4", (n, k), {"weight": join_lanes(payload), "weight_scale": sc},
                            {"weight_scale_2": info.tensor_scale, "block": BLOCK})

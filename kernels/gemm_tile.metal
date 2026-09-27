@@ -44,7 +44,7 @@ using namespace mpp::tensor_ops;
 #define STEP_STATE 0                 // 1: the row count comes from StepState (buffer 15) and the dispatch is a per-T variant
 #endif
 #ifndef T_SRC
-#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step, 1 = n_inject, 2 = the T_STATIC_ROWS macro
+#define T_SRC 0                      // with STEP_STATE: 0 = t_this_step, 1 = n_inject, 2 = the T_STATIC_ROWS macro, 3 = n_chain, 4 = n_inject + n_chain
 #endif
 #ifndef T_STATIC_ROWS
 #define T_STATIC_ROWS 1u
@@ -88,7 +88,7 @@ using namespace mpp::tensor_ops;
 #define SCALE_UOFF 0u
 #endif
 #ifndef KSPLIT
-#define KSPLIT 1u                                         // SIMD-groups per row tile, each a contiguous K slice (1, 2 or 4)
+#define KSPLIT 1u                                         // SIMD-groups per row tile, each a contiguous K slice (1 … 16)
 #endif
 #ifndef TN
 #define TN 64u                                            // rows per tile (16, 32 or 64)
@@ -140,6 +140,25 @@ static inline uint unit_word(uint lane, uint r, uint j) {
   return (r * UNIT_WORDS + j) * 32u + lane;
 #endif
 }
+#ifdef LANES_PER_WORD
+#error "sub-word units are the shader GEMV's: the tile and the gather read whole-word units"
+#endif
+#ifndef SCALE_PLACEMENT
+#define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
+#endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
+#if SCALE_PLACEMENT
+#define SCALE_BASE (R * 32u * PAYLOAD_WORDS)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#else
+#define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
+#define SCALE_SOFF(ln) 0u
+#endif
+#if SCALE_PLACEMENT
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS + SCALE_REGION_WORDS)       // a block: its payload words then its scale region
+#else
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS)
+#endif
 
 constexpr constant auto desc = matmul2d_descriptor(int(TM), int(TN), int(TK), false, true, false, matmul2d_descriptor::mode::multiply_accumulate);
 using tA_t = tensor<device bfloat, dextents<int, 2>, tensor_inline>;
@@ -171,7 +190,8 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
 #if STEP_STATE
   if (st->done) return;                                                     // uniform over the threadgroup: no barrier is skipped
-  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step)));
+  if (T_act == 0u) return;                                                  // no rows this step (an LM drafter's chain in a prefill chunk)
 #ifdef T_HI
   if (T_act > T_HI || T_act <= T_LO) return;
 #endif
@@ -214,7 +234,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
       for (uint s = 0; s < NS_B; s++) {
         const uint n = c1b + 8u * s;                                     // row inside the tile
         const uint b = tile * NB + n / R, r = n % R;                     // its pack block and row
-        device const uint4* wb = w + (ulong)b * (R * 32u * UNIT_WORDS);
+        device const uint4* wb = w + (ulong)b * BLOCK_WORDS;
         const uint c0 = CT * mq;                                         // this thread's first tile column
         const uint lw0 = c0 / WPW, e0 = c0 % WPW;                        // its first word inside the tile and code offset
         const uint ln0 = q * LPT + lw0;                                  // the lane holding that word
@@ -247,7 +267,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #if EXP_MODE == 5
               const uint4 v4 = uint4(0x38383838u + lane, 0x38383838u, 0x38383838u + kt, 0x38383838u);
 #else
-              const uint4 v4 = wb[unit_word(ln0 + i, r, SCALE_W0 + sc)];
+              const uint4 v4 = wb[SCALE_WORD(ln0 + i, r, sc)];
 #endif
               scc[s][i][4 * sc] = v4.x; scc[s][i][4 * sc + 1] = v4.y; scc[s][i][4 * sc + 2] = v4.z; scc[s][i][4 * sc + 3] = v4.w;
             }
@@ -260,7 +280,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #if EXP_MODE == 5
             const uint4 v4 = uint4(0x38383838u + lane, 0x38383838u, 0x38383838u + kt, 0x38383838u);
 #else
-            const uint4 v4 = wb[unit_word(ln0 + i, r, SCALE_W0 + sc)];
+            const uint4 v4 = wb[SCALE_WORD(ln0 + i, r, sc)];
 #endif
             scw[4 * sc] = v4.x; scw[4 * sc + 1] = v4.y; scw[4 * sc + 2] = v4.z; scw[4 * sc + 3] = v4.w;
           }
@@ -269,9 +289,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #pragma clang loop unroll(full)
           for (uint ch = 0; ch < ((CT < WPW) ? 1u : (WPW / 16u)); ch++) {
             const uint g = (LANE_OFF + j * WPW + e0 + 16u * ch) / SCALE_GROUP;
-            scv[i * (WPW / 16u) + ch] = decode_scale(scw + SCALE_UOFF, g);
+            scv[i * (WPW / 16u) + ch] = decode_scale(scw + SCALE_UOFF, SCALE_SOFF(ln) + g);
 #if SCALE_BIAS
-            bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, g);
+            bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, SCALE_SOFF(ln) + g);
 #endif
           }
         }
@@ -335,7 +355,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
       const uint bb = (tile - p.tile0) * (TN / R) + (n / R);             // the range-relative pack block
       float rs[4];
 #pragma clang loop unroll(full)
-      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? row_scale[row + qq] * p.out_scale : 0.0f;
+      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? row_scale[min(row + qq, p.tile0 * TN + p.n_rows - 1u)] * p.out_scale : 0.0f;   // in bounds even when hoisted
 #pragma clang loop unroll(full)
       for (uint blk = 0; blk < NB_C; blk++)
 #pragma clang loop unroll(full)
@@ -357,6 +377,11 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
           const uint orow0 = rrow, n_out = p.n_rows;
           const bool writer = m < T_act;
 #endif
+          // the rows m >= T_act of the 16-row destination are never written, but a load behind `continue` may still be
+          // issued ahead of the branch (the compiler hoists a side-effect-free load): every address below stays inside
+          // its binding whether or not the lane writes — shader validation caught the residual read at rows 8–15 of
+          // an 8-row value (#113), a fault waiting for an unmapped neighbour
+          const uint m_in = min(m, T_act - 1u);
           float ssq = 0.0f;
 #pragma clang loop unroll(full)
           for (uint qq = 0; qq < 4u; qq++) {
@@ -366,11 +391,13 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #if EPILOGUE_ROUND
             vv = round_bf16(vv);
 #endif
-            vv += as_type<float>(uint(residual[(ulong)m * n_out + orow0 + qq]) << 16);
+            vv += as_type<float>(uint(residual[(ulong)m_in * n_out + min(orow0 + qq, n_out - 1u)]) << 16);
 #endif
             const float vr = round_bf16(vv);
             ssq = fma(vr, vr, ssq);
-#if OUT_BF16
+#if PERM_OUT
+            y[(ulong)m * PERM_K + perm_dest(orow0 + qq)] = ushort(as_type<uint>(vr) >> 16);   // the consumer tile's x' (its K = n_out)
+#elif OUT_BF16
             y[(ulong)m * n_out + orow0 + qq] = ushort(as_type<uint>(vr) >> 16);
 #else
             y[(ulong)m * n_out + orow0 + qq] = vv;
@@ -430,7 +457,8 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
   if (t >= p.tm) return;
 #if STEP_STATE
   if (st->done) return;
-  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step)));
+  if (T_act == 0u) return;                                                  // no rows this step (an LM drafter's chain in a prefill chunk)
 #ifdef T_HI
   if (T_act > T_HI || T_act <= T_LO) return;
 #endif

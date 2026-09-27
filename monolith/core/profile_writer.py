@@ -43,6 +43,21 @@ def tile_rows(t: int) -> int:
 
 # ---- decisions ----------------------------------------------------------------------------------------------------
 
+def choose_scale_placement(gbps: Mapping[str, float], current: Optional[str] = None) -> Tuple[str, str]:
+    """``block`` when it streams a matrix faster than ``inline`` by more than the noise margin (it moves fewer bytes:
+    the unit's padding is gone), ``inline`` when it is slower by more than the margin; a tie keeps the file's value
+    (``inline`` for a file without one)."""
+    cur = current or "inline"
+    if not gbps or "inline" not in gbps or "block" not in gbps:
+        return cur, "no placement measurement: kept " + cur
+    ratio = gbps["block"] / gbps["inline"]
+    if ratio > 1 + NOISE:
+        return "block", f"block streams {ratio:.3f}x inline (the unit's padding gone)"
+    if ratio < 1 - NOISE:
+        return "inline", f"inline streams {1 / ratio:.3f}x block"
+    return cur, f"tie within {100 * NOISE:.0f} % ({ratio:.3f}x): kept {cur}"
+
+
 def choose_lane_order(gbps: Mapping[str, float], current: Optional[str] = None) -> Tuple[str, str]:
     """``(lane order, why)`` from the T = 1 GEMV rate per lane order: the faster one; within the noise margin the
     profile's current value (the Apple9 tie keeps its hand-derived choice), else interleaved16."""
@@ -103,8 +118,24 @@ def accelerator_plan(shader: Mapping[str, Mapping[int, float]], tile: Mapping[st
     return ("on" if on else "off"), min_t, ("; ".join(notes) if notes else "no tile measurement (the tensor ops did not compile or were skipped)")
 
 
-def attention_choice(v1: Mapping[Any, float], v2: Mapping[Any, float]) -> Tuple[str, str]:
-    """``(attention, why)``: v2 only when faster than v1 at every measured (context, T) by more than the margin."""
+def attention_choice(v1: Mapping[Any, float], v2: Mapping[Any, float], rep: int = 4, v3: Optional[Mapping[Any, float]] = None) -> Tuple[str, str]:
+    """``(attention, why)`` from the kernels' ms per (context, T). With v3 measured: ``auto`` (= v3, the emitter's rule)
+    when it beats v1 and, where measured, v2 at every point by more than the margin; otherwise — or without v3 — the
+    v1 / v2 rule: ``v2`` when it wins at every point, ``v1`` otherwise."""
+    base, why = _attention_choice_v12(v1, v2, rep)
+    if not v3:
+        return base, why + "; v3 not measured"
+    common = [k for k in v3 if k in v1]
+    if not common:
+        return base, why + "; v3 measured at no common point"
+    if all(v3[k] < v1[k] * (1 - NOISE) and (k not in v2 or v3[k] < v2[k] * (1 - NOISE)) for k in common):
+        return "auto", "v3 faster than v1" + (" and v2" if any(k in v2 for k in common) else "") + " at every point: " + ", ".join(
+            f"{k}: {v3[k]:.3f} vs v1 {v1[k]:.3f}" + (f" / v2 {v2[k]:.3f}" if k in v2 else "") + " ms" for k in common)
+    worst = max(common, key=lambda k: v3[k] / min(v1[k], v2.get(k, v1[k])))
+    return base, why + f"; v3 not faster at every point (at {worst}: {v3[worst]:.3f} vs v1 {v1[worst]:.3f}" + (f" / v2 {v2[worst]:.3f}" if worst in v2 else "") + " ms)"
+
+
+def _attention_choice_v12(v1: Mapping[Any, float], v2: Mapping[Any, float], rep: int) -> Tuple[str, str]:
     common = [k for k in v1 if k in v2]
     if not common:
         return "v1", "v2 not measured"
@@ -120,27 +151,29 @@ def decide(measurements: Mapping[str, Any], current: Optional[Mapping[str, Any]]
     """The ``engine`` block from the writer's measurements (``tools/profile_writer.py`` builds the mapping:
     ``family``, ``lane_order_gbps`` {order: GB/s}, ``threadgroups_ms`` {count: ms}, ``shader_ms`` {format: {T: ms}},
     ``tile_ms`` {format: {TM: ms}} (the same T = 1 unit), ``attention_ms`` {"v1": {(ctx, T): ms}, "v2": …}) and the
-    current engine block (the values the measurement does not cover — sibling order, max_cb_ms — carry over).
-    Returns ``(engine, notes)``."""
+    current engine block (the values the measurement does not cover — sibling order, max_cb_ms, attention_rows —
+    carry over). Returns ``(engine, notes)``."""
     cur = dict(current or {})
     notes: Dict[str, str] = {}
     lane, notes["lane_order"] = choose_lane_order(measurements["lane_order_gbps"], cur.get("lane_order"))
+    placement, notes["scale_placement"] = choose_scale_placement(measurements.get("scale_placement_gbps") or {}, cur.get("scale_placement"))
     tgs, notes["threadgroups_per_core"] = choose_threadgroups(measurements["threadgroups_ms"], int(cur.get("threadgroups_per_core", 1)))
     shader = {cost_key(f): cost_table(ms) for f, ms in measurements["shader_ms"].items()}
     tile = {cost_key(f): {int(tm): round(ms / measurements["shader_ms"][f][1], 3) for tm, ms in rows.items()}
             for f, rows in measurements.get("tile_ms", {}).items() if f in measurements["shader_ms"] and rows}
     accel, min_t, notes["accelerator"] = accelerator_plan(shader, tile)
     att = measurements.get("attention_ms") or {}
-    attention, notes["attention"] = attention_choice(att.get("v1", {}), att.get("v2", {}))
+    attention, notes["attention"] = attention_choice(att.get("v1", {}), att.get("v2", {}), rep=int(measurements.get("attention_rep", 4)), v3=att.get("v3"))
     cost_t: Dict[str, Dict[str, float]] = {k: {str(t): c for t, c in tbl.items()} for k, tbl in shader.items()}
     for k, rows in tile.items():
         cost_t[f"accelerator_{k}"] = {str(tm): c for tm, c in sorted(rows.items())}
-    engine = {"family": measurements["family"], "lane_order": lane, "threadgroups_per_core": tgs,
+    engine = {"family": measurements["family"], "lane_order": lane, "scale_placement": placement, "threadgroups_per_core": tgs,
               "sibling_order": cur.get("sibling_order", "either"), "max_cb_ms": cur.get("max_cb_ms", 16),
-              "attention": attention, "accelerator": accel, "accelerator_min_t": min_t, "cost_T": cost_t,
+              "attention": attention, "attention_rows": int(cur.get("attention_rows", 4)), "attention_v2_threadgroups": int(cur.get("attention_v2_threadgroups", 2)),
+              "accelerator": accel, "accelerator_min_t": min_t, "cost_T": cost_t,
               "note": "written by tools/profile_writer.py from the kernel harnesses (min-of-N over >= 2 GB streamed per point): cost_T = the "
                       "pass cost relative to a T = 1 shader pass at the best geometry per T; accelerator_<fmt> = gemm_tile at TM rows in "
-                      "the same unit; sibling_order and max_cb_ms are the probes' (p11, p6/p6b) and carry over"}
+                      "the same unit; sibling_order and max_cb_ms are the probes' (p11, p6/p6b) and attention_rows the file's: they carry over"}
     return engine, notes
 
 

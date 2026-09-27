@@ -14,9 +14,10 @@ op without a binding.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from .dtypes import DType
 from .shapes import Dim, Shape, Sym
@@ -99,9 +100,24 @@ class Graph:
         self.values: Dict[str, Value] = {}
         self.views: Dict[str, List[Value]] = {}       # base value name -> its views
         self.symbols: Set[Sym] = set()
+        self._scope = ""
 
     # ---- values -------------------------------------------------------------------------------------------
-    def value(self, name: str, shape: Sequence[Dim], dtype: DType, *, format: Optional[str] = None) -> Value:
+    @contextmanager
+    def scope(self, prefix: str) -> Iterator[None]:
+        """Activation values created inside take ``prefix`` in front of their names. A module tree lowered several
+        times into one program (an LM drafter's ingest pass and each of its chain steps, design §5.8) keeps its
+        slabs, states and constants — sources, looked up by their own names — while every pass's activations stay
+        distinct. Scopes nest."""
+        saved, self._scope = self._scope, self._scope + prefix
+        try:
+            yield
+        finally:
+            self._scope = saved
+
+    def value(self, name: str, shape: Sequence[Dim], dtype: DType, *, format: Optional[str] = None, scoped: bool = True) -> Value:
+        if scoped:
+            name = self._scope + name
         if name in self.values:
             raise ValueError(f"graph {self.name}: value name {name!r} is already taken")
         v = Value(name, tuple(shape), dtype, format)
@@ -110,26 +126,26 @@ class Graph:
         return v
 
     def input(self, name: str, shape: Sequence[Dim], dtype: DType) -> Value:
-        v = self.value(name, shape, dtype)
+        v = self.value(name, shape, dtype, scoped=False)
         v.is_input = True
         return v
 
     def weight(self, name: str, shape: Sequence[int], format: str) -> Value:
         """A packed weight slab: ``format`` names the format plugin that decodes it; the dtype is the storage byte."""
-        v = self.value(name, shape, DType.U8, format=format)
+        v = self.value(name, shape, DType.U8, format=format, scoped=False)
         v.is_weight = True
         return v
 
     def state(self, name: str, shape: Sequence[Dim], dtype: DType) -> Value:
         """A persistent per-sequence buffer. Ops read it as an input and declare in-place writes through the
         ``updates=[...]`` attr (a list of state value names), which the barrier pass treats as a write."""
-        v = self.value(name, shape, dtype)
+        v = self.value(name, shape, dtype, scoped=False)
         v.is_state = True
         return v
 
     def const(self, name: str, shape: Sequence[Dim], dtype: DType) -> Value:
         """A constant tensor from the pack's aux section (tables, norm weights, small parameters)."""
-        v = self.value(name, shape, dtype)
+        v = self.value(name, shape, dtype, scoped=False)
         v.is_const = True
         return v
 

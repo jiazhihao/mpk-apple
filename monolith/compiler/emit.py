@@ -23,7 +23,7 @@ from .. import kernels
 from ..core.dtypes import DType
 from ..core.ir import BlockDomain, Graph, Op, OpClass, Value
 from ..core.profile import COST_FORMAT, Profile
-from ..core.shapes import N_INJ, Sym, T, bind, numel, step_bindings
+from ..core.shapes import N_CHAIN, N_FIRST, N_INJ, Sym, T, bind, numel, step_bindings
 from ..core.step_state import StepStateLayout
 from ..formats import FORMATS
 from ..formats.blm import PackInfo
@@ -35,7 +35,7 @@ from .coverage import check_coverage
 from .passes import DEFAULT_PASSES
 
 WINDOW_BYTES = 2 << 30          # pack windows: ICB bind offsets are 32-bit (design §5.1)
-ROW_SOURCE = {T: 0, N_INJ: 1}   # the StepState field a symbolic row count reads (T_SRC): t_this_step / n_inject
+ROW_SOURCE = {T: 0, N_INJ: 1, N_CHAIN: 3, N_FIRST: 4}   # the StepState field(s) a symbolic row count reads (T_SRC): t_this_step / n_inject / n_chain / n_inject + n_chain
 STATIC_ROWS = 2
 ACCEPT_LOG = "accept_log"       # the speculative program's per-step (committed << 16 | verify_len << 8 | accepted) log buffer
 CONF_LOG = "conf_log"           # … and its per-step confidences (16 floats per step)
@@ -56,7 +56,9 @@ class _Ctx:
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
-    attention: str = "v1"                                                 # the attention kernel (profile / override)
+    attention: str = "v1"                                                 # the attention kernel (profile / override): v1 | v2 | v3 | auto (= v3)
+    attn_rows: int = 4                                                    # v1's query rows per pass (the profile's attention_rows)
+    attn_v2_tg: int = 2                                                   # v2's threadgroups per core (the profile's attention_v2_threadgroups)
     accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
     accel_min_t: Dict[str, int] = field(default_factory=dict)             # cost_T format key -> the smallest T the tile covers
     t_min: int = 1                                                        # the smallest T a decode step of this program can take: the
@@ -90,7 +92,10 @@ class _Ctx:
         return k
 
     def params(self, name: str, data: bytes) -> str:
-        bname = f"params.T{self.t}.{name}.{self.counter}"          # per-T: programs share buffers by name, params must not
+        # programs share a session's buffers by name (Engine): a params record must never be shared — the dynamic-T
+        # program and a static one at its t_max both said "T8", and a static T = 8 program's o_proj tiles read another
+        # GEMV's record (24576 rows into a 4096-row output: out-of-bounds loads and stores, 16 s steps, #113)
+        bname = f"params.{'D' if self.dynamic_t else 'S'}{self.t}.{name}.{self.counter}"
         self.counter += 1
         self.program.buffers[bname] = BufferSpec(len(data), data, "params")
         return bname
@@ -122,7 +127,7 @@ class _Ctx:
         if mode.startswith("ksplit"):                                    # the tile's K-split: one tile per threadgroup of S SIMD-groups
             n_sg, n_tg, tg = kernels.gemm_geometry(mode, n_blocks)
             return n_sg, (n_tg, 1, 1), (tg, 1, 1)
-        n_sg = self.n_sg * (2 if mode == "crew2" else 1)
+        n_sg = self.n_sg * kernels.crew_factor(mode)
         return n_sg, (-(-(n_sg * 32) // self.tg), 1, 1), (self.tg, 1, 1)
 
     def add(self, kernel: str, bindings: List[Tuple[int, str, int]], grid, tg, name: str, *, writes: Optional[Sequence[int]] = None,
@@ -145,7 +150,7 @@ class _Ctx:
         if isinstance(d, Sym):
             if d not in ROW_SOURCE:
                 raise ValueError(f"emit: {op!r} has an unknown row symbol {d}")
-            return self.t, ROW_SOURCE[d]
+            return step_bindings(self.t)[d], ROW_SOURCE[d]          # N_CHAIN compiles to one row
         return int(d), STATIC_ROWS
 
     def t_macros(self, t_c: int, t_src: int) -> Dict[str, str]:
@@ -176,6 +181,15 @@ class _Ctx:
 
 def _value_bytes(v: Value, t: int) -> int:
     return numel(v.shape, step_bindings(t)) * v.dtype.itemsize
+
+
+def _size_stat(ctx: _Ctx, name: str) -> None:
+    """A hoisted statistic's buffer: its rows (the value's own row bound — an LM drafter's first chain step has
+    T_max + 1) × the partials per token its producer writes (the blocks × the row split). Sized here, where the
+    producer's choice is known; shader validation found the earlier ``T_max × n_blocks`` short on both counts."""
+    v = ctx.values[name]
+    rows = numel((v.shape[0],), step_bindings(ctx.t)) if v.shape else 1
+    ctx.program.buffers[name] = BufferSpec(max(rows * ctx.stat_parts[name] * 4, 16), None, "arena")
 
 
 def _pack_windows(ctx: _Ctx) -> None:
@@ -303,7 +317,8 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
     if tile_range is not None and not variants:
         _gemm_tile(ctx, op, info, tile_range, t_src, block0, n_blocks, n_rows, nbytes, vgroup)   # a static row count: the tile alone
         return
-    choices = [ctx.tuner.tune_gemv(info, tv, epilogue, stat is not None) if ctx.tuner is not None else None for tv in variants]
+    parts_in = ctx.stat_parts.get(stat.name, 1) if stat is not None else 1        # the statistic's partials the fused norm folds
+    choices = [ctx.tuner.tune_gemv(info, tv, epilogue, stat is not None, stat_parts=parts_in) if ctx.tuner is not None else None for tv in variants]
     fuse_norm = bool(choices[0]) and all(c is not None and c.fuse_norm for c in choices)
     eps = float(op.attrs.get("eps", 1e-6))
     x_binding = ctx.buf(x)
@@ -316,12 +331,30 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
             ctx.norm_scratch[key] = xn
         x_binding = (xn, 0)
     stat_out = op.attrs.get("stat_value")
+    rsplits = []
+    for c in choices:                                               # a cached split that does not fit the shape (a stale cache) falls back to 1
+        rs = int(str(c.macros.get("RSPLIT", "1")).rstrip("u")) if c else 1
+        rsplits.append(rs if c is None or rs in kernels.gemv_rsplits(info.rows, int(c.macros["RG"]), epilogue) else 1)
     if stat_out is not None:
-        ctx.stat_parts[stat_out] = n_blocks
+        # the statistic's partial count is one number for its consumer: every writer of the op — each shader variant and the
+        # tile, which writes one partial per block — must agree on it, so with a tile every variant keeps RSPLIT = 1, and
+        # without one the variants take the smallest split they all admit (a mismatch fed the next norm garbage partials
+        # from the rows a prefill chunk sent through the tile: decode-kernels.md §10)
+        if tile_range is not None:
+            rsplits = [1] * len(rsplits)
+        elif len(set(rsplits)) > 1:
+            rs = min(rsplits)
+            rsplits = [rs if rs in kernels.gemv_rsplits(info.rows, int(c.macros["RG"]) if c else 2, epilogue) else 1 for c in choices]
+            if len(set(rsplits)) > 1:
+                rsplits = [1] * len(rsplits)
+        ctx.stat_parts[stat_out] = n_blocks * rsplits[0]
+        _size_stat(ctx, stat_out)
+    elif tile_range is not None:
+        rsplits = [1] * len(rsplits)                                # (no statistic: the split is free, but the tile's twin keeps the simple layout)
     lo = 0
-    for tv, choice in zip(variants, choices):
+    for tv, choice, rsplit in zip(variants, choices, rsplits):
         rg = int(choice.macros["RG"]) if choice else None
-        macros = dict(kernels.gemv_macros(info, t=tv, rg=rg, epilogue=epilogue, out_bf16=True, stat_out=stat_out is not None,
+        macros = dict(kernels.gemv_macros(info, t=tv, rg=rg, epilogue=epilogue, out_bf16=True, stat_out=stat_out is not None, rsplit=rsplit,
                                           norm=fuse_norm, round_before_residual=bool(op.attrs.get("round_residual"))), **ctx.t_macros(tv, t_src))
         if len(variants) > 1 or tile_range is not None:
             macros["T_LO"], macros["T_HI"] = str(lo), str(tv)
@@ -339,7 +372,7 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
             bindings.append((8, stat_out, 0))
             writes.append(8)
         ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
-                rg=int(macros["RG"]), geometry=choice.grid_mode if choice else "crew", fused_norm=fuse_norm, t_variant=tv,
+                rg=int(macros["RG"]), rsplit=rsplit, geometry=choice.grid_mode if choice else "crew", fused_norm=fuse_norm, t_variant=tv,
                 t_range=[lo, tv] if (len(variants) > 1 or tile_range is not None) else None, variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
                 row_range=[block0 * info.rows, n_rows] if rr is not None else None)
         lo = tv
@@ -379,8 +412,21 @@ def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variant
             raise ValueError("the row range does not start on a tile")
     except ValueError:
         return variants, None                                          # the shape or the range is not the tile's: the shader path
-    if t_src == STATIC_ROWS:
-        return [], (0, t_c)                                            # a static row count: the tile alone, unpredicated
+    if ctx.tuner is not None and rr is None:
+        # the tuner has timed both paths on this shape: the tile at TM rows and the shader at the range's top T — where the
+        # shader wins (K = 1024 slabs at T ≤ 8: the tile's fill has too few K steps to amortize; decode-kernels.md §11)
+        # the T variants stay on it. A row range keeps the profile's rule (its tile share is the whole op's).
+        norm_in = op.attrs.get("norm")
+        parts_in = ctx.stat_parts.get(op.inputs[2].name, 1) if norm_in else 1
+        shader_ms = ctx.tuner.tune_gemv(info, t_c, op.attrs.get("epilogue"), bool(norm_in), stat_parts=parts_in).ms
+        tile_ms = ctx.tuner.tune_gemm(info, tm, op.attrs.get("epilogue")).ms
+        if shader_ms > 0 and tile_ms > 0 and shader_ms < tile_ms:
+            return variants, None
+    if t_src == STATIC_ROWS or not ctx.dynamic_t:
+        # a static row count, or a static-T program (T fixed at compile time: the T-variant predication lives behind
+        # STEP_STATE, so a shader variant emitted beside the tile would run whole — every slab streamed twice; the
+        # static T > 1 programs of the layer bench measured 2× the round's tiles until this, decode-kernels.md §11)
+        return [], (0, t_c)                                            # the tile alone, unpredicated
     shader = [tv for tv in _prune_variants(ctx, variants if len(variants) > 1 else t_variants(t_c), t_src) if tv < min_t]
     return shader, (shader[-1] if shader else 0, t_c)                  # the tile's range reaches down to 0: a prefill chunk of any size
 
@@ -393,6 +439,53 @@ def _prune_variants(ctx: _Ctx, variants: List[int], t_src: int) -> List[int]:
         return variants
     kept = [tv for tv in variants if tv >= ctx.t_min]
     return kept or variants[-1:]
+
+
+def _tile_alone(ctx: _Ctx, op: Op) -> Optional[Tuple[int, int, int, int, int, int]]:
+    """``(tm, wpw, tk, t_src, lo, hi)`` when GEMV ``op`` runs on the tile alone — every T of the program in one tile
+    dispatch, no shader variant — else None. The same decision ``_gemv`` makes, taken ahead of it for the op that
+    produces its input."""
+    if op.kind not in ("gemv", "lm_head") or op.attrs.get("norm"):
+        return None
+    try:
+        t_c, t_src = ctx.rows_of(op)
+        info = ctx.slab_info(op.inputs[1].name)
+    except (KeyError, ValueError):
+        return None
+    variants = t_variants(t_c) if (ctx.speculative and ctx.dynamic_t and t_src != STATIC_ROWS and t_c > 1) else [t_c]
+    shader, tile_range = _accel_plan(ctx, info, op, t_c, t_src, variants)
+    if tile_range is None or shader or tile_range[0] != 0:
+        return None
+    tm = gemm_tm(tile_range[1])
+    macros = kernels.gemm_macros(info, tm=tm, out_bf16=True, epilogue=op.attrs.get("epilogue"), stat_out=op.attrs.get("stat_value") is not None,
+                                 round_before_residual=bool(op.attrs.get("round_residual")))
+    return tm, int(FORMATS.get(info.format).weights_per_word), int(macros["TK"].rstrip("u")), t_src, tile_range[0], tile_range[1]
+
+
+def _fused_permute(ctx: _Ctx, v: Value) -> Optional[Tuple[str, Dict[str, str]]]:
+    """When value ``v`` feeds exactly one GEMV, un-normed, that runs on the tile alone, its producer can write x'
+    (x_permute's order) straight into that tile's scratch: returns ``(scratch, PERM_OUT macros)`` and registers the
+    scratch under the key the consumer's ``_gemm_tile`` looks up, so no permute dispatch is emitted for it."""
+    if len(v.consumers) != 1 or v.is_state or v.is_input:
+        return None
+    c = v.consumers[0]
+    if not c.inputs or c.inputs[0] is not v:
+        return None
+    plan = _tile_alone(ctx, c)
+    if plan is None:
+        return None
+    tm, wpw, tk, t_src, lo, hi = plan
+    kdim = ctx.shape(v)[1]
+    try:
+        macros = kernels.perm_out_macros(kdim, wpw, tk)
+    except ValueError:
+        return None
+    key = (ctx.buf(v), None, tm, wpw, tk, lo, hi, t_src)
+    xp = ctx.perm_scratch.get(key)
+    if xp is None:
+        xp = ctx.scratch(f"{c.outputs[0].name}.xp", tm * kdim * 2)
+        ctx.perm_scratch[key] = xp
+    return xp, macros
 
 
 def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_src: int,
@@ -414,6 +507,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     stat_out = op.attrs.get("stat_value")
     if stat_out is not None:
         ctx.stat_parts[stat_out] = n_blocks
+        _size_stat(ctx, stat_out)
     lo, hi = t_range
     tm = gemm_tm(hi)
     predicated = t_src != STATIC_ROWS
@@ -450,12 +544,17 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     ksplit = kernels.gemm_ksplit(mode)
     if ksplit > 1:                                                       # the K-split's macro (validated for this slab's K tiles)
         macros = kernels.gemm_macros(info, tm=tm, out_bf16=True, epilogue=epilogue, stat_out=stat_out is not None,
-                                     round_before_residual=bool(op.attrs.get("round_residual")), ksplit=ksplit)
+                                     round_before_residual=bool(op.attrs.get("round_residual")), ksplit=ksplit,
+                                     scale_cache=False if mode.endswith("nc") else None)
+    fused = _fused_permute(ctx, y) if (epilogue == "silu_mul" and lo == 0) else None    # the whole T range on this tile: its
+    y_binding = (fused[0], 0) if fused else ctx.buf(y)                                    # consumer reads x' from here
+    if fused:
+        tmac = dict(tmac, **fused[1])
     k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), "gemm_tile", dict(macros, **tmac), language_version=kernels.MSL_TENSOR_OPS)
     n_tiles = -(-n_rows // tn)
     n_sg, grid, tg = ctx.geometry(mode, n_tiles)
     prm = ctx.params("gemm", kernels.gemm_params(n_rows, n_tiles, n_sg, hi, tile0=block0 * info.rows // tn, n_blocks=n_blocks))
-    bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, xp, 0), (3, *ctx.buf(y)), (4, prm, 0)]
+    bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, xp, 0), (3, *y_binding), (4, prm, 0)]
     writes = [3]
     if residual is not None:
         bindings.append((7, *ctx.buf(residual)))
@@ -463,19 +562,32 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         bindings.append((8, stat_out, 0))
         writes.append(8)
     ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
-            accelerator=True, tm=tm, tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
+            accelerator=True, tm=tm, perm_out=bool(fused), tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
             variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
             row_range=[block0 * info.rows, n_rows] if op.attrs.get("row_range") is not None else None)
 
 
-def _gqa_src(ctx: _Ctx, v2: bool = False) -> str:
-    return kernels.PRELUDE + ctx.layout.to_msl() + "\n" + kernels.template("gqa_common.metal") + "\n" + kernels.template(
-        "gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
+def _gqa_src(ctx: _Ctx, v2: bool = False, v3: bool = False) -> str:
+    return kernels.PRELUDE + kernels.PERM_OUT_MSL + ctx.layout.to_msl() + "\n" + kernels.template("gqa_common.metal") + "\n" + kernels.template(
+        "gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
+
+
+def _gqa_kernel(ctx: _Ctx, heads: int, kv: int, lm_mode: int = 0, t_c: Optional[int] = None) -> str:
+    """The attention kernel of an op: the profile's (or the override's) ``v1`` / ``v2`` / ``v3``, or ``auto`` = v3 — core
+    and merge in one dispatch, a threadgroup per query row — which measured faster than v2's core + merge and than v1
+    at every query-row count (2–32) and context (128–8192 keys) tried on the M5 Pro (decode-kernels.md §11.1). v2
+    (up to 32 rows, no LM modes) and v1 stay as explicit choices; ``t_c`` is the rows the op compiles to (``rows_of``:
+    the static program's T, a dynamic program's t_max, an LM drafter's chain step's one row)."""
+    rows = (heads // kv) * (ctx.t if t_c is None else t_c)
+    if ctx.attention in ("v3", "auto"):
+        return "v3"
+    if ctx.attention == "v2":
+        return "v2" if rows <= 32 and not lm_mode else "v1"
+    return "v1"
 
 
 def _gqa_v2(ctx: _Ctx, heads: int, kv: int) -> bool:
-    """v2 when the profile (or the override) asks and the block's rows fit its query cache."""
-    return ctx.attention == "v2" and (heads // kv) * ctx.t <= 32
+    return _gqa_kernel(ctx, heads, kv) == "v2"
 
 
 def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
@@ -483,9 +595,12 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     rep = heads // kv
     if v2:
-        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=4), STEP_STATE="1"), ctx.n_sg // 12, kernels.GQA_V2_CHUNK_MIN
+        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=min(4, rep * ctx.t)), STEP_STATE="1"), (ctx.n_sg // 12) * ctx.attn_v2_tg, kernels.GQA_V2_CHUNK_MIN
     chunk = int(a.get("chunk", 64))
-    return dict(kernels.gqa_macros(d, chunk=chunk), STEP_STATE="1"), ctx.n_sg, chunk
+    lm_mode, chain_i = int(a.get("lm_mode", 0)), int(a.get("chain_i", 0))
+    if v2 and lm_mode:
+        raise ValueError("gqa_decode: an LM drafter's attention runs on the v1 core (the v2 core has no LM modes)")
+    return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows, lm_mode=lm_mode, chain_i=chain_i), STEP_STATE="1"), ctx.n_sg, chunk
 
 
 def _gqa(ctx: _Ctx, op: Op) -> None:
@@ -497,20 +612,24 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
-    v2 = _gqa_v2(ctx, heads, kv)
+    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0])
+    if kind == "v3":
+        return                                                    # core and merge are one dispatch: the merge's handler emits it (it holds the output and the gate)
+    v2 = kind == "v2"
     macros, n_sg, chunk = _gqa_geometry(ctx, a, ctx_max, v2)
     kd = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_decode_v2" if v2 else "gqa_decode", macros)
     rep = heads // kv
-    n_chunks_max, rows_max = -(-ctx_max // chunk), rep * ctx.t
+    t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
+    n_chunks_max, rows_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, n_sg), rep * t_c   # the merge derives the same count
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
     if _value_bytes(part_o, ctx.t) < po or _value_bytes(part_md, ctx.t) < pm:
         raise ValueError(f"gqa_decode: the partial values are too small for {kv} kv heads × {n_chunks_max} chunks × {rows_max} rows")
     prm = ctx.params("gqa", kernels.gqa_params(
-        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
+        heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
         v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
         scaling=float(a["scaling"]), has_gate=False, n_chunks_max=n_chunks_max, rows_max=rows_max))
     st = ctx.program.step_state
-    grid, tg = ctx.crew_grid()
+    grid, tg = ((n_sg, 1, 1), (ctx.tg, 1, 1)) if v2 else ctx.crew_grid()          # v2: one threadgroup per block, n_sg of them
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *ctx.buf(part_o)), (8, *ctx.buf(part_md)), (9, prm, 0), (15, st, 0)],
             grid, tg, op.kind, writes=[1, 2, 7, 8], attention="v2" if v2 else "v1")
@@ -524,21 +643,68 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     out = op.outputs[0]
     a = op.attrs
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
-    v2 = _gqa_v2(ctx, heads, kv)
+    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0])
+    if kind == "v3":
+        _gqa_v3(ctx, op)
+        return
+    v2 = kind == "v2"
     rep = heads // kv
     core = part_o.producer
     ctx_max = ctx.shape(core.inputs[1])[0] if core is not None else 0
     macros, n_sg, chunk = _gqa_geometry(ctx, dict(a, chunk=core.attrs.get("chunk", 64) if core is not None else 64), ctx_max, v2)
+    fused = _fused_permute(ctx, out)                              # o_proj's tile reads the merge's output: written in its order
+    if fused:
+        macros = dict(macros, **fused[1])
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros)
-    n_chunks_max = ctx.shape(part_o)[1] // (kv * rep * d)
+    n_chunks_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, n_sg) if core is not None else ctx.shape(part_o)[1] // (kv * rep * d)
+    if n_chunks_max * kv * rep * d > ctx.shape(part_o)[1]:
+        raise ValueError(f"gqa_merge: the partial values hold {ctx.shape(part_o)[1] // (kv * rep * d)} chunks, the core writes {n_chunks_max}")
+    t_c, _ = ctx.rows_of(op)
     prm = ctx.params("gqa_merge", kernels.gqa_params(
-        heads=heads, kv_heads=kv, t_active=ctx.t, position=0, n_sg=n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
+        heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
         in_stride=heads * d, out_stride=heads * d, ctx_max=n_chunks_max * chunk, eps=1e-6, scaling=1.0, has_gate=gate is not None,
-        n_chunks_max=n_chunks_max, rows_max=rep * ctx.t))
+        n_chunks_max=n_chunks_max, rows_max=rep * t_c))
     st = ctx.program.step_state
     gb = ctx.buf(gate) if gate is not None else ctx.buf(part_o)
-    ctx.add(km, [(0, *ctx.buf(part_o)), (1, *ctx.buf(part_md)), (2, *gb), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
-            (ctx.t * heads, 1, 1), (32, 1, 1), op.kind, writes=[3])
+    ctx.add(km, [(0, *ctx.buf(part_o)), (1, *ctx.buf(part_md)), (2, *gb), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
+            (t_c * heads, 1, 1), (32, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
+
+
+def _gqa_v3(ctx: _Ctx, op: Op) -> None:
+    """v3: the core and the merge as one dispatch — a threadgroup of gqa_v3_simdgroups(D) SIMD-groups per (kv head, query
+    row) block, the keys strided over the SIMD-groups, the fold in threadgroup memory (kernels/gqa_decode_v3.metal) —
+    emitted at the merge op, which holds the output and the gate; the core op that produced its partials supplies the
+    projection, the caches, the tables and the norms (its partial values stay unwritten)."""
+    part_o = op.inputs[0]
+    gate = op.inputs[2] if len(op.inputs) > 2 else None
+    out = op.outputs[0]
+    core = part_o.producer
+    if core is None or core.kind != "gqa_decode":
+        raise ValueError("gqa_merge: the v3 kernel needs the gqa_decode op that produces the merge's partials")
+    proj, kc, vc, cos, sin, qn, kn = core.inputs
+    a = core.attrs
+    d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
+    segs = {name: (off, n) for name, off, n in a["segments"]}
+    ctx_max = ctx.shape(kc)[0]
+    macros = dict(kernels.gqa_v3_macros(d, lm_mode=int(a.get("lm_mode", 0)), chain_i=int(a.get("chain_i", 0))), STEP_STATE="1")
+    fused = _fused_permute(ctx, out)                              # o_proj's tile reads the output: written in its order
+    if fused:
+        macros = dict(macros, **fused[1])
+    k = ctx.kernel("gqa", _gqa_src(ctx, v3=True), "gqa_decode_v3", macros)
+    rep = heads // kv
+    t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
+    n_tg = heads * t_c                                            # a threadgroup per (kv head, row): kv · rep · T ≤ heads · t_c
+    prm = ctx.params("gqa_v3", kernels.gqa_params(
+        heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_tg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
+        v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
+        scaling=float(a["scaling"]), has_gate=gate is not None, n_chunks_max=1, rows_max=rep * t_c))
+    st = ctx.program.step_state
+    gb = ctx.buf(gate) if gate is not None else ctx.buf(proj)
+    ctx.add(k, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
+                (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *((fused[0], 0) if fused else ctx.buf(out))), (9, prm, 0),
+                (10, *gb), (15, st, 0)],
+            (n_tg, 1, 1), (kernels.gqa_v3_simdgroups(d) * 32, 1, 1), "gqa_decode", writes=[1, 2, 7], kind="gqa_decode", attention="v3",
+            perm_out=bool(fused))
 
 
 def _draft_attn(ctx: _Ctx, op: Op) -> None:
@@ -553,9 +719,11 @@ def _draft_attn(ctx: _Ctx, op: Op) -> None:
         raise ValueError(f"draft_attn: a block of {gamma} rows exceeds the layout's gamma_max {ctx.layout.gamma_max}")
     ctx_max = ctx.shape(kc)[0]
     chunk = 64
-    macros = dict(kernels.gqa_macros(d, chunk=chunk), DRAFT="1", STEP_STATE="1")
+    macros = dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows), DRAFT="1", STEP_STATE="1")
     src = _gqa_src(ctx)
-    kd, km = ctx.kernel("gqa", src, "gqa_decode", macros), ctx.kernel("gqa", src, "gqa_merge", macros)
+    fused = _fused_permute(ctx, out)                              # the drafter's o_proj tile reads the merge's output
+    kd = ctx.kernel("gqa", src, "gqa_decode", macros)
+    km = ctx.kernel("gqa", src, "gqa_merge", dict(macros, **fused[1]) if fused else macros)
     rep = heads // kv
     n_chunks_max, rows_max = -(-ctx_max // chunk), rep * gamma
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
@@ -569,8 +737,8 @@ def _draft_attn(ctx: _Ctx, op: Op) -> None:
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, part_o, 0), (8, part_md, 0), (9, prm, 0), (11, *ctx.buf(kvp)),
                  (15, st, 0)], grid, tg, op.kind, writes=[1, 2, 7, 8])
-    ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, *ctx.buf(proj)), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
-            (gamma * heads, 1, 1), (32, 1, 1), "gqa_merge", writes=[3])
+    ctx.add(km, [(0, part_o, 0), (1, part_md, 0), (2, *ctx.buf(proj)), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
+            (gamma * heads, 1, 1), (32, 1, 1), "gqa_merge", writes=[3], perm_out=bool(fused))
 
 
 def _gdn_macros(ctx: _Ctx, a: Dict[str, Any], commit: bool) -> Dict[str, str]:
@@ -633,9 +801,14 @@ def _argmax(ctx: _Ctx, op: Op) -> None:
     logits, = op.inputs
     token = op.outputs[0]
     t_c, t_src = ctx.rows_of(op)
+    if t_src == STATIC_ROWS and isinstance(logits.shape[0], Sym):     # a row view written from symbolic-row logits (an LM drafter's
+        t_c, t_src = step_bindings(ctx.t)[logits.shape[0]], ROW_SOURCE[logits.shape[0]]   # chain: no row in a prefill chunk)
     vocab = ctx.shape(logits)[1]
     src = kernels.argmax_source()
     m = ctx.t_macros(t_c, t_src)
+    if op.attrs.get("last"):
+        m = dict(m, ARGMAX_LAST="1")                                  # only the last row (an LM drafter's first chain step ends with the anchor)
+        t_c = 1
     kp, kf = ctx.kernel("argmax", src, "argmax_partial", m), ctx.kernel("argmax", src, "argmax_final", m)
     pv, pi = ctx.scratch("argmax.val", t_c * ctx.n_sg * 4, shared=True), ctx.scratch("argmax.idx", t_c * ctx.n_sg * 4, shared=True)
     prm = ctx.params("argmax", kernels.argmax_params(vocab, t_c, ctx.n_sg))
@@ -716,7 +889,7 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
     else:
         mode, thr = 0, (float(op.attrs.get("threshold", 0.0)) if conf is not None else 0.0)
     prm = ctx.params("verify_select", kernels.select_params(gamma, thr, ctx.layout.t_max, mode=mode, cost=cost, log_cap=kernels.ACCEPT_LOG_CAP,
-                                                            ctx_cap=ctx.ctx_cap_target))
+                                                            ctx_cap=ctx.ctx_cap_target, lm=bool(op.attrs.get("lm"))))
     ctx.program.buffers.setdefault(CONF_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * kernels.CONF_LOG_WIDTH * 4, None, "arena"))
     cb = ctx.buf(conf) if conf is not None else (ctx.scratch("verify_select.conf", gamma * 4), 0)
     ctx.add(k, [(0, *ctx.buf(drafts)), (1, *cb), (2, ctx.program.step_state, 0), (3, prm, 0), (4, CONF_LOG, 0)], (1, 1, 1), (32, 1, 1), op.kind,
@@ -726,7 +899,8 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
 def _accept_scan(ctx: _Ctx, op: Op) -> None:
     token, = op.inputs
     k = ctx.kernel("spec_ops", _spec_ops(ctx), "accept_scan", {})
-    prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP, ctx_cap=ctx.ctx_cap))
+    prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP, ctx_cap=ctx.ctx_cap,
+                                                          lm=bool(op.attrs.get("lm"))))
     ctx.program.buffers.setdefault(ACCEPT_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * 4, None, "arena"))
     ctx.add(k, [(0, *ctx.buf(token)), (1, ctx.program.step_state, 0), (2, ctx.program.ring, 0), (3, prm, 0), (4, ACCEPT_LOG, 0)],
             (1, 1, 1), (32, 1, 1), op.kind, writes=[1, 2, 4])
@@ -827,7 +1001,8 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     check_coverage(g, profile)
     program = Program(kernels={}, buffers={}, ops=[], ring_capacity=ring_capacity, layout=layout)
     ctx = _Ctx(program, packs, layout, t, 12 * profile.gpu_cores * profile.threadgroups_per_core, tg, values=g.values, dynamic_t=dynamic_t,
-               speculative=speculative, attention=attention or profile.attention, accelerator=accelerator or profile.accelerator,
+               speculative=speculative, attention=attention or profile.attention, attn_rows=int(profile.attention_rows), accelerator=accelerator or profile.accelerator,
+               attn_v2_tg=int(profile.attention_v2_threadgroups),
                accel_min_t=dict(profile.accelerator_min_t), tuner=tuner, eos=eos, ring_capacity=ring_capacity, t_min=max(1, int(t_min)))
     _pack_windows(ctx)
     ctx.ctx_cap_target, ctx.ctx_cap = _context_capacity(ctx, g)
@@ -844,8 +1019,8 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
                 program.buffers[v.name] = BufferSpec(max(_value_bytes(v, t), 16), None, "arena")
         elif not v.is_source:
             nbytes = _value_bytes(v, t)
-            if v.name in hoisted:
-                nbytes = t * hoisted[v.name] * 4              # a hoisted statistic holds n_blocks partials per token
+            if v.name in hoisted:                                     # a hoisted statistic holds partials per token: re-sized by its producer (_size_stat)
+                nbytes = numel((v.shape[0],), step_bindings(t)) * hoisted[v.name] * 4
             program.buffers[v.name] = BufferSpec(max(nbytes, 16), None, "arena")
         elif v.is_weight or v.is_const:
             if v.name not in ctx.windows:
@@ -931,7 +1106,8 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
     from ..spec import DraftContext
 
     acc = g.value("accepted", (1,), DType.U32)
-    g.op("accept_scan", [token], [acc], domain=BlockDomain("span", 1), klass=OpClass.SERIAL)
+    lm = bool(getattr(drafter, "lm_drafter", False))          # an LM drafter: the scan's bookkeeping differs (design §5.8)
+    g.op("accept_scan", [token], [acc], domain=BlockDomain("span", 1), klass=OpClass.SERIAL, **({"lm": True} if lm else {}))
     for op in list(g.ops):
         ck = op.attrs.get("commit_kind")
         if ck:
@@ -942,7 +1118,8 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
         if i not in model.tap_values:
             raise ValueError(f"lower_round: the drafter taps layer {i}, which the model does not expose ({sorted(model.tap_values)})")
         taps.append(model.tap_values[i])
-    block = drafter.lower_draft(g, DraftContext(taps, None))
+    tokens = [v for v in g.values.values() if v.is_input and tuple(v.shape) == (T,)]     # the step's token rows (pending_tokens)
+    block = drafter.lower_draft(g, DraftContext(taps, None, tokens=tokens[0] if len(tokens) == 1 else None))
     return drafter.lower_select(g, block, profile, cost=cost, threshold=threshold, fixed=fixed)
 
 

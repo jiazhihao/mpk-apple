@@ -68,10 +68,10 @@ def test_x_permute_column_order():
     assert perm[4] == 2 * kl and perm[8] == 4 * kl and perm[16] == 4 and perm[64] == 16 and perm[256] == 8 * kl
 
 
-def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1):
+def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1, placement="inline"):
     rng = np.random.default_rng(5)
     spec = random_spec(fmt, n, k, rng)
-    data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order))
+    data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
     f = FORMATS.get(fmt)
     x = rng.uniform(-1, 1, size=(t_act, k)).astype(np.float32)
     xb = f32_to_bf16(x)
@@ -323,11 +323,13 @@ def test_gemm_static_rows_source(dev):
 
 
 @pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "int4_affine", "bf16"])
-@pytest.mark.parametrize("ksplit,tm,t_act", [(2, 8, 8), (4, 8, 5), (2, 16, 16), (2, 32, 30)])
+@pytest.mark.parametrize("ksplit,tm,t_act", [(2, 8, 8), (4, 8, 5), (8, 8, 8), (2, 16, 16), (2, 32, 30)])
 def test_gemm_tile_ksplit_matches_oracle(dev, fmt, ksplit, tm, t_act):
     """The K-split (one tile per threadgroup of ``ksplit`` SIMD-groups, the partials reduced through threadgroup
     memory): 272 rows (a partial last tile), K = 2048 (8 K tiles at TK = 256 — two lane groups per slice at 2, one
-    at 4), every format, the three TM."""
+    at 4, one K tile per slice at 8), every format, the three TM."""
+    if ksplit == 8 and fmt != "fp8_e4m3":
+        pytest.skip("8 slices of 8 K tiles: one K tile each, half a lane group — the scale cache needs whole lane groups")
     out, ref = _run(dev, fmt, 272, 2048, tm, t_act, "interleaved16", ksplit=ksplit)
     chk = check_against_oracle(out[:t_act], ref)
     assert chk.ok() and chk.max_rel_err < 2e-6, chk
@@ -345,6 +347,8 @@ def test_gemm_tile_ksplit_rejects_odd_splits():
         kernels.gemm_macros(info, tm=8, ksplit=4)
     _, info, _ = pack_spec(random_spec("nvfp4", 256, 4096, rng), PackLayout(rows=16))     # 16 K tiles, 4 words per lane: whole lane groups per slice
     assert kernels.gemm_macros(info, tm=8, ksplit=4)["KSPLIT"] == "4u"
+    with pytest.raises(ValueError, match="threadgroup memory"):                            # TM 32 × 16 slices: 60 KiB of partial tiles
+        kernels.gemm_macros(info, tm=32, ksplit=16, scale_cache=False)
 
 
 @pytest.mark.parametrize("fmt,ksplit", [("nvfp4", 2), ("fp8_e4m3", 4), ("int4_affine", 2)])
@@ -371,3 +375,27 @@ def test_gemm_ksplit_epilogues_and_predication(dev, fmt, ksplit):
     assert check_against_oracle(out3[:6], ref[:6].astype(np.float32)).max_ulp_elementwise <= 1 and np.all(out3[6:] == 0)
     out4, _ = t.run(x, epilogue="residual", residual=res, step_state=(layout, {"t_this_step": 1}), t_range=(1, 8), ksplit=ksplit)
     assert np.all(out4 == 0)
+
+
+@pytest.mark.parametrize("fmt,k", [("nvfp4", 4096), ("nvfp4", 5120), ("int8", 4096), ("int4_affine", 4096), ("nvfp4", 2048)])
+@pytest.mark.parametrize("ksplit", [1, 2])
+def test_gemm_tile_block_scale_placement(dev, fmt, k, ksplit):
+    """The tile's cooperative fill reading the block's scale region (#101), with and without the scale cache and the K-split."""
+    out, ref = _run(dev, fmt, 272, k, 8, 8, "interleaved16", ksplit=ksplit, placement="block")
+    chk = check_against_oracle(out, ref)
+    assert chk.ok() and chk.max_rel_err < 2e-6, chk
+
+
+@pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3"])
+def test_gemm_silu_mul_perm_out(dev, fmt):
+    """The silu·mul epilogue writing its output in the consumer tile's x' order (PERM_OUT): the same bits as x_permute
+    applied to the natural output (the consumer: K = N/2 of this tile, NVFP4 words of 32, TK = 256)."""
+    rng = np.random.default_rng(23)
+    n, k = 2048, 1024                                                        # the consumer's K = N/2 = 1024: whole NVFP4 words per lane
+    g = Gemm(dev, fmt, n, k, 8, rows=16)
+    x = f32_to_bf16(rng.uniform(-1, 1, size=(8, k)).astype(np.float32))
+    natural, _ = g.run(x, epilogue="silu_mul")
+    k_next, wpw_next, tk_next = n // 2, 32, 256
+    permuted, _ = g.run(x, epilogue="silu_mul", extra_macros=kernels.perm_out_macros(k_next, wpw_next, tk_next))
+    cols = kernels.x_permute_columns(k_next, wpw_next, tk_next)
+    assert np.array_equal(permuted, natural[:, cols])

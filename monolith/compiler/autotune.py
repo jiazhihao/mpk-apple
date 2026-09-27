@@ -30,8 +30,11 @@ from ..formats.fp import f32_to_bf16
 NOISE_MARGIN = 0.03           # a variant replaces the default only if faster by more than this fraction
 
 
-def gemv_key(info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool) -> str:
-    return f"gemv|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|T{t}|{epilogue or 'plain'}|{'norm' if norm_fed else 'raw'}"
+def gemv_key(info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool, stat_parts: int = 64) -> str:
+    key = f"gemv|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|T{t}|{epilogue or 'plain'}|{'norm' if norm_fed else 'raw'}"
+    if norm_fed and stat_parts != 64:
+        key += f"|P{stat_parts}"                                     # the producer's partial count: the fused norm folds it per SIMD-group
+    return key
 
 
 def gdn_key(hv: int, hk: int, dk: int, dv: int, conv_width: int, t: int) -> str:
@@ -41,7 +44,7 @@ def gdn_key(hv: int, hk: int, dk: int, dv: int, conv_width: int, t: int) -> str:
 @dataclass
 class Choice:
     macros: Dict[str, str]
-    grid_mode: str                 # "crew" | "crew2" | "block"
+    grid_mode: str                 # "crew" | "crew2" | "crew3" | "crew4" | "block" | "ksplit<S>[nc]"
     fuse_norm: bool = False
     ms: float = 0.0
     default_ms: float = 0.0
@@ -79,19 +82,21 @@ class Autotuner:
         if mode == "block":
             n_sg = n_blocks
             return n_sg, -(-(n_sg * 32) // 64), 64
-        n_sg = 12 * self.cores * (2 if mode == "crew2" else 1)
+        n_sg = 12 * self.cores * kernels.crew_factor(mode)
         return n_sg, -(-(n_sg * 32) // 384), 384
 
     # ---- GEMV ----------------------------------------------------------------------------------------------------
-    def tune_gemv(self, info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool, *, force: bool = False) -> Choice:
-        key = gemv_key(info, t, epilogue, norm_fed)
+    def tune_gemv(self, info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool, *, force: bool = False, stat_parts: int = 64) -> Choice:
+        """``stat_parts``: the partial sums per token the norm statistic arrives in (the producer's blocks × its row
+        split) — the fused variant folds them in every SIMD-group, so the benchmark must see the program's count."""
+        key = gemv_key(info, t, epilogue, norm_fed, stat_parts)
         if key in self.choices and not force:
             c = self.choices[key]
             return Choice(dict(c["macros"]), c["grid_mode"], c.get("fuse_norm", False), c.get("ms", 0.0), c.get("default_ms", 0.0))
         nt = self.nt
         rng = np.random.default_rng(0)
         spec = random_spec(info.format, info.n, info.k, rng)
-        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order))
+        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order, scale_placement=info.scale_placement))
         copies = max(1, int((256 << 20) // max(len(data), 1)))           # ≥ 256 MB streamed per timing
         wbuf = nt.Buffer(self.dev, len(data) * copies)
         for c in range(copies):
@@ -99,31 +104,36 @@ class Autotuner:
         xb = f32_to_bf16(rng.uniform(-1, 1, size=(t, info.k)).astype(np.float32))
         xbuf, rsbuf = nt.Buffer(self.dev, xb.tobytes()), nt.Buffer(self.dev, row_scales.tobytes())
         ybuf = nt.Buffer(self.dev, t * info.n * 2)
-        stat = nt.Buffer(self.dev, (t * 4 * 64))
-        stat.write(np.full(t * 64, float(info.k) / 64, np.float32).tobytes(), 0)
+        parts = max(1, int(stat_parts))
+        stat = nt.Buffer(self.dev, t * 4 * parts)
+        stat.write(np.full(t * parts, float(info.k) / parts, np.float32).tobytes(), 0)
         nw = nt.Buffer(self.dev, np.ones(info.k, np.float32).tobytes())
         res = nt.Buffer(self.dev, t * info.n * 2)
         xn = nt.Buffer(self.dev, t * info.k * 2)
         variants: List[Tuple[str, Dict[str, Any]]] = []
-        rgs = [r for r in (2, 4, 8) if r <= info.rows and info.rows % r == 0]
-        for rg, mode in itertools.product(rgs, ("crew", "crew2", "block")):
-            variants.append(("apply", {"rg": rg, "mode": mode, "fuse": False}))
-            if norm_fed:
-                variants.append(("fused", {"rg": rg, "mode": mode, "fuse": True}))
+        rgs = [r for r in ((1, 2, 4, 8) if t == 1 else (2, 4, 8)) if r <= info.rows and info.rows % r == 0]   # RG 1: one-row items (RSPLIT 16), for the small-K slabs whose activation is hoisted
+        for rg, mode in itertools.product(rgs, ("crew", "crew2", "crew3", "crew4", "block")):
+            # the row splits (RSPLIT > 1) only where the blocks alone leave SIMD-groups idle or end in a short last wave
+            for rs in kernels.gemv_rsplits(info.rows, rg, epilogue):
+                if rs > 1 and (mode == "block" or pinfo.n_blocks >= 4 * self.grid(mode, pinfo.n_blocks)[0]):
+                    continue
+                variants.append(("apply", {"rg": rg, "mode": mode, "fuse": False, "rsplit": rs}))
+                if norm_fed:
+                    variants.append(("fused", {"rg": rg, "mode": mode, "fuse": True, "rsplit": rs}))
         results = []
         default_ms = None
         for _, v in variants:
             try:
-                macros = kernels.gemv_macros(pinfo, t=t, rg=v["rg"], epilogue=epilogue, norm=v["fuse"], out_bf16=True)
+                macros = kernels.gemv_macros(pinfo, t=t, rg=v["rg"], epilogue=epilogue, norm=v["fuse"], out_bf16=True, rsplit=v["rsplit"])
             except ValueError:
                 continue
             n_sg, grid, tg = self.grid(v["mode"], pinfo.n_blocks)
             pso = nt.Pipeline(nt.Library(self.dev, kernels.gemv_source(info.format), macros), "gemv_T")
-            prm = kernels.gemv_params(info.n, pinfo.n_blocks, n_sg, t, eps=1e-6, stat_parts=64)
+            prm = kernels.gemv_params(info.n, pinfo.n_blocks, n_sg, t, eps=1e-6, stat_parts=parts)
             ds = []
             if norm_fed and not v["fuse"]:
                 apso = nt.Pipeline(nt.Library(self.dev, kernels.norm_apply_source(), {}), "norm_apply")
-                aprm = kernels.norm_apply_params(info.k, t, 64, 1e-6)
+                aprm = kernels.norm_apply_params(info.k, t, parts, 1e-6)
             for c in range(copies):
                 if norm_fed and not v["fuse"]:
                     ds.append(nt.Dispatch().pipeline(apso).buffer(0, xbuf).buffer(1, stat).buffer(2, nw).buffer(3, xn).bytes(4, aprm).grid(t).threadgroup(32))
@@ -135,17 +145,21 @@ class Autotuner:
                     d.buffer(7, res)
                 ds.append(d)
             ms = self._time(ds) / copies
-            is_default = v["rg"] == int(kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)["RG"]) and v["mode"] == "crew" and not v["fuse"]
+            is_default = (v["rg"] == int(kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)["RG"]) and v["mode"] == "crew"
+                          and not v["fuse"] and v["rsplit"] == 1)
             if is_default:
                 default_ms = ms
             results.append((ms, v, macros))
         results.sort(key=lambda r: r[0])
         best_ms, bv, bmacros = results[0]
         if default_ms is not None and best_ms > default_ms * (1 - NOISE_MARGIN):
-            bv = {"rg": int(kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)["RG"]), "mode": "crew", "fuse": False}
+            bv = {"rg": int(kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)["RG"]), "mode": "crew", "fuse": False, "rsplit": 1}
             bmacros = kernels.gemv_macros(pinfo, t=t, epilogue=epilogue, out_bf16=True)
             best_ms = default_ms
-        choice = Choice({"RG": bmacros["RG"]}, bv["mode"], bv["fuse"], best_ms, default_ms or best_ms)
+        cmac = {"RG": bmacros["RG"]}
+        if "RSPLIT" in bmacros:
+            cmac["RSPLIT"] = bmacros["RSPLIT"]
+        choice = Choice(cmac, bv["mode"], bv["fuse"], best_ms, default_ms or best_ms)
         self.choices[key] = {"macros": choice.macros, "grid_mode": choice.grid_mode, "fuse_norm": choice.fuse_norm, "ms": choice.ms,
                              "default_ms": choice.default_ms, "variants": [(round(ms, 4), v) for ms, v, _ in results]}
         return choice
@@ -155,14 +169,14 @@ class Autotuner:
         """The tile's geometry: one or two threadgroups per core (the sweep in decode-kernels.md §6 found either,
         by format) or the K-split (one tile per threadgroup of 2 or 4 SIMD-groups, for the shapes whose tiles cannot
         occupy the crew), timed on synthetic data like the GEMV variants."""
-        key = f"gemm2|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|TM{tm}|{epilogue or 'plain'}"
+        key = f"gemm3|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|TM{tm}|{epilogue or 'plain'}"
         if key in self.choices and not force:
             c = self.choices[key]
             return Choice(dict(c["macros"]), c["grid_mode"], False, c.get("ms", 0.0), c.get("default_ms", 0.0))
         nt = self.nt
         rng = np.random.default_rng(0)
         spec = random_spec(info.format, info.n, info.k, rng)
-        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order))
+        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order, scale_placement=info.scale_placement))
         copies = max(1, int((256 << 20) // max(len(data), 1)))
         wbuf = nt.Buffer(self.dev, len(data) * copies)
         for c in range(copies):
@@ -172,12 +186,21 @@ class Autotuner:
         lib = nt.Library(self.dev, kernels.gemm_source(info.format), dict(macros, **kernels.x_permute_macros(False)), language_version=kernels.MSL_TENSOR_OPS)
         pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(lib, "x_permute")
         psos = {"crew": pso, "crew2": pso}
-        for s in (2, 4):
+        # the K-splits, each with the scale cache where it fits and without it (the cache's registers cost more than the
+        # reload on the 8B's shapes — measured, decode-kernels.md §9); a split finer than the lane groups needs it off
+        for s in (2, 4, 8, 16):
             try:
                 km = kernels.gemm_macros(pinfo, tm=tm, out_bf16=True, epilogue=epilogue, ksplit=s)
             except ValueError:
-                continue                                               # the slab's K tiles do not split that way
-            psos[f"ksplit{s}"] = nt.Pipeline(nt.Library(self.dev, kernels.gemm_source(info.format), km, language_version=kernels.MSL_TENSOR_OPS), "gemm_tile")
+                km = None                                              # the K tiles do not split that way, or the split needs the cache off
+            if km is not None:
+                psos[f"ksplit{s}"] = nt.Pipeline(nt.Library(self.dev, kernels.gemm_source(info.format), km, language_version=kernels.MSL_TENSOR_OPS), "gemm_tile")
+            if pinfo.scale_bytes and (km is None or "SCALE_CACHE" in km):   # a cacheless twin only where it differs
+                try:
+                    kmn = kernels.gemm_macros(pinfo, tm=tm, out_bf16=True, epilogue=epilogue, ksplit=s, scale_cache=False)
+                except ValueError:
+                    continue
+                psos[f"ksplit{s}nc"] = nt.Pipeline(nt.Library(self.dev, kernels.gemm_source(info.format), kmn, language_version=kernels.MSL_TENSOR_OPS), "gemm_tile")
         xb = f32_to_bf16(rng.uniform(-1, 1, size=(tm, info.k)).astype(np.float32))
         xbuf, rsbuf = nt.Buffer(self.dev, xb.tobytes()), nt.Buffer(self.dev, row_scales.tobytes())
         xp = nt.Buffer(self.dev, tm * info.k * 2)
@@ -205,8 +228,9 @@ class Autotuner:
         default_ms = [ms for ms, m in results if m == "crew"][0]
         if best_ms > default_ms * (1 - NOISE_MARGIN):
             best_ms, best_mode = default_ms, "crew"
-        choice = Choice({}, best_mode, False, best_ms, default_ms)
-        self.choices[key] = {"macros": {}, "grid_mode": best_mode, "ms": best_ms, "default_ms": default_ms, "variants": [(round(ms, 4), m) for ms, m in results]}
+        cmac = {"SCALE_CACHE": "0"} if best_mode.endswith("nc") else {}
+        choice = Choice(cmac, best_mode, False, best_ms, default_ms)
+        self.choices[key] = {"macros": cmac, "grid_mode": best_mode, "ms": best_ms, "default_ms": default_ms, "variants": [(round(ms, 4), m) for ms, m in results]}
         return choice
 
     # ---- GDN -----------------------------------------------------------------------------------------------------

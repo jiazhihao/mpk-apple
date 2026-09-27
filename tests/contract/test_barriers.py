@@ -96,7 +96,20 @@ def test_attention_kernel_follows_the_profile(tmp_path):
     p2 = Profile.from_dict("b", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "v2"}})
     assert p1.attention == "v1" and p2.attention == "v2"
     with pytest.raises(ValueError):
-        Profile.from_dict("c", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "v3"}})
+        Profile.from_dict("c", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "v9"}})
+    # v3: core and merge are one dispatch of heads · T threadgroups (32 SIMD-groups each) that writes the merge's output
+    # and the caches; the partial values stay unwritten; the gate (this model's) is bound at 10
+    prog_v3 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2, attention="v3")
+    v3 = [o for o in prog_v3.ops if prog_v3.kernels[o.kernel].function == "gqa_decode_v3"]
+    assert len(v3) == 1 and not [o for o in prog_v3.ops if o.name == "gqa_merge"] and v3[0].meta["attention"] == "v3"
+    assert v3[0].grid == (8 * 2, 1, 1) and v3[0].threadgroup == (8 * 32, 1, 1) and sorted(b for b, _, _ in v3[0].bindings) == [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 15]   # D = 32: 8 SIMD-groups
+    assert [o for o in prog_v3.ops if o.name == "gqa_decode"] == v3
+    # auto = v3 at every row count (it measured faster than v2 and v1 from 2 to 32 rows, 128 to 8192 keys); v2 / v1 explicit
+    pa = Profile.from_dict("d", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "auto"}})
+    for t in (1, 2, 8):
+        prog = compile_program(m, PackFile(tmp_path / "pack"), pa, t=t)
+        assert prog.kernels[[o for o in prog.ops if o.name == "gqa_decode"][0].kernel].function == "gqa_decode_v3", t
+        assert not [o for o in prog.ops if o.name == "gqa_merge"]
     prog1 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2)
     prog2 = compile_program(m, PackFile(tmp_path / "pack"), p2, t=2)
     prog3 = compile_program(m, PackFile(tmp_path / "pack"), p1, t=2, attention="v2")
@@ -111,7 +124,7 @@ def test_attention_kernel_follows_the_profile(tmp_path):
 
     prm = prog2.buffers[[b for b in [o for o in prog2.ops if o.name == "gqa_decode"][0].bindings if b[0] == 9][0][1]].init
     heads, kv, t_active, position, n_sg = struct.unpack_from("<IIIII", prm)
-    assert (heads, kv, t_active, n_sg) == (8, 2, 2, 20)                     # v2: n_sg carries the threadgroup count
+    assert (heads, kv, t_active, n_sg) == (8, 2, 2, 40)                     # v2: n_sg carries the threadgroup count
     n_chunks_max = struct.unpack_from("<I", prm, 60)[0]
     assert n_chunks_max == 16 // 32 + 1 or n_chunks_max == 1
     # the argmax partials share one workspace across programs' ops (one name → one buffer)

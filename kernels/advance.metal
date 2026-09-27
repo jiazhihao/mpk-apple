@@ -24,6 +24,7 @@ kernel void advance(device const int* token [[buffer(0)]], device StepState* st 
   if (head - st->ring_tail >= p.ring_cap) { st->error = 1; st->done = 1; return; }     // ring overflow: the host fell behind
   ring[head % p.ring_cap] = (ulong(head + 1u) << 32) | ulong(uint(tok));
   st->ring_head = head + 1u;
+  if (st->stop_at && st->ring_head >= st->stop_at) st->done = 1u;   // the request is served: the queued steps return at once
   st->pending_tokens[0] = tok;
   st->position = st->position + t;
   st->step = st->step + 1u;

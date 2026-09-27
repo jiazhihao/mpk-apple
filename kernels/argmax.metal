@@ -6,6 +6,9 @@
 #ifndef STEP_STATE
 #define STEP_STATE 0
 #endif
+#ifndef ARGMAX_LAST
+#define ARGMAX_LAST 0                // 1: only the last of the T_act rows is reduced (an LM drafter's first chain step) into token[0]
+#endif
 #ifndef T_SRC
 #define T_SRC 0                      // with STEP_STATE: 0 = t_this_step, 1 = n_inject, 2 = the static T_STATIC_ROWS
 #endif
@@ -40,11 +43,16 @@ kernel void argmax_partial(device const ushort* logits [[buffer(0)]], device flo
   if (sg >= p.n_sg) return;
 #if STEP_STATE
   if (st->done) return;
-  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step);
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step)));
 #else
   const uint T_act = p.t_active;
 #endif
-  for (uint t = 0; t < T_act; t++) {
+#if ARGMAX_LAST
+  const uint t_first = (T_act > 0u) ? T_act - 1u : 0u;              // only the last row: its partials and token land in slot 0
+#else
+  const uint t_first = 0u;
+#endif
+  for (uint t = t_first; t < T_act; t++) {
     float best = -INFINITY;
     uint bi = 0xFFFFFFFFu;
     device const ushort* row = logits + (ulong)t * p.vocab;
@@ -62,7 +70,7 @@ kernel void argmax_partial(device const ushort* logits [[buffer(0)]], device flo
       }
     }
     simd_argmax(best, bi);
-    if (lane == 0) { part_val[t * p.n_sg + sg] = best; part_idx[t * p.n_sg + sg] = bi; }
+    if (lane == 0) { part_val[(t - t_first) * p.n_sg + sg] = best; part_idx[(t - t_first) * p.n_sg + sg] = bi; }
   }
 }
 
@@ -74,9 +82,14 @@ kernel void argmax_final(device const float* part_val [[buffer(0)]], device cons
                          uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
   const uint t = gid / sw;
 #if STEP_STATE
-  if (st->done || t >= ((T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step))) return;
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step)));
+  if (st->done || t >= T_act) return;
 #else
-  if (t >= p.t_active) return;
+  const uint T_act = p.t_active;
+  if (t >= T_act) return;
+#endif
+#if ARGMAX_LAST
+  if (t != 0u) return;                                                 // the last row's partials sit in slot 0, its token goes to token[0]
 #endif
   float best = -INFINITY;
   uint bi = 0xFFFFFFFFu;

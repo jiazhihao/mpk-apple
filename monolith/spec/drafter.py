@@ -27,6 +27,7 @@ class DraftContext:
 
     taps: List[Value] = field(default_factory=list)      # residual stream after each tapped target layer, [T, H]
     anchor: Optional[Value] = None                       # the last committed token id
+    tokens: Optional[Value] = None                       # the step's input token rows (StepState.pending_tokens): an LM drafter ingests the committed ones
 
 
 @dataclass

@@ -13,8 +13,9 @@ class PackLayout:
 
     ``rows`` = R rows per block; ``lane_order`` = how the 32 lanes' words are ordered inside a block
     (``contiguous``: lane ℓ's stripe of all R rows is one run; ``interleaved16``: the lanes' k-th 16-byte words are
-    adjacent); ``scale_placement`` = where per-block scales go (``inline`` after each lane-row, ``leading`` before
-    the block).
+    adjacent); ``scale_placement`` = where per-block scales go: ``inline`` after each lane-row's payload (the unit
+    padded to 16 bytes: 72 → 80 at K = 4096 for NVFP4, +11 % of the bytes) or ``block`` — the block's scales in
+    their own region after its payload words, a unit holding whole payload words only (#101).
     """
 
     rows: int = 16
@@ -72,6 +73,7 @@ class Format(ABC):
     weights_per_word: int = 0
     scale_group: int = 0
     pack_k_multiple: int = 32        # K must be a multiple of this for ``pack`` (32 lanes; a lane's stripe holds whole scale groups)
+    scale_unit_bytes: int = 1        # bytes per block-scale entry as ``decode_scale(sw, g)`` indexes them (E4M3 bytes; INT8 halves; INT4's float pairs)
 
     @abstractmethod
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:

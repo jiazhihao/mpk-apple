@@ -160,6 +160,8 @@ that needs anything else needs an op first (§3) — a separate PR, merged befor
 
 ```bash
 python tools/pack_weights.py --model ~/models/<ckpt> --out /tmp/pack           # slabs, aux, tables from the tree
+#   --scale-placement block: the block's scales in their own region (a unit of whole payload words) where that
+#   saves bytes — the M5 Pro profile's choice; --quantize <fmt>: BF16 matrices quantized at pack time
 python -m monolith.generate --model ~/models/<ckpt> --pack /tmp/pack --prompt "The capital of France is" -n 48
 python -m monolith.trace --model ~/models/<ckpt> --pack /tmp/pack --steps 5    # the per-op budget a token is made of
 ```
@@ -167,7 +169,9 @@ python -m monolith.trace --model ~/models/<ckpt> --pack /tmp/pack --steps 5    #
 `generate` also takes a drafter (`--drafter <dir> --drafter-pack <pack> --drafter-kind dspark`), sampling
 (`--temperature --top-k --top-p --min-p --seed`), and the engine knobs (`--barriers`, `--attention`, `--math`,
 `--no-autotune`). The first run autotunes the GEMV and GDN geometries per op and caches the choice in the pack
-directory.
+directory. `python tools/bench/layer_vs_mlx.py --model <ckpt> --pack /tmp/pack` compares a decoder layer's cost with
+mlx-lm's on the same checkpoint (the slope of the step over the layer count, T = 1 / 4 / 8, two contexts, per-op
+profiles on both sides; decode-kernels.md §11) — the measurement a model or kernel change is judged by.
 
 ### 1.7 The PR
 
@@ -245,8 +249,10 @@ Today an op needs:
 3. `monolith/kernels.py`: the `*_source`, `*_macros` and `*_params` helpers that assemble the MSL and the parameter
    struct — the same code the tests and the emitter use.
 4. `monolith/compiler/emit.py`: a handler in `HANDLERS[kind]` that binds buffers (`ctx.buf(value)`), scratch
-   (`ctx.scratch`), the grid, and declares which bindings the kernel **writes** (`ctx.add(..., writes=[...])`) —
-   the barrier pass (`compiler/barriers.py`) places ICB barriers from these; an undeclared write is a race.
+   (`ctx.scratch`), its parameter record (`ctx.params`: the program's own bytes — a session shares its programs'
+   buffers by name, a params record never), the grid, and declares which bindings the kernel **writes**
+   (`ctx.add(..., writes=[...])`) — the barrier pass (`compiler/barriers.py`) places ICB barriers from these; an
+   undeclared write is a race.
 5. A library module that lowers to it (`monolith/nn/`), with its torch oracle in `monolith/nn/oracle.py`.
 6. Tests: the kernel against a numpy model of its contract and against the layer oracle (`tests/kernels/`,
    the DSpark ops in `test_draft_ops.py` are the pattern), the lowering and coverage without a GPU
@@ -263,15 +269,26 @@ draft ops, the verify/accept kernels, the dynamic-T program) was the engine's wo
 
 `monolith/spec/<name>/` implements `spec.drafter.Drafter` — a `Module` (weights, oracle, lowering) with `gamma`,
 `from_checkpoint(path, target_lm_head=)`, `tap_layers()` (the target layers whose residual streams it reads, `-1`
-= the embedding), `lower_draft(g, DraftContext, anchor) → DraftBlock` (tokens, confidences, hidden),
+= the embedding), `lower_draft(g, DraftContext, anchor) → DraftBlock` (tokens, confidences, hidden; the context carries the
+target's tapped residual streams, the anchor and the step's token rows),
 `lower_select(g, block, profile, cost=, threshold=, fixed=)` (the verify length from the profile's cost table or
 the drafter's own rule) and `lower_context_update(g, taps, accepted)`. Register with `@register_drafter("<name>")`
 and import the package in `monolith/spec/__init__.py`. The target exposes taps through `Model.feature_taps()` and
 `tap_values`; `tools/pack_weights.py --drafter-kind <name>` packs the drafter next to the target's pack (a BF16
-drafter is re-quantized at pack time with `--quantize nvfp4 --quantize-keep embed_tokens,markov`: the format's
+drafter is re-quantized at pack time with `--quantize nvfp4 --quantize-keep embed_tokens,markov_w1` (the gathered
+tables stay; the Markov head's GEMV, K = 256, packs as NVFP4 through sub-word units): the format's
 `quantize`, the gathered tables kept as stored, a matrix whose K the format cannot pack — `pack_k_multiple` — kept
 too; the session binds the tree to the pack's formats, so the emitted draft ops carry the quantized kernels);
 `generate --drafter … --drafter-kind <name>` runs the round.
+
+**An LM drafter** needs no drafter code: `--drafter-kind lm` runs a registered model package as the draft model
+(`monolith/spec/lm`; mlx-lm's `draft_model`). The package's tree must take `prefix` in `from_checkpoint` (every slab,
+aux entry, table, state and activation name gets it — `monolith/models/qwen3` does; the tables are stored under the
+prefix and read by their bare names), expose `embed_tokens`, `layers()`, `norm`, `lm_head` and `tables()`, and use
+attention mixers only (the GDN kernels have no ingest/chain modes: `GatedDeltaNet.lower` refuses a pass mode). Pack it
+with `tools/pack_weights.py --model <draft ckpt> --out <pack> --drafter-kind lm` (an MLX 4-bit checkpoint packs as it
+is) and run `generate --drafter <draft ckpt> --drafter-pack <pack> --drafter-kind lm --draft-gamma N`; the benches'
+`fixed:N` modes chain N. The drafter's vocabulary may not exceed the target's (the two must share a tokenizer).
 
 Two shape rules the emitter enforces: a value that feeds a GEMV has exactly the slab's K columns (a drafter whose
 block goes through the target's head has the target's hidden width), and a sequence occupies at most the program's
@@ -294,8 +311,8 @@ Profiles are measured, never hard-coded. Two tools write `profiles/<chip>-<cores
 1. `python tools/profile_writer.py` (~5 minutes; `--dry-run` prints without writing) — the autotuner at install
    time: it runs the kernel harnesses and writes the `engine` block the compiler reads — `lane_order` and
    `threadgroups_per_core` (the T = 1 GEMV rate), `cost_T` per format (the shader GEMV at T = 1, 2, 4, 8 relative to
-   T = 1), the tile's `accelerator_<fmt>` rows and the `accelerator` / `accelerator_min_t` decision, `attention` (v1
-   vs v2). A new chip without a spec bandwidth gets a measured stand-in (`--nominal-gbps` sets the spec figure).
+   T = 1), the tile's `accelerator_<fmt>` rows and the `accelerator` / `accelerator_min_t` decision, `attention` (v1,
+   v2 and v3 over contexts and T; `auto` = v3, which won every point measured here). A new chip without a spec bandwidth gets a measured stand-in (`--nominal-gbps` sets the spec figure).
    The decisions (`monolith/core/profile_writer.py`) follow the autotuner's 3 % noise rule; the raw numbers and the
    reason for each go under `writer`.
 2. `./probes/run_all.sh` (~5 minutes, Command Line Tools only) writes `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`;

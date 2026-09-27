@@ -6,13 +6,38 @@ from __future__ import annotations
 import math
 import struct
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence, Tuple
+from typing import List, Dict, Mapping, Optional, Sequence, Tuple
 
 from .formats import FORMATS
 from .formats.blm import PackInfo
 
 KERNELS_DIR = Path(__file__).resolve().parents[1] / "kernels"
 PRELUDE = "#include <metal_stdlib>\nusing namespace metal;\n"
+
+# PERM_OUT: a kernel that produces a tile GEMV's input writes it in x_permute's order (gemm_tile.metal's x') straight
+# into the tile's scratch, so the permute dispatch is not needed: natural column n of a K-wide row -> slot perm_dest(n)
+PERM_OUT_MSL = """
+#ifndef PERM_OUT
+#define PERM_OUT 0
+#endif
+#if PERM_OUT
+static inline uint perm_dest(uint n) {                       // the inverse of x_permute's perm_source for K = PERM_K
+  const uint kl = PERM_K / 32u, span = 32u * PERM_WPW;
+  const uint l = n / kl, o = n % kl, j = o / PERM_WPW, e = o % PERM_WPW;
+  const uint p = j * span + l * PERM_WPW + e;                // the pack-order column
+  const uint kt = p / PERM_TK, r = p % PERM_TK, mq = r / (PERM_TK / 4u), r2 = r % (PERM_TK / 4u);
+  const uint slot = (r2 & 3u) | ((mq & 1u) << 2) | ((mq >> 1) << 3) | ((r2 >> 2) << 4);
+  return kt * PERM_TK + slot;
+}
+#endif
+"""
+
+
+def perm_out_macros(k: int, wpw: int, tk: int) -> Dict[str, str]:
+    """The producer-side macros of a fused permute: the consumer tile's K, its format's weights per word and its TK."""
+    if k % (32 * wpw) or k % tk:
+        raise ValueError(f"perm_out: K={k} must be a multiple of {32 * wpw} and of {tk}")
+    return {"PERM_OUT": "1", "PERM_K": f"{k}u", "PERM_WPW": f"{wpw}u", "PERM_TK": f"{tk}u"}
 
 
 def template(name: str) -> str:
@@ -39,17 +64,46 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
     if info.k % 256 or info.payload_bytes % 4:
         raise ValueError(f"decode kernels: K must be a multiple of 256 ({info.format}, K={info.k})")
     p, s = info.payload_bytes, info.scale_bytes
-    g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": str(p // 16), "SCALE_UOFF": str((p % 16) // 4),
-         "SCALE_WORDS": str(-(-(p + s) // 16) - p // 16 if s else 0)}
+    if info.lanes_per_word > 1 and (info.lane_order != "interleaved16" or (s and info.scale_placement != "block")):
+        raise ValueError(f"decode kernels: a sub-word unit needs the interleaved order and block scales ({info.format}, K={info.k})")
+    if s and info.scale_unit_bytes and info.scale_unit_bytes != int(getattr(f, "scale_unit_bytes", 1)):
+        raise ValueError(f"decode kernels: the pack keeps {info.scale_unit_bytes}-byte scale entries, {info.format} decodes "
+                         f"{getattr(f, 'scale_unit_bytes', 1)}-byte ones now: re-pack it (tools/pack_weights.py)")
+    if info.scale_placement == "block" and s:
+        # the block's scale region after its payload words: a lane's S bytes start (lane·S) % 16 into a word; the
+        # kernels load scale_words words from there and index the scales by SCALE_SOFF (in the format's scale units)
+        unit_bytes = int(getattr(f, "scale_unit_bytes", 1))
+        if s % unit_bytes or 16 % unit_bytes:
+            raise ValueError(f"decode kernels: {info.format}'s scale run of {s} bytes is not whole {unit_bytes}-byte scales")
+        g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": "0", "SCALE_UOFF": "0", "SCALE_WORDS": str(info.scale_words),
+             "SCALE_PLACEMENT": "1", "SCALE_RUN": f"{s}u", "SCALE_UNIT_BYTES": f"{unit_bytes}u",
+             "SCALE_REGION_WORDS": f"{info.scale_region_bytes // 16}u"}
+    else:
+        g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": str(p // 16), "SCALE_UOFF": str((p % 16) // 4),
+             "SCALE_WORDS": str(-(-(p + s) // 16) - p // 16 if s else 0)}
     group = info.scale_group or getattr(f, "scale_group", 0)
     if group:
         g["GROUP_SEG"] = str(math.gcd(math.gcd(int(f.weights_per_word), info.k // 32), int(group)))
+    if info.lanes_per_word > 1:
+        g["LANES_PER_WORD"] = f"{info.lanes_per_word}u"                     # 2 or 4 lanes share a payload word (blm.py)
     return g
+
+
+def unit_words(info: PackInfo) -> str:
+    """The ``UNIT_WORDS`` macro: 16-byte payload words per lane-row (1 for a sub-word unit)."""
+    return str(info.payload_words)
+
+
+def gemv_rsplits(rows: int, rg: int, epilogue: Optional[str]) -> List[int]:
+    """The row splits a slab geometry admits: ``RSPLIT`` divides the rows per block (silu_mul: the gate rows) and
+    leaves at least one row group per item."""
+    share = rows // 2 if epilogue == "silu_mul" else rows
+    return [s for s in (1, 2, 4, 8, 16) if share % s == 0 and (share // s) % rg == 0]
 
 
 def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool = False, norm: bool = False,
                 epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False,
-                pairs: Optional[Tuple[int, int, bool]] = None) -> Dict[str, str]:
+                pairs: Optional[Tuple[int, int, bool]] = None, rsplit: int = 1) -> Dict[str, str]:
     """The compile-time specialization of gemv_T for one slab geometry, token count and set of fusions
     (``norm``: RMSNorm scaling on the input; ``epilogue``: ``residual`` | ``silu_mul``; ``stat_out``: per-block
     partial sums of squares of the outputs for the next norm; ``round_before_residual``: the product is rounded to
@@ -67,12 +121,16 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
     if info.rows % rg:
         raise ValueError(f"gemv_T: RG={rg} must divide R={info.rows}")
     preconvert = t * f.weights_per_word <= 64          # T*WPW floats of registers; beyond that convert per row
+    # the activation words hoisted out of the item loop (converted and normed once per SIMD-group) where they fit 32
+    # floats of registers: K ≤ 1024 at T = 1 for a 4-bit format — the 0.6B's projections (§11.1); at 64 floats the
+    # occupancy collapsed (a 1024 × 2048 slab 2.7× slower)
+    hoist = preconvert and int(geometry["PAYLOAD_WORDS"]) * t * f.weights_per_word <= 32 and pairs is None
     if epilogue not in EPILOGUES:
         raise ValueError(f"gemv_T: unknown epilogue {epilogue!r}")
     macros = {"K": str(info.k), "R": str(info.rows), "T": str(t), "RG": str(rg),
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
-              "UNIT_WORDS": str(info.unit_bytes // 16), **geometry, "OUT_BF16": "1" if out_bf16 else "0",
-              "X_PRECONVERT": "1" if preconvert else "0",
+              "UNIT_WORDS": unit_words(info), **geometry, "OUT_BF16": "1" if out_bf16 else "0",
+              "X_PRECONVERT": "1" if preconvert else "0", "X_HOIST": "1" if hoist else "0",
               "NORM": "1" if norm else "0", "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
     if epilogue == "silu_mul":
         if info.rows % 2 or (info.rows // 2) % rg:
@@ -82,6 +140,12 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
         if epilogue != "residual":
             raise ValueError("gemv_T: round_before_residual needs the residual epilogue")
         macros["EPILOGUE_ROUND"] = "1"
+    if rsplit != 1:
+        # the work items split a block's rows (design §5.5): a narrow slab's blocks alone leave most of the crew idle —
+        # the 0.6B's 1024-row projections are 64 blocks over the M5 Pro's 240 SIMD-groups (decode-kernels.md §10)
+        if rsplit not in gemv_rsplits(info.rows, rg, epilogue) or pairs is not None:
+            raise ValueError(f"gemv_T: RSPLIT={rsplit} does not fit R={info.rows}, RG={rg}, epilogue {epilogue!r}")
+        macros["RSPLIT"] = f"{rsplit}u"
     if pairs is not None:
         # the MoE expert mode (ops/moe.py): (top_k, blocks per expert, the input is per (token, slot) row); T = 1 per item
         top_k, expert_blocks, x_slot = pairs
@@ -136,12 +200,13 @@ MSL_TENSOR_OPS = 4 << 16          # the language version the tensor-ops kernels 
 GEMM_TN = 16                      # rows per accelerator tile (the default up to 16 tokens; gemm_tile_shape)
 GEMM_TK = 256                     # columns per accelerator tile
 GEMM_PERM_SG = 16                 # SIMD-groups per row of x_permute (its grid is tm * GEMM_PERM_SG SIMD-groups of 32)
+THREADGROUP_MEMORY_LIMIT = 32768  # bytes of threadgroup memory a dispatch may declare (Apple GPUs); a kernel needing more fails to build
 
 
 def gemm_source(fmt: str) -> str:
     """The gemm_tile kernel (the M5 accelerator path for T > 1, #50) for storage format ``fmt``; compile it with
     ``language_version=MSL_TENSOR_OPS``."""
-    return PRELUDE + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+    return PRELUDE + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
 
 
 def gemm_tile_shape(tm: int) -> Tuple[int, int]:
@@ -151,19 +216,24 @@ def gemm_tile_shape(tm: int) -> Tuple[int, int]:
 
 
 def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional[int] = None, tk: Optional[int] = None,
-                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False, ksplit: int = 1) -> Dict[str, str]:
+                epilogue: Optional[str] = None, stat_out: bool = False, round_before_residual: bool = False, ksplit: int = 1,
+                scale_cache: Optional[bool] = None) -> Dict[str, str]:
     """The specialization of gemm_tile for one slab geometry, ``tm`` token rows (8, 16 or 32 — the accelerator's
     16-row minimum makes 8 cost what 16 costs; the operation's T_act ≤ tm is a run-time parameter), the tile shape
     ``tn × tk`` (64×64, 32×128 or 16×256: 4096 weights, one per thread register; the measured default per ``tm``) and
     the GEMV fusions it takes over (``epilogue`` residual | silu_mul, ``stat_out``, ``round_before_residual``; the
     input norm is applied by x_permute on the way in). ``ksplit`` > 1: one row tile per threadgroup of that many
-    SIMD-groups, each a contiguous K slice, the partials reduced through threadgroup memory (``gemm_geometry``)."""
+    SIMD-groups, each a contiguous K slice, the partials reduced through threadgroup memory (``gemm_geometry``).
+    ``scale_cache``: None = keep a thread's scale words in registers when they fit (the default), False = never — a
+    K-split finer than the lane groups (8 or 16 slices at K = 4096) needs the cache off."""
     f = FORMATS.get(info.format)
     wpw = int(f.weights_per_word)
     if tn is None or tk is None:
         tn, tk = gemm_tile_shape(tm)
     if info.rows not in (8, 16):
         raise ValueError(f"gemm_tile: R={info.rows} must be 8 or 16 (the epilogues index pack blocks)")
+    if info.lanes_per_word > 1:
+        raise ValueError(f"gemm_tile: sub-word units (K={info.k}) are the shader GEMV's; the tile reads whole-word units")
     if epilogue not in EPILOGUES:
         raise ValueError(f"gemm_tile: unknown epilogue {epilogue!r}")
     if round_before_residual and epilogue != "residual":
@@ -176,18 +246,22 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         raise ValueError(f"gemm_tile: R={info.rows} must divide the {tn}-row tile")
     if tm not in (8, 16, 32):
         raise ValueError(f"gemm_tile: TM must be 8, 16 or 32 (got {tm})")
-    if ksplit not in (1, 2, 4) or (info.k // tk) % ksplit:
-        raise ValueError(f"gemm_tile: KSPLIT={ksplit} must be 1, 2 or 4 and divide the {info.k // tk} K tiles")
+    if ksplit not in (1, 2, 4, 8, 16) or (info.k // tk) % ksplit:
+        raise ValueError(f"gemm_tile: KSPLIT={ksplit} must be 1, 2, 4, 8 or 16 and divide the {info.k // tk} K tiles")
+    part_bytes = (ksplit - 1) * 32 * (max(1, tm // 16) * tn // 2) * 4       # the slices' partial tiles (part[KSPLIT-1][32][C_CAP] floats)
+    if part_bytes > THREADGROUP_MEMORY_LIMIT:
+        raise ValueError(f"gemm_tile: KSPLIT={ksplit} at TM={tm} needs {part_bytes} bytes of threadgroup memory for the partial tiles "
+                         f"(the limit is {THREADGROUP_MEMORY_LIMIT})")
     macros = {"K": str(info.k), "R": str(info.rows), "TM": str(tm), "TN": f"{tn}u", "TK": f"{tk}u",
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
-              "UNIT_WORDS": str(info.unit_bytes // 16), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0",
+              "UNIT_WORDS": unit_words(info), **unit_geometry(info, f), "OUT_BF16": "1" if out_bf16 else "0",
               "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
     if round_before_residual:
         macros["EPILOGUE_ROUND"] = "1"
     lpt = tk // wpw                                            # lanes per tile: LPT * 16 bytes of each row's 128-byte line
     if lpt * 16 >= 64:
         macros["Q_OUTER"] = "1"                                # lane group outer (half a line or more per row piece) …
-        if info.scale_bytes:                                   # … and the scale words of a thread's rows and lanes can stay
+        if info.scale_bytes and scale_cache is not False:      # … and the scale words of a thread's rows and lanes can stay
             nw = max(1, (tk // 4) // wpw)                      #     in registers across the lane group's words (≤ 16 uints)
             if (tn // 8) * nw * int(macros["SCALE_WORDS"]) * 4 <= 16:
                 if ksplit > 1 and ((info.k // tk) // ksplit) % int(macros["PAYLOAD_WORDS"]):     # the cache is filled at a lane group's first word
@@ -198,21 +272,32 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
     return macros
 
 
+def crew_factor(mode: str) -> int:
+    """Threadgroups per core of a crew geometry mode: ``crew`` 1, ``crew2`` 2, ``crew3`` 3, ``crew4`` 4 (the denser
+    crews keep more SIMD-groups in flight per core for the short latency chains of a small slab's items)."""
+    if mode == "crew":
+        return 1
+    if mode.startswith("crew") and mode[4:].isdigit() and 2 <= int(mode[4:]) <= 4:
+        return int(mode[4:])
+    raise ValueError(f"unknown crew geometry {mode!r}")
+
+
 def gemm_geometry(mode: str, n_tiles: int, cores: Optional[int] = None, tg: int = 384) -> Tuple[int, int, int]:
     """``(n_sg, threadgroups, threadgroup size)`` of a tile dispatch for an autotuned geometry mode: ``crew`` /
     ``crew2`` (12 SIMD-groups per core, one or two threadgroups per core, static slices of the tiles; needs
     ``cores``) or ``ksplit<S>`` (one tile per threadgroup of S SIMD-groups, the K-split; ``n_sg`` = tiles × S)."""
     if mode.startswith("ksplit"):
-        s = int(mode[6:])
+        s = int(mode[6:].rstrip("nc"))
         return n_tiles * s, n_tiles, 32 * s
     if cores is None:
         raise ValueError("gemm_geometry: the crew modes need the core count")
-    n_sg = (tg // 32) * cores * (2 if mode == "crew2" else 1)
+    n_sg = (tg // 32) * cores * crew_factor(mode)
     return n_sg, -(-(n_sg * 32) // tg), tg
 
 
 def gemm_ksplit(mode: str) -> int:
-    return int(mode[6:]) if mode.startswith("ksplit") else 1
+    """The split of a tile geometry mode: ``ksplit<S>`` or ``ksplit<S>nc`` (the scale cache off) → S; the crew → 1."""
+    return int(mode[6:].rstrip("nc")) if mode.startswith("ksplit") else 1
 
 
 def gemm_params(n_rows: int, n_tiles: int, n_sg: int, t_active: int, *, out_scale: float = 1.0, tile0: int = 0, n_blocks: int = 0) -> bytes:
@@ -266,24 +351,28 @@ def embed_source(fmt: Optional[str] = None) -> str:
 def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None) -> Dict[str, str]:
     """``info`` = the slab a tied lm_head streams (gather from the pack: a BF16 slab, or a quantized one decoded on
     the fly — a format with block scales and a per-tensor scale of 1), None = a row-major BF16 table.
-    ``ids="block"``: a draft block — row 0 reads the token at ``tokens[0]`` (the anchor), the other rows the mask id."""
+    ``ids="block"``: a draft block — row 0 reads the token at ``tokens[0]`` (the anchor), the other rows the mask id.
+    ``ids="ingest"``: an LM drafter's ingest — row t reads the committed token ``tokens[checkpoint_index − n_inject + t]``
+    (the last ``n_inject`` of the step's pending tokens); ``ids="ingest_anchor"``: those rows, then the anchor (its first chain step)."""
     if info is None:
         macros = {"EMBED_PACKED": "0"}
     elif info.format == "bf16":
         if info.k % 256:
             raise ValueError("embed: a packed bf16 table needs K % 256 == 0")
-        macros = {"EMBED_PACKED": "1", "R": str(info.rows), "UNIT_WORDS": str(info.unit_bytes // 16),
+        macros = {"EMBED_PACKED": "1", "R": str(info.rows), "UNIT_WORDS": unit_words(info),
                   "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1"}
     else:
         f = FORMATS.get(info.format)
         if not f.scale_group or abs(info.tensor_scale - 1.0) > 0:
             raise ValueError(f"embed: a packed {info.format} table needs block scales and no per-tensor scale")
-        macros = {"EMBED_PACKED": "1", "EMBED_DEQUANT": "1", "R": str(info.rows), "UNIT_WORDS": str(info.unit_bytes // 16),
+        if info.lanes_per_word > 1:
+            raise ValueError(f"embed: sub-word units (K={info.k}) are the shader GEMV's; the gather reads whole-word units")
+        macros = {"EMBED_PACKED": "1", "EMBED_DEQUANT": "1", "R": str(info.rows), "UNIT_WORDS": unit_words(info),
                   "K": str(info.k), "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1", **unit_geometry(info, f)}
-    if ids not in (None, "block"):
+    if ids not in (None, "block", "ingest", "ingest_anchor"):
         raise ValueError(f"embed: unknown ids mode {ids!r}")
-    if ids == "block":
-        macros["EMBED_IDS"] = "1"
+    if ids is not None:
+        macros["EMBED_IDS"] = {"block": "1", "ingest": "2", "ingest_anchor": "3"}[ids]
     return macros
 
 
@@ -324,21 +413,61 @@ def macro_key(macros: Mapping[str, str]) -> str:
 
 # ---- attention ----------------------------------------------------------------------------------------------------
 
-def gqa_source(v2: bool = False, steal: bool = False) -> str:
-    """The attention kernels: the shared helpers + v1 (``gqa_decode`` / ``gqa_merge``, with the DRAFT variant) or v2
-    (``gqa_decode_v2`` / ``gqa_merge_v2``: the long-context structure of design §5.6, #34)."""
-    src = PRELUDE + template("gqa_common.metal") + "\n"
+def gqa_source(v2: bool = False, steal: bool = False, v3: bool = False) -> str:
+    """The attention kernels: the shared helpers + v1 (``gqa_decode`` / ``gqa_merge``, with the DRAFT variant), v2
+    (``gqa_decode_v2`` / ``gqa_merge_v2``: the long-context structure of design §5.6, #34) or v3 (``gqa_decode_v3``:
+    core and merge in one dispatch, a threadgroup per query row — the few-rows kernel, #113)."""
+    src = PRELUDE + PERM_OUT_MSL + template("gqa_common.metal") + "\n"
     if steal:
         src += template("common/steal.metal") + "\n"                                   # the claim protocol (#44), v1 only
-    return src + template("gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
+    return src + template("gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
 
 
-def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4, steal: bool = False, steal_hits: bool = False) -> Dict[str, str]:
+GQA_V3_SIMDGROUPS = 32                  # v3's SIMD-groups per threadgroup at most (1024 threads; the fold gives each one D / (4·NSG3) dims)
+
+
+def gqa_v3_simdgroups(head_dim: int) -> int:
+    """v3's SIMD-groups per threadgroup for a head dim: 32 (1024 threads) where D / 4 slices and the fold buffer of
+    nsg · (D + 4) floats allow it (D = 128), halved otherwise (D = 32 → 8, D = 64 → 16, D = 256 → 16)."""
+    nsg = min(GQA_V3_SIMDGROUPS, max(4, head_dim // 4))
+    while nsg > 4 and ((head_dim // 4) % nsg or nsg * (head_dim + 4) * 4 > THREADGROUP_MEMORY_LIMIT):
+        nsg //= 2
+    return nsg
+
+
+def gqa_v3_macros(head_dim: int, *, nsg: Optional[int] = None, lm_mode: int = 0, chain_i: int = 0) -> Dict[str, str]:
+    """v3: ``nsg`` SIMD-groups per threadgroup (a power of two ≤ 32 dividing D / 4; its fold buffer of
+    nsg · (D + 4) floats must fit threadgroup memory; None = :func:`gqa_v3_simdgroups`). ``lm_mode`` / ``chain_i``
+    as :func:`gqa_macros`."""
+    if nsg is None:
+        nsg = gqa_v3_simdgroups(head_dim)
+    if head_dim % 32 or nsg not in (4, 8, 16, 32) or (head_dim // 4) % nsg or nsg * (head_dim + 4) * 4 > THREADGROUP_MEMORY_LIMIT:
+        raise ValueError("gqa_decode_v3: head_dim a multiple of 32, nsg in (4, 8, 16, 32) dividing head_dim / 4, the fold buffer within threadgroup memory")
+    if lm_mode not in (0, 1, 2, 3) or chain_i < 0 or (chain_i and lm_mode != 2):
+        raise ValueError(f"gqa_decode_v3: lm_mode must be 0, 1, 2 or 3 and chain_i belongs to mode 2 (got {lm_mode}, {chain_i})")
+    m = {"D": str(head_dim), "NSG3": f"{nsg}u"}
+    if lm_mode:
+        m["LM_MODE"] = str(lm_mode)
+    if chain_i:
+        m["CHAIN_I"] = f"{chain_i}u"
+    return m
+
+
+def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4, steal: bool = False, steal_hits: bool = False,
+               lm_mode: int = 0, chain_i: int = 0) -> Dict[str, str]:
     """Measured on the M5 Pro (docs/research/decode-kernels.md §1): RBMAX = 4 query rows per pass is 13× faster than
-    8 (register spills above 4 rows) and CH = 64 keys per chunk is the best chunk from 1 K to 32 K of context."""
+    8 (register spills above 4 rows) and CH = 64 keys per chunk is the best chunk from 1 K to 32 K of context.
+    ``lm_mode`` (an LM drafter's attention, design §5.8): 1 = the ingest pass (``n_inject`` rows ending at
+    ``position``), 2 = chain step ``chain_i`` (``n_chain`` rows at ``position + chain_i``)."""
     if head_dim % 32 or chunk % 32 or rb_max < 1:
         raise ValueError("gqa_decode: head_dim and chunk must be multiples of 32")
+    if lm_mode not in (0, 1, 2, 3) or chain_i < 0 or (chain_i and lm_mode != 2):
+        raise ValueError(f"gqa_decode: lm_mode must be 0, 1 or 2 and chain_i belongs to mode 2 (got {lm_mode}, {chain_i})")
     m = {"D": str(head_dim), "CH": f"{chunk}u", "RBMAX": f"{rb_max}u"}
+    if lm_mode:
+        m["LM_MODE"] = str(lm_mode)
+        if lm_mode == 2:
+            m["CHAIN_I"] = f"{chain_i}u"
     if steal:
         m["STEAL"] = "1"
         if steal_hits:
@@ -352,23 +481,37 @@ GQA_V2_CHUNK_MIN = 32
 def gqa_v2_macros(head_dim: int, *, rmax: int, rg: int = 4) -> Dict[str, str]:
     """v2: ``rmax`` = the query rows per block (rep · T_max, ≤ 32: the threadgroup-memory query cache), ``rg`` =
     rows per pass of the scoring / P·V loop."""
-    if head_dim % 32 or not 1 <= rmax <= 32 or not 1 <= rg <= rmax or rmax * head_dim * 2 > 32768:
+    if head_dim % 32 or not 1 <= rmax <= 32 or not 1 <= rg <= rmax or rmax * head_dim * 2 > THREADGROUP_MEMORY_LIMIT:
         raise ValueError("gqa_decode_v2: head_dim a multiple of 32, 1 <= rg <= rmax <= 32, and rmax·D·2 bytes within threadgroup memory")
     return {"D": str(head_dim), "RMAX": f"{rmax}u", "RG": f"{rg}u"}
 
 
 def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg: int, q_off: int, gate_off: int, k_off: int,
                v_off: int, in_stride: int, out_stride: int, ctx_max: int, eps: float, scaling: float, has_gate: bool,
-               n_chunks_max: int, rows_max: int, nominal_sg: int = 0) -> bytes:
+               n_chunks_max: int, rows_max: int, nominal_sg: int = 0, gate_stride: int = 0) -> bytes:
     """The ``GqaParams`` record (buffer 9 of gqa_decode, 4 of gqa_merge); ``nominal_sg`` = the crew the STEAL variant's
-    slices are cut for (the dispatch may bring fewer or more SIMD-groups)."""
+    slices are cut for (the dispatch may bring fewer or more SIMD-groups); ``gate_stride`` (pad1) = v3's gate rows'
+    stride when the gate is not a [T, heads·D] value of its own (0: out_stride)."""
     return struct.pack("<IIIIIIIIIIIIffIIIIII", heads, kv_heads, t_active, position, n_sg, q_off, gate_off, k_off, v_off,
-                       in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, 0, nominal_sg)
+                       in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, gate_stride, nominal_sg)
 
 
 def steal_reset_params(n: int) -> bytes:
     """``steal_reset``'s count (buffer 1): the cursors to zero (one per nominal SIMD-group)."""
     return struct.pack("<I", n)
+
+
+GQA_CHUNK_MIN = 16
+GQA_CREW_MAX = 480                      # the largest crew a profile dispatches (two threadgroups per core on 20 cores)
+
+
+def gqa_chunks_max(ctx_max: int, kv_heads: int, chunk: int = 64, n_sg: int = GQA_CREW_MAX) -> int:
+    """The chunk count the partial workspace holds: ``ctx_max`` in chunks of ``chunk`` keys, or the count the kernels'
+    run-time choice can reach with chunks down to 16 keys while the blocks would leave the crew of ``n_sg`` idle
+    (``pick_chunk`` in gqa_common.metal; the layer sizes its values with the largest crew, the emitter's params carry
+    the dispatch's)."""
+    small = min(-(-ctx_max // GQA_CHUNK_MIN), 2 * n_sg // max(1, kv_heads) + 2)
+    return max(-(-ctx_max // chunk), small)
 
 
 def gqa_workspace(kv_heads: int, n_chunks_max: int, rows_max: int, head_dim: int) -> Tuple[int, int]:
@@ -484,25 +627,27 @@ CONF_LOG_WIDTH = 16
 
 
 def select_params(gamma: int, threshold: float, t_max: int, mode: int = 0, cost: Optional[Sequence[float]] = None, log_cap: int = 0,
-                  ctx_cap: int = 0) -> bytes:
+                  ctx_cap: int = 0, lm: bool = False) -> bytes:
     """The ``SelectParams`` record: mode 0 = the confident-prefix rule (``threshold``), 1 = the cost-aware rule with
     ``cost[l]`` = the relative cost of a (1 + l)-token target pass for l = 0 … γ (≤ 16 entries; cost[0] = 1),
     2 = a fixed verify length (``threshold`` = L). ``log_cap`` > 0 logs the block's confidences per step; ``ctx_cap``
-    > 0 (the target's KV rows) clamps L so the verify rows stay inside the caches."""
+    > 0 (the target's KV rows) clamps L so the verify rows stay inside the caches. ``lm``: an LM drafter (design §5.8):
+    the select records the drafter's context length as the position it ingested plus the chain's γ rows."""
     c = list(cost or [])
     if mode == 1 and (len(c) < 1 or len(c) > 16 or abs(c[0] - 1.0) > 1e-6 or any(x <= 0 for x in c)):
         raise ValueError("select_params: the cost rule needs 1..16 positive costs relative to cost[0] = 1")
     c = c + [1.0] * (16 - len(c))
-    return struct.pack("<IfII16fIIII", gamma, threshold, t_max, mode, *c, log_cap, ctx_cap, 0, 0)
+    return struct.pack("<IfII16fIIII", gamma, threshold, t_max, mode, *c, log_cap, ctx_cap, 1 if lm else 0, 0)
 
 
 ACCEPT_LOG_CAP = 65536
 
 
-def accept_params(ring_cap: int, eos: int, log_cap: int = 0, ctx_cap: int = 0) -> bytes:
+def accept_params(ring_cap: int, eos: int, log_cap: int = 0, ctx_cap: int = 0, lm: bool = False) -> bytes:
     """``ctx_cap`` > 0: the program's context capacity — the scan stops the program (error 2) at a step whose first
-    position would reach it (see kernels/spec_ops.metal)."""
-    return struct.pack("<IiII", ring_cap, eos, log_cap, ctx_cap)
+    position would reach it (see kernels/spec_ops.metal). ``lm``: an LM drafter — ``n_inject`` becomes the committed
+    rows the drafter has not ingested (``position − drafter_ctx_len``) and ``n_chain`` says whether the step drafts."""
+    return struct.pack("<IiIIIIII", ring_cap, eos, log_cap, ctx_cap, 1 if lm else 0, 0, 0, 0)
 
 
 def draft_attn_params(*, heads: int, kv_heads: int, gamma: int, ctx_len: int, n_new: int, n_sg: int, q_off: int, k_off: int, v_off: int,

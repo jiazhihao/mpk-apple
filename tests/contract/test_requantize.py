@@ -69,9 +69,10 @@ def test_requantize_needs_a_quantizer(tmp_path):
 
 
 def test_requantize_keeps_widths_the_format_cannot_pack(tmp_path):
-    """int8 packs K % 1024 only: with a hidden width of 512 every projection stays BF16 and only ``fc`` (K = 2 × 512)
-    is quantized — a matrix is never re-quantized into a pack the format would refuse."""
-    write_checkpoint(tmp_path, hidden_size=512, intermediate_size=512, target_hidden_size=512, markov_rank=512, num_attention_heads=8)
+    """The decode kernels take K % 256 (the formats' ``pack_k_multiple``; narrow stripes share their group's scale): with
+    a hidden width of 384 every projection stays BF16 and only ``fc`` (K = 2 × 384) is quantized — a matrix is never
+    re-quantized into a pack the format would refuse."""
+    write_checkpoint(tmp_path, hidden_size=384, intermediate_size=384, target_hidden_size=384, markov_rank=384, num_attention_heads=6)
     _, _, _, pair = build(tmp_path)
     ckpt = SafetensorsDir(str(tmp_path))
     try:

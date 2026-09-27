@@ -37,9 +37,9 @@ class Engine:
         self.dev = device or nt.Device()
         self.buffers: Dict[str, nt.Buffer] = {}
         for name, spec in program.buffers.items():
-            if buffers is not None and name in buffers and buffers[name].nbytes >= spec.nbytes:
+            if buffers is not None and name in buffers and spec.role != "params" and buffers[name].nbytes >= spec.nbytes:
                 self.buffers[name] = buffers[name]           # shared (weights, states, StepState, ring, arena values)
-                continue
+                continue                                     # never a params record: its bytes are this program's own
             if buffers is not None and name in buffers and spec.role in ("state", "step_state", "ring", "weights"):
                 raise ValueError(f"shared buffer {name}: {buffers[name].nbytes} bytes, program needs {spec.nbytes}")
             if spec.file is not None:

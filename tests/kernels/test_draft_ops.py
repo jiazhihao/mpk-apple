@@ -6,6 +6,8 @@ import struct
 import sys
 from pathlib import Path
 
+import math
+
 import numpy as np
 import pytest
 
@@ -146,6 +148,11 @@ def ref_draft(h, proj, kvp, ctx_len, n_new, k_cache, v_cache):
     return out.reshape(g, c.heads * d)
 
 
+def _ulp(x: float) -> float:
+    """One BF16 ulp at magnitude ``x`` (8 bits of mantissa)."""
+    return 2.0 ** (math.floor(math.log2(max(x, 1e-30))) - 7)
+
+
 @pytest.mark.parametrize("step_state", [False, True], ids=["params", "step_state"])
 def test_draft_attn_matches_kernel_contract(dev, step_state):
     cfg = DCfg(4, 2, 128, 256, 7)
@@ -161,7 +168,7 @@ def test_draft_attn_matches_kernel_contract(dev, step_state):
         got = h.step(proj, kvp, ctx_len, n_new)
         ref = ref_draft(h, bf16_to_f32(proj), bf16_to_f32(kvp), ctx_len, n_new, k_ref, v_ref)
         cos, max_abs, scale = _bars(got, ref)
-        assert cos > 0.99999 and max_abs <= 2e-3 * scale, (ctx_len, n_new, g, cos, max_abs, scale)
+        assert cos > 0.99999 and max_abs <= 2 * _ulp(scale), (ctx_len, n_new, g, cos, max_abs, scale)   # 2 BF16 ulps (the run-time chunk)
         kc, vc = h.caches()
         n = ctx_len + n_new
         assert np.abs(kc[:n] - k_ref[:n]).max() <= 1e-2 * max(np.abs(k_ref[:n]).max(), 1e-6)
@@ -317,7 +324,7 @@ def model_accept(state, tokens, ring_cap, eos, ctx_cap=0):
         return s, writes
     t = s["t_this_step"]
     if s["prefill_left"] > 0:
-        s["position"] += t; s["step"] += 1; s["n_inject"] = t; s["checkpoint_index"] = t
+        s["position"] += t; s["step"] += 1; s["n_inject"] = t; s["checkpoint_index"] = t; s["n_chain"] = 0
         if ctx_cap and s["position"] >= ctx_cap:
             s["error"] = 2; s["done"] = 1
         return s, writes
@@ -339,10 +346,9 @@ def model_accept(state, tokens, ring_cap, eos, ctx_cap=0):
         if eos >= 0 and tok == eos:
             stop = True
             break
-    s["ring_head"] = head; s["accepted"] = acc; s["anchor"] = last
-    s["pending_tokens"] = [last] + list(s["pending_tokens"][1:])
+    s["ring_head"] = head; s["accepted"] = acc; s["anchor"] = last          # pending_tokens keeps the step's rows (an LM drafter's ingest reads them)
     s["position"] += base + committed; s["step"] += 1; s["verify_len"] = 0; s["t_this_step"] = 1
-    s["n_inject"] = s["checkpoint_index"] = base + committed
+    s["n_inject"] = s["checkpoint_index"] = base + committed; s["n_chain"] = 1
     if stop:
         s["done"] = 1
     if ctx_cap and s["position"] >= ctx_cap:

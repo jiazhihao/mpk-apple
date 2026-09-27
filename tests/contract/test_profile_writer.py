@@ -50,6 +50,13 @@ def test_attention_choice():
     assert attention_choice({(1024, 1): 0.10, (4096, 4): 0.30}, {(1024, 1): 0.08, (4096, 4): 0.25})[0] == "v2"
     assert attention_choice({(1024, 1): 0.10, (4096, 4): 0.30}, {(1024, 1): 0.08, (4096, 4): 0.30})[0] == "v1"    # not everywhere
     assert attention_choice({(1024, 1): 0.10}, {})[0] == "v1"
+    # v3: auto (= v3) when it beats v1 and v2 at every point measured; otherwise the v1 / v2 rule
+    v1m, v2m = {(1024, 1): 0.10, (4096, 1): 0.30, (4096, 4): 0.60}, {(1024, 1): 0.08, (4096, 1): 0.25, (4096, 4): 0.50}
+    assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.20, (4096, 4): 0.40})[0] == "auto"
+    assert attention_choice(v1m, v2m, v3={(1024, 1): 0.05, (4096, 1): 0.29})[0] == "v2"                     # not faster than v2 at (4096, 1)
+    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.20})[0] == "auto"  # v3 wins where measured; v2's loss elsewhere is moot
+    assert attention_choice(v1m, {**v2m, (4096, 4): 0.61}, v3={(1024, 1): 0.05, (4096, 1): 0.31})[0] == "v1"    # v3 loses a point, and so does v2: v1
+    assert attention_choice(v1m, v2m, v3={(8192, 8): 0.1})[0] == "v2"                                       # no common point
 
 
 def _measurements():
@@ -61,12 +68,15 @@ def _measurements():
 
 
 def test_decide_and_merge_produce_a_loadable_profile(tmp_path):
-    engine, notes = decide(_measurements(), {"sibling_order": "alu_first", "max_cb_ms": 16, "lane_order": "contiguous"})
+    engine, notes = decide(_measurements(), {"sibling_order": "alu_first", "max_cb_ms": 16, "lane_order": "contiguous", "attention_rows": 8})
+    assert engine["attention_rows"] == 8                                                  # not measured: the file's value carries over
+    assert decide(_measurements(), {"sibling_order": "alu_first"})[0]["attention_rows"] == 4
     assert engine["family"] == "Apple10" and engine["lane_order"] == "interleaved16" and engine["threadgroups_per_core"] == 1
     assert engine["sibling_order"] == "alu_first" and engine["max_cb_ms"] == 16 and engine["attention"] == "v1"
     assert engine["accelerator"] == "on" and engine["accelerator_min_t"] == {"fp8": 2, "nvfp4": 2}
     assert engine["cost_T"]["fp8"] == {"1": 1.0, "2": 1.08, "4": 1.111, "8": 3.599} and engine["cost_T"]["nvfp4"]["4"] == pytest.approx(1.791)
-    assert engine["cost_T"]["accelerator_fp8"] == {"8": 1.09, "16": 1.16, "32": 2.099} and set(notes) == {"lane_order", "threadgroups_per_core", "accelerator", "attention"}
+    assert engine["cost_T"]["accelerator_fp8"] == {"8": 1.09, "16": 1.16, "32": 2.099} and set(notes) == {"lane_order", "scale_placement", "threadgroups_per_core", "accelerator", "attention"}
+    assert engine["scale_placement"] == "inline"                                          # no placement measurement: the default stays
     existing = {"chip": "Apple M5 Pro", "gpu_cores": 20, "nominal_gbps": 307.0, "measured": "2026-09-22", "streaming": {"probe": "p5b"},
                 "engine": {"family": "Apple10", "lane_order": "contiguous", "sibling_order": "alu_first"}}
     device = {"chip": "Apple M5 Pro", "gpu_family": "Apple10", "gpu_cores": 20, "memory_gb": 24, "os": "macOS 26.5.1", "gpu_working_set_gb": 19.07,

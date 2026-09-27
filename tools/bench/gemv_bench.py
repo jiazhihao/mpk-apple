@@ -57,10 +57,10 @@ class Bench:
             tg_per_core: int = 1, one_block_per_sg: bool = False, tg: int = 384, rg: Optional[int] = None,
             copies: Optional[int] = None, reps: int = 3, oracle_rows: int = 2048, seed: int = 0,
             extra_macros: Optional[Dict[str, str]] = None, norm: bool = False, epilogue: Optional[str] = None,
-            stat_out: bool = False, norm_apply: bool = False, check: bool = True) -> dict:
+            stat_out: bool = False, norm_apply: bool = False, check: bool = True, placement: str = "inline") -> dict:
         rng = np.random.default_rng(seed)
         spec = random_spec(fmt, n, k, rng)
-        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order))
+        data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
         useful = n * k * FORMATS.get(fmt).bytes_per_weight
         if copies is None:
             copies = max(1, int((2 << 30) // len(data)))
@@ -133,7 +133,7 @@ class Bench:
                "pct_nominal": round(100 * useful / 1e9 / (ms / 1e3) / self.profile.nominal_gbps, 1) if self.profile else None,
                "max_ulp_at_rms": round(chk.max_ulp_at_rms, 3) if chk else None, "max_ulp_elementwise": chk.max_ulp_elementwise if chk else None,
                "max_rel_err": chk.max_rel_err if chk else None, "ok": chk.ok() if chk else None,
-               "norm": norm, "epilogue": epilogue, "stat_out": stat_out, "norm_apply": norm_apply, "unit_bytes": pinfo.unit_bytes, "macros": macros}
+               "norm": norm, "epilogue": epilogue, "stat_out": stat_out, "norm_apply": norm_apply, "unit_bytes": pinfo.unit_bytes, "scale_placement": pinfo.scale_placement, "macros": macros}
         return res
 
 

@@ -231,7 +231,10 @@ exists yet to confirm it.*
   not replayable **[S]**, so the ICB is the replay mechanism under both Metal 3 and Metal 4 encoders. ICBs have no
   `setBytes`, and their buffer-bind offsets are 32-bit **[R]**: every op reads a small parameter record from a buffer,
   and large weight buffers are addressed through 64-bit GPU addresses stored in that record (tier-2 argument buffers +
-  one residency set) rather than through bind offsets.
+  one residency set) rather than through bind offsets. A session's programs (the dynamic-T program; a static one per
+  T the bench or a test asks for) share buffers **by name** — weights, states, StepState, the ring, activations — and
+  a parameter record is the one thing never shared: its name carries the program kind and `Engine` allocates its own
+  (two programs' counters once met on one name, and three tiles ran another GEMV's record, #113).
 * Prior art: tinygrad replays a per-step ICB; OpenAI's gpt-oss Metal reference encodes N decode iterations with GPU
   sampling and on-GPU token feedback into one command buffer; uzu and Apple's Core AI sample engine keep 1–3 steps in
   flight **[R]**. None compiles a general model into a replayed, self-advancing program; that is the gap this engine
@@ -323,7 +326,10 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   rows are interleaved so one pass yields `silu(g)·u`; `q|k|v` and `in_proj_qkv|a|b` are row-stacked into single ops.
   The mixer's gate projection (`in_proj_z`; the gate half of `q_proj`) is stacked with them or packed as its own op,
   depending on whether §5.12's sibling overlap is enabled for the chip. R, stripe order and scale placement are
-  autotuned per chip.
+  autotuned per chip. A GEMV's work item is a block or a *share of a block's rows* (`RSPLIT`, autotuned): a
+  1024-row slab is 64 blocks — a quarter of the M5 Pro's 240 SIMD-groups — and 512 items of two rows fill the crew
+  (o_proj and down 2.1–2.2× faster at T = 1 on the 0.6B; the 8B's 4096-row slabs are 256 blocks, 1.07 waves, and
+  split too); the arithmetic per row is the same, so the outputs are bit-identical (decode-kernels.md §10).
 * **Formats** are plugins: `unpack(checkpoint tensors) → pack` plus an MSL `decode` snippet used by the GEMV
   template. v1: NVFP4 (E2M1 LUT × E4M3 block scale × FP32 tensor scale), FP8-E4M3 per-tensor (256-entry LUT), BF16;
   built since: INT8 groups and **affine INT4 groups** (`int4_affine`, the MLX / AWQ / GPTQ family, `w = scale·code +
@@ -331,13 +337,23 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   the GEMV adds `bias · Σx` per group), a quantized table can be gathered as the embedding (`EMBED_DEQUANT`), and a
   lane stripe may be *ragged* — not whole words, starting inside a scale group (K = 3584): the unit is
   `[payload | scales | pad]` with the scale bytes in the partial tail word, and the kernels index a stripe's groups
-  from its offset (`LANE_OFF`, `GROUP_SEG`). Next: MXFP4, GGUF K-quants.
+  from its offset (`LANE_OFF`, `GROUP_SEG`). The unit's padding to 16 bytes is bus bytes (NVFP4 at K = 4096: 64 + 8
+  → 80, 11 %), so a pack can keep the block's scales in their own region after its payload words instead
+  (`scale_placement: block`, #101): the unit is whole payload words, a lane's scales start `(lane·S) % 16` bytes
+  into a word of the region and the kernels load `scale_words` words from there (`SCALE_WORD`, `SCALE_SOFF`); the
+  packer keeps the inline form where it is already tight (INT4's 64 + 16, a ragged tail half-word). With the region
+  a 4- or 8-byte payload (K = 256 or 512 for NVFP4) is not padded to a word either: 4 or 2 lanes share one
+  (`LANES_PER_WORD`, the shader GEMV's `sub_word` select) and a stripe narrower than a scale group carries the group's
+  scale once per lane — the DSpark Markov head's 151936 × 256 in NVFP4 is 24 MB instead of 78. The placement is a
+  profile value. Next: MXFP4, GGUF K-quants.
 * **State.** KV cache per attention layer (BF16 in v1; FP8/INT8 later — at long context KV traffic overtakes the
   weights); GDN recurrent state FP32 `[48,128,128]` + conv state, each with `γ+1` checkpoint slots for speculative
   rollback; the drafter's injected-context KV (5 layers × 8 KV heads × 128 × K and V ≈ 20 KB per committed token,
   append-only: features of rejected positions are never appended, so it needs no rollback) and a feature-tap buffer
-  for the T positions of the verify pass; activation arena planned by liveness (a few MB); `StepState`; optional
-  trace buffer.
+  for the T positions of the verify pass; activation arena planned by liveness (a few MB); `StepState` (its
+  host-written `stop_at` is the ring head at which the closing serial op sets `done`, so the host can queue full
+  command buffers for a request of any length and the steps behind the request return at once — no over-run work,
+  as after an EOS); optional trace buffer.
 
 ### 5.6 Decode kernel library (v1)
 
@@ -346,7 +362,7 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
 | `gemv_T` (NVFP4 / FP8 / BF16), T ∈ {1…8} by function constant | R rows | FP32 accumulate, one rounding to BF16; loads packed `uint32/uint64` words — a naive byte-load kernel is load-latency-bound at ~55 GB/s (≈ 40–60 ns per load per lane) **[M]**; the activation stripe is loaded once per block and reused for R rows × T tokens |
 | fusions on `gemv_T` | | RMSNorm-scaled input (`x = h · r · (1+w)`, `r` computed once per op), residual-add epilogue, `gate|up → silu·mul`, sigmoid/SiLU output gates, row-stacked multi-output |
 | `rmsnorm_stat` | REDUCE | or hoisted into the producing op's epilogue (each block emits its partial sum of squares) |
-| `gqa_decode` | (q-head, KV-chunk) | online-softmax `(m, d, o)` state merge (FlashInfer / MPK `gqa_decode_sm100_v2`), per-head q/k norm, partial RoPE via the load-time head-dim permutation, KV append, sigmoid output gate |
+| `gqa_decode` | (q-head, KV-chunk); v3: (q-head, token) — one threadgroup, keys strided over its SIMD-groups, the fold in threadgroup memory, no merge dispatch (rep · T ≤ 4, #113) | online-softmax `(m, d, o)` state merge (FlashInfer / MPK `gqa_decode_sm100_v2`), per-head q/k norm, partial RoPE via the load-time head-dim permutation, KV append, sigmoid output gate |
 | `gdn_mixer` | v-head | conv update + SiLU → q/k L2-norm → `β = σ(b)`, `g = −exp(A_log)·softplus(a + dt_bias)` in FP32 → delta-rule update and read-out (column-separable) → gated RMSNorm `norm(o)·w·silu(z)` in HF's rounding order — ported from MPK's GDN variant of `kda_fused_recurrent_v2` |
 | `embed`, `lm_head` + `argmax` / Gumbel-max | row range | temperature via Gumbel-max (counter-based RNG keyed by seed, step, index); top-k/top-p/min-p by on-GPU threshold selection — no CPU sync for stochastic sampling |
 | `draft_attn` | (q-head, block) | the drafter's attention: γ block queries over the injected-context KV plus the block itself (bidirectional inside the block), GQA 32/8 — the target's `gqa_decode` body with a second KV source and T = γ |
@@ -396,8 +412,12 @@ path.
   `executeCommandsInBuffer:indirectBuffer:`, which lets the GPU choose the ICB range, is the optimization if those
   µs ever matter. Variants a program can never take are not encoded: under the cost-aware or a fixed L ≥ 1 rule a
   decode step runs at T = 1 + L ≥ 2, so the step's T = 1 variants are pruned and the next variant's range starts
-  at 0 (a prefill chunk of one token runs on it); the injection's variants (`n_inject` can be 1) and the threshold
-  rule's (L = 0 is possible) stay.
+  at 0 (a prefill chunk of one token runs on it); the injection's variants (`n_inject` can be 1), an LM drafter's
+  chain rows (`n_chain`, one variant; its first step's `n_inject + n_chain` rows, bound to T_max + 1) and the threshold
+  rule's (L = 0 is possible) stay. A tile's input is read in `x_permute`'s order; when the input is un-normed and
+  the GEMV runs on the tile alone, its producer writes that order itself (`PERM_OUT`: the attention merge for
+  `o_proj`, the gate|up tile's silu·mul epilogue for `down`) into the tile's scratch and the permute dispatch is not
+  emitted — the normed inputs keep theirs, which applies the norm on the way.
 
 ### 5.8 Speculative decoding with a DSpark drafter
 
@@ -452,6 +472,22 @@ tokens/s, not acceptance.
 own engine, then the HF golden); sampling verification must preserve the target distribution (rejection sampling;
 distribution tests). The drafter's block is checked against the DeepSpec reference implementation on the same anchor and
 context (draft tokens identical in greedy mode, confidences within 1e-3).
+
+**The LM drafter (the second plugin, `spec/lm`).** The classical draft model — a small causal LM with the target's
+tokenizer (mlx-lm's `draft_model`) — is any registered model package built with a `prefix` (its slabs, aux entries,
+tables, states and activations beside the target's), run inside the round: a *first chain step* over the committed
+positions the drafter has not processed plus the anchor (`StepState.n_inject + n_chain` rows from `position −
+n_inject`: the prompt chunk in prefill; in decode the last draft after a full acceptance, else the anchor alone; the
+argmax of the last row is the first draft), then γ − 1 single-row chain steps, each appending its k/v; the rows past
+the accepted prefix are stale and are overwritten by the next chain, whose rows attend only to keys at or before
+their own position. The same layer modules are lowered once per pass under a graph *activation scope*
+(`Graph.scope`: sources keep their names, activations take the pass's prefix), the mixers take the pass's mode
+from the lowering context (`LowerContext.mixer_attrs` → `LM_MODE`, `CHAIN_I`), and the row counts are the step
+state's (`n_chain`, `n_inject + n_chain`: row sources 3 and 4). No confidences: the whole chain is verified (or a
+fixed length); `drafter_ctx_len` records the chain's end, the accept scan derives the ingest rows from it. Measured
+on the M5 Pro (decode-kernels.md §10): token-identical to plain decode, acceptance equal to mlx-lm's with the same
+0.6B, and a chain step of 4.1 ms where mlx-lm's 0.6B step is 2.1 — the round costs more than mlx-lm's until the
+small-model step is at MLX's speed per layer.
 
 **Measured (M5 Pro, 2026-09-24; decode-kernels.md §5) [M].** The round as built: with the cost-aware rule and the
 shader-FMA GEMVs, Qwen3-8B NVFP4 + its public drafter decodes at 37.5 ms per token on a plain story prompt (1.05

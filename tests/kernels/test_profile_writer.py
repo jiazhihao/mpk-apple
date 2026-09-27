@@ -31,7 +31,7 @@ def test_writer_measures_and_the_profile_loads(tmp_path):
     doc = merge_profile(None, device=device_facts(info, target_gb=21.0), engine=engine, measurements=m, notes=notes, written="2026-09-25", command="test")
     p = Profile.from_dict("x", doc)
     assert p.family == f"Apple{info.apple_family}" and p.gpu_cores == info.gpu_cores and p.cost("fp8", 1) == 1.0 and 2 in p.cost_t["fp8"]
-    assert p.lane_order in ("contiguous", "interleaved16") and p.threadgroups_per_core in (1, 2) and p.attention in ("v1", "v2")
+    assert p.lane_order in ("contiguous", "interleaved16") and p.threadgroups_per_core in (1, 2) and p.attention in ("v1", "v2", "auto")
     if m["tile_ms"]:                                                       # Apple10: the tile ran and its rows are in the same unit
         assert p.cost_t["accelerator_fp8"][8] > 0 and p.accelerator in ("on", "off")
     out = tmp_path / "x.json"

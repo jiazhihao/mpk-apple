@@ -109,6 +109,7 @@ def main(argv=None) -> int:
     ap.add_argument("--drafter", default=None, help="profile the speculative round with this drafter checkpoint")
     ap.add_argument("--drafter-pack", default=None)
     ap.add_argument("--drafter-kind", default="dspark")
+    ap.add_argument("--draft-gamma", type=int, default=None, help="an LM drafter's drafts per round (--drafter-kind lm)")
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
 
@@ -117,9 +118,15 @@ def main(argv=None) -> int:
     tok = Tokenizer.from_file(str(Path(a.model) / "tokenizer.json"))
     ids = tok.encode(a.prompt, add_special_tokens=False).ids
     sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1, autotune=not a.no_autotune, drafter_dir=a.drafter,
-                        drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind)
+                        drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind,
+                        drafter_options={"gamma": a.draft_gamma} if a.draft_gamma is not None else None)
     sess.generate(ids, 4)                                  # prefill + a few decode steps so the states are real
     dec = sess.engine(0 if sess.drafter is not None else 1)
+    layout = dec.program.layout                            # the request is served (stop_at → done): re-arm the program so the
+    stb = dec.buffers[dec.program.step_state]              # profiled steps do real work (they continue the generation)
+    state = layout.unpack(stb.read(0, layout.size))
+    state.update(done=0, stop_at=0)
+    stb.write(layout.pack(state), 0)
     runs = dec.profile(a.steps)
     timings = op_timings(dec.program, runs)
     print(f"# decode step of {Path(a.model).name} on {sess.dev.info().name}: {len(dec.program.ops)} dispatches, {a.steps} profiled steps")

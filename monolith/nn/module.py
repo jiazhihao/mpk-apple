@@ -71,6 +71,7 @@ class LowerContext:
     states: Dict[str, Value] = field(default_factory=dict)
     consts: Dict[str, Value] = field(default_factory=dict)
     t: Dim = T
+    mixer_attrs: Dict[str, Any] = field(default_factory=dict)   # attrs the mixers forward to their kernel ops (an LM drafter's pass modes)
 
 
 class Module:

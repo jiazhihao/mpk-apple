@@ -55,9 +55,12 @@ def test_speculative_equals_plain_greedy(packs, verify):
         assert all(1 <= c <= 4 for c in got.committed) and all(a == c - 1 for a, c in zip(got.accepted, got.committed))
         assert all(a <= cfg.block_size for a in got.accepted)
         print(f"\nprompt {n_prompt}: {got.steps} steps for {got.decode_tokens} tokens, accepted {got.accepted}")
-    # the drafter's context grew with every committed token and the ring was drained in order
+    # the ring was drained in order and the program stopped itself at the request (stop_at → done): the position
+    # counts every committed token; the final step's closing bookkeeping — the drafter's injection of that step's
+    # tokens — is skipped behind `done`, as after an EOS, so the drafter's context is one step short
     st = spec.engine(0).state()
-    assert st["drafter_ctx_len"] == st["position"] == 1 + 12 - 1 and st["ring_head"] == st["ring_tail"] == 12
+    assert st["position"] == 1 + 12 - 1 and st["ring_head"] == st["ring_tail"] == 12 and st["done"] == 1
+    assert st["drafter_ctx_len"] == st["position"] - 1
     assert st["error"] == 0
 
 
@@ -146,9 +149,12 @@ def test_speculative_sampling_preserves_the_target_distribution(packs):
     ids = [7, 23, 41, 3]
     n_seeds, n_new = 1000, 3
     plain_seqs, spec_seqs, same_seed = [], [], []
-    plain = Session(_model(tdir), str(tdir / "pack"), eos=-1, autotune=False, temperature=0.9, top_k=12)
+    # one attention kernel for both: plain decode runs the static T = 1 program (v3 under the profile's auto) and the
+    # speculative session the dynamic program (v1 at rep · t_max rows), whose folds differ by BF16 rounding — the
+    # same-seed identity below needs the same logits to the bit; the distribution checks hold under any kernel
+    plain = Session(_model(tdir), str(tdir / "pack"), eos=-1, autotune=False, temperature=0.9, top_k=12, attention="v2")
     spec = Session(model, str(tdir / "pack"), eos=-1, autotune=False, temperature=0.9, top_k=12, drafter=drafter, drafter_pack=str(ddir / "pack"),
-                   verify="threshold", verify_threshold=0.0)
+                   verify="threshold", verify_threshold=0.0, attention="v2")
     for seed in range(n_seeds):
         plain.seed, spec.seed = seed, seed + 100_000                        # independent streams: two samples of one distribution
         plain_seqs.append(plain.generate(ids, n_new).tokens)

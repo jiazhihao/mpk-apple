@@ -8,7 +8,7 @@
 // cached device memory; accumulation is FP32; one simd_sum per (row, token); the per-row scale (the source matrix's
 // per-tensor scale, from the pack's row-scale table) is applied once per output.
 //
-// Macros: K (columns), R (rows per block), T (tokens), RG (rows per activation reuse group, divides R),
+// Macros: K (columns), R (rows per block), T (tokens), RG (rows per activation reuse group, divides R; 1 with X_HOIST),
 //         LANE_ORDER (0 contiguous, 1 interleaved16), UNIT_WORDS (16-byte words per lane-row unit),
 //         PAYLOAD_WORDS (weight words per lane-row; the last one is partial — K_TAIL columns — when K/32 is not
 //         whole words, a ragged stripe), SCALE_W0 / SCALE_UOFF / SCALE_WORDS (the row's scale bytes start SCALE_UOFF
@@ -43,6 +43,12 @@
 #endif
 #ifndef CHUNK
 #define CHUNK (R / 2u)
+#endif
+#ifndef X_HOIST
+#define X_HOIST 0                    // 1: the activation words are converted once per SIMD-group ahead of the items (X_PRECONVERT, small K, T = 1)
+#endif
+#ifndef FOLD_LOADS
+#define FOLD_LOADS 16u              // the norm fold's loads requested per round (divides by 4)
 #endif
 #ifndef RG
 #define RG 4
@@ -108,13 +114,62 @@
 // of the slab, outputs (and STAT_OUT partials) relative to the range.
 struct GemvParams { uint n_rows; uint n_blocks; uint n_sg; uint t_active; float out_scale; float eps; uint stat_parts; uint block0; };
 
+#ifndef LANES_PER_WORD
+#define LANES_PER_WORD 1u                              // 2 or 4: a sub-word unit — lanes share one payload word (blm.py), interleaved order only
+#endif
+#ifndef RSPLIT
+#define RSPLIT 1u                                      // work items per block: item i streams rows [i·R/RSPLIT, (i+1)·R/RSPLIT) of its block
+#endif                                                 // (silu_mul: that share of the gate rows and their up partners) — a narrow slab's blocks alone
+                                                       // leave most of the crew idle (design §5.5: 64 blocks over 240 SIMD-groups); RG divides the share
+#define RR (R / RSPLIT)                                // rows per item
+#if (R % RSPLIT) != 0 || (RR % RG) != 0
+#error "gemv_T: RSPLIT must divide R and RG must divide R / RSPLIT"
+#endif
+#if EPILOGUE == 2 && ((CHUNK % RSPLIT) != 0 || ((CHUNK / RSPLIT) % RG) != 0)
+#error "gemv_T silu_mul: RSPLIT must divide CHUNK and RG must divide CHUNK / RSPLIT"
+#endif
+#if PAIRS && RSPLIT != 1u
+#error "gemv_T PAIRS: no row split"
+#endif
 static inline uint unit_word(uint lane, uint r, uint j) {
+#if LANES_PER_WORD > 1
 #if LANE_ORDER == 0
+#error "gemv_T: sub-word units need the interleaved lane order"
+#endif
+  return (r * UNIT_WORDS + j) * (32u / LANES_PER_WORD) + lane / LANES_PER_WORD;   // the word LANES_PER_WORD lanes share
+#elif LANE_ORDER == 0
   return (lane * R + r) * UNIT_WORDS + j;
 #else
   return (r * UNIT_WORDS + j) * 32u + lane;
 #endif
 }
+// a lane's part of a shared payload word, moved to the front (the rest zero: their columns are past K_TAIL)
+static inline uint4 sub_word(uint4 q, uint lane) {
+#if LANES_PER_WORD == 2
+  return (lane & 1u) ? uint4(q.z, q.w, 0u, 0u) : uint4(q.x, q.y, 0u, 0u);
+#elif LANES_PER_WORD == 4
+  const uint s = lane & 3u;
+  return uint4((s == 0u) ? q.x : (s == 1u) ? q.y : (s == 2u) ? q.z : q.w, 0u, 0u, 0u);
+#else
+  return q;
+#endif
+}
+#ifndef SCALE_PLACEMENT
+#define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
+#endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
+#if SCALE_PLACEMENT
+#define SCALE_BASE (R * 32u * PAYLOAD_WORDS / LANES_PER_WORD)          // the block's payload words (sub-word units share words)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#else
+#define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
+#define SCALE_SOFF(ln) 0u
+#endif
+#if SCALE_PLACEMENT
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS / LANES_PER_WORD + SCALE_REGION_WORDS)   // a block: its payload words then its scale region
+#else
+#define BLOCK_WORDS (R * 32u * UNIT_WORDS / LANES_PER_WORD)
+#endif
 
 static inline float bf16lo(uint u) { return as_type<float>(u << 16); }
 static inline float bf16hi(uint u) { return as_type<float>(u & 0xFFFF0000u); }
@@ -153,7 +208,8 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
   const uint sg = gid / sw;
 #if STEP_STATE
   if (st->done) return;
-  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 2) ? T : st->t_this_step);   // dynamic T (≤ the compiled T), design §5.7
+  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T : st->t_this_step)));
+  if (T_act == 0u) return;                                     // no rows this step (an LM drafter's chain in a prefill chunk): no weights streamed   // dynamic T (≤ the compiled T), design §5.7
 #ifdef T_HI
   if (T_act > T_HI || T_act <= T_LO) return;
 #endif
@@ -165,10 +221,60 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if NORM
   float rn[T];                                 // the per-token RMSNorm scale, from the statistic's partial sums
   for (uint t = 0; t < T; t++) {
-    float ssq = 0.0f;
-    if (t < T_act) for (uint i = lane; i < p.stat_parts; i += 32u) ssq += stat[t * p.stat_parts + i];
-    ssq = simd_sum(ssq);                       // lane-parallel: a serial loop pays a load latency per partial
+    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+    if (t < T_act) {
+      // lane-parallel, four accumulators fed from FOLD_LOADS loads requested together: a row-split producer leaves up
+      // to 2048 partials per token, and a round of four loads per latency was 16 latencies — 3.6 µs of a 6144 × 4096
+      // GEMV (decode-kernels.md §11.1); the elements reach the same accumulators in the same order as before
+      device const float* sp = stat + t * p.stat_parts;
+      for (uint base = lane; base < p.stat_parts; base += 32u * FOLD_LOADS) {
+        float v[FOLD_LOADS];
+        for (uint u = 0; u < FOLD_LOADS; u++) { const uint i = base + 32u * u; v[u] = (i < p.stat_parts) ? sp[i] : 0.0f; }
+        for (uint u = 0; u < FOLD_LOADS; u += 4u) { s0 += v[u]; s1 += v[u + 1u]; s2 += v[u + 2u]; s3 += v[u + 3u]; }
+      }
+    }
+    const float ssq = simd_sum((s0 + s1) + (s2 + s3));
     rn[t] = rsqrt(ssq / float(K) + p.eps);
+  }
+#endif
+#if X_HOIST
+  // the activation words converted (and normed) once per SIMD-group, ahead of the items: a small-K slab's items
+  // re-read and re-converted them per item — the 0.6B's 4096 × 1024 projection is 2048 items of two rows over
+  // 960 SIMD-groups (decode-kernels.md §11.1: 13.1 → 12.7 µs, and with one-row items 11.6)
+  float xh[PAYLOAD_WORDS][T][WPW];
+#if SCALE_BIAS
+  float xsh[PAYLOAD_WORDS][T][GPW];
+#endif
+  for (uint j = 0; j < PAYLOAD_WORDS; j++) {
+    const uint col = lane * KL + j * WPW;
+#if K_TAIL
+    const uint nvalid = (j + 1u == PAYLOAD_WORDS) ? K_TAIL : WPW;
+#else
+    const uint nvalid = WPW;
+#endif
+        // convert the activation chunk once per word and reuse it across the RG rows (T*WPW floats of registers)
+#if NORM
+        float nwv[WPW];
+        for (uint e = 0; e < WPW; e += 4) {
+          float4 q = (e < nvalid) ? *(device const float4*)(norm_w + col + e) : float4(0.0f);
+          nwv[e] = q.x; nwv[e + 1] = q.y; nwv[e + 2] = q.z; nwv[e + 3] = q.w;
+        }
+#endif
+        for (uint t = 0; t < T; t++) {
+          if (t < T_act) {
+            device const uint4* xp = (device const uint4*)(x + t * K + col);
+            for (uint v = 0; v < XW; v++) { uint4 q = (8u * v < nvalid) ? xp[v] : uint4(0u);
+              xh[j][t][8 * v] = bf16lo(q.x); xh[j][t][8 * v + 1] = bf16hi(q.x); xh[j][t][8 * v + 2] = bf16lo(q.y); xh[j][t][8 * v + 3] = bf16hi(q.y);
+              xh[j][t][8 * v + 4] = bf16lo(q.z); xh[j][t][8 * v + 5] = bf16hi(q.z); xh[j][t][8 * v + 6] = bf16lo(q.w); xh[j][t][8 * v + 7] = bf16hi(q.w); }
+#if NORM
+            for (uint e = 0; e < WPW; e++) xh[j][t][e] = round_bf16(xh[j][t][e] * rn[t] * nwv[e]);
+#endif
+          } else { for (uint e = 0; e < WPW; e++) xh[j][t][e] = 0.0f; }
+        }
+#if SCALE_BIAS
+                                       // Σ x over each scale group of the word, for the bias term
+        for (uint t = 0; t < T; t++) for (uint g = 0; g < GPW; g++) { float s = 0.0f; for (uint e = 0; e < WPG; e++) s += xh[j][t][g * WPG + e]; xsh[j][t][g] = s; }
+#endif
   }
 #endif
 #if PAIRS
@@ -177,28 +283,37 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
     const uint t_tok = it / (K_TOPK * EXPERT_BLOCKS), slot = (it / EXPERT_BLOCKS) % K_TOPK, bb = it % EXPERT_BLOCKS;
     const uint b = uint(ids[t_tok * K_TOPK + slot]) * EXPERT_BLOCKS + bb;    // the slab block of the slot's expert
     device const ushort* xrow = x + (ulong)(PAIRS_X_SLOT ? (t_tok * K_TOPK + slot) : t_tok) * K;   // the item's activation row (T = 1 below)
+    const uint part = 0u;                                            // no row split: the item is the whole block
     const uint ocol0 = slot * (p.n_rows / (EPILOGUE == 2 ? 2u : 1u));      // the slot's columns of the output row
 #else
-  for (uint bb = sg; bb < p.n_blocks; bb += p.n_sg) {
-    const uint b = bb + p.block0;                                    // the slab block; bb the range-relative one
+  for (uint it = sg; it < p.n_blocks * RSPLIT; it += p.n_sg) {
+    const uint bb = it / RSPLIT, part = it % RSPLIT;                 // the range-relative block and the item's share of its rows
+    const uint b = bb + p.block0;                                    // the slab block
     device const ushort* xrow = x;
     const uint t_tok = 0u, ocol0 = 0u;
 #endif
-    device const uint4* wb = w + (ulong)b * (R * 32u * UNIT_WORDS);
+    device const uint4* wb = w + (ulong)b * BLOCK_WORDS;
 #if STAT_OUT
     float ssq_out[T];
     for (uint t = 0; t < T; t++) ssq_out[t] = 0.0f;
 #endif
 #if EPILOGUE == 2
     float gate_v[CHUNK][T];
-#endif
+    // the item's gate rows [part·CR, (part+1)·CR) then their up partners CHUNK + the same range (the pairs stay in one item)
+#define CR (CHUNK / RSPLIT)
+    for (uint side = 0; side < 2u; side++)
+    for (uint r0 = side * CHUNK + part * CR; r0 < side * CHUNK + (part + 1u) * CR; r0 += RG) {
+#elif PAIRS
     for (uint r0 = 0; r0 < R; r0 += RG) {
+#else
+    for (uint r0 = part * RR; r0 < (part + 1u) * RR; r0 += RG) {
+#endif
       float acc[RG][T];
       for (uint i = 0; i < RG; i++) for (uint t = 0; t < T; t++) acc[i][t] = 0.0f;
 #if SCALE_GROUP > 0
       uint scw[RG][SCALE_WORDS * 4];
       for (uint i = 0; i < RG; i++) for (uint s = 0; s < SCALE_WORDS; s++) {
-        uint4 q = wb[unit_word(lane, r0 + i, SCALE_W0 + s)];
+        uint4 q = wb[SCALE_WORD(lane, r0 + i, s)];
         scw[i][4 * s] = q.x; scw[i][4 * s + 1] = q.y; scw[i][4 * s + 2] = q.z; scw[i][4 * s + 3] = q.w;
       }
 #endif
@@ -210,6 +325,12 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
         const uint nvalid = WPW;
 #endif
 #if X_PRECONVERT
+#if X_HOIST
+        thread float (&xf)[T][WPW] = xh[j];                       // this word's converted activation, hoisted
+#if SCALE_BIAS
+        thread float (&xs)[T][GPW] = xsh[j];
+#endif
+#else
         // convert the activation chunk once per word and reuse it across the RG rows (T*WPW floats of registers)
         float xf[T][WPW];
 #if NORM
@@ -233,6 +354,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if SCALE_BIAS
         float xs[T][GPW];                                       // Σ x over each scale group of the word, for the bias term
         for (uint t = 0; t < T; t++) for (uint g = 0; g < GPW; g++) { float s = 0.0f; for (uint e = 0; e < WPG; e++) s += xf[t][g * WPG + e]; xs[t][g] = s; }
+#endif
 #endif
 #else
         uint4 xq[T][XW];
@@ -265,7 +387,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #endif
 #endif
         for (uint i = 0; i < RG; i++) {
-          uint4 q = wb[unit_word(lane, r0 + i, j)];
+          uint4 q = sub_word(wb[unit_word(lane, r0 + i, j)], lane);
           float wv[WPW];
           decode_word(q, wv);
           for (uint t = 0; t < T; t++) {
@@ -274,6 +396,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
             for (uint v = 0; v < XW; v++) { xw[4 * v] = xq[t][v].x; xw[4 * v + 1] = xq[t][v].y; xw[4 * v + 2] = xq[t][v].z; xw[4 * v + 3] = xq[t][v].w; }
 #endif
             for (uint g = 0; g < GPW; g++) {
+              if (g * WPG >= nvalid) break;                        // a partial word's padding segments: no scale of theirs is read
               float part = 0.0f;
               for (uint e = 0; e < WPG; e++) {
                 const uint ee = g * WPG + e;
@@ -285,10 +408,10 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
                 part = fma(wv[ee], xv, part);
               }
 #if SCALE_GROUP > 0
-              const float s = decode_scale(scw[i] + SCALE_UOFF, GROUP_OF(j, g));
+              const float s = decode_scale(scw[i] + SCALE_UOFF, SCALE_SOFF(lane) + GROUP_OF(j, g));
               acc[i][t] = fma(part, s, acc[i][t]);
 #if SCALE_BIAS
-              acc[i][t] = fma(decode_bias(scw[i] + SCALE_UOFF, GROUP_OF(j, g)), xs[t][g], acc[i][t]);
+              acc[i][t] = fma(decode_bias(scw[i] + SCALE_UOFF, SCALE_SOFF(lane) + GROUP_OF(j, g)), xs[t][g], acc[i][t]);
 #endif
 #else
               acc[i][t] += part;
@@ -339,7 +462,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
       }
     }
 #if STAT_OUT
-    if (lane == 0) for (uint t = 0; t < T; t++) if (t < T_act) stat_out[t * p.n_blocks + bb] = ssq_out[t];
+    if (lane == 0) for (uint t = 0; t < T; t++) if (t < T_act) stat_out[t * p.n_blocks * RSPLIT + it] = ssq_out[t];   // one partial per item
 #endif
   }
 }
