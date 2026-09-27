@@ -8,7 +8,7 @@
 // cached device memory; accumulation is FP32; one simd_sum per (row, token); the per-row scale (the source matrix's
 // per-tensor scale, from the pack's row-scale table) is applied once per output.
 //
-// Macros: K (columns), R (rows per block), T (tokens), RG (rows per activation reuse group, divides R),
+// Macros: K (columns), R (rows per block), T (tokens), RG (rows per activation reuse group, divides R; 1 with X_HOIST),
 //         LANE_ORDER (0 contiguous, 1 interleaved16), UNIT_WORDS (16-byte words per lane-row unit),
 //         PAYLOAD_WORDS (weight words per lane-row; the last one is partial — K_TAIL columns — when K/32 is not
 //         whole words, a ragged stripe), SCALE_W0 / SCALE_UOFF / SCALE_WORDS (the row's scale bytes start SCALE_UOFF
@@ -43,6 +43,12 @@
 #endif
 #ifndef CHUNK
 #define CHUNK (R / 2u)
+#endif
+#ifndef X_HOIST
+#define X_HOIST 0                    // 1: the activation words are converted once per SIMD-group ahead of the items (X_PRECONVERT, small K, T = 1)
+#endif
+#ifndef FOLD_LOADS
+#define FOLD_LOADS 16u              // the norm fold's loads requested per round (divides by 4)
 #endif
 #ifndef RG
 #define RG 4
@@ -217,15 +223,58 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
   for (uint t = 0; t < T; t++) {
     float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
     if (t < T_act) {
-      // lane-parallel, four independent accumulators: a row-split producer leaves up to 2048 partials per token, and a
-      // single dependent chain paid a load latency per 32 of them in every SIMD-group of the consumer
+      // lane-parallel, four accumulators fed from FOLD_LOADS loads requested together: a row-split producer leaves up
+      // to 2048 partials per token, and a round of four loads per latency was 16 latencies — 3.6 µs of a 6144 × 4096
+      // GEMV (decode-kernels.md §11.1); the elements reach the same accumulators in the same order as before
       device const float* sp = stat + t * p.stat_parts;
-      uint i = lane;
-      for (; i + 96u < p.stat_parts; i += 128u) { s0 += sp[i]; s1 += sp[i + 32u]; s2 += sp[i + 64u]; s3 += sp[i + 96u]; }
-      for (; i < p.stat_parts; i += 32u) s0 += sp[i];
+      for (uint base = lane; base < p.stat_parts; base += 32u * FOLD_LOADS) {
+        float v[FOLD_LOADS];
+        for (uint u = 0; u < FOLD_LOADS; u++) { const uint i = base + 32u * u; v[u] = (i < p.stat_parts) ? sp[i] : 0.0f; }
+        for (uint u = 0; u < FOLD_LOADS; u += 4u) { s0 += v[u]; s1 += v[u + 1u]; s2 += v[u + 2u]; s3 += v[u + 3u]; }
+      }
     }
     const float ssq = simd_sum((s0 + s1) + (s2 + s3));
     rn[t] = rsqrt(ssq / float(K) + p.eps);
+  }
+#endif
+#if X_HOIST
+  // the activation words converted (and normed) once per SIMD-group, ahead of the items: a small-K slab's items
+  // re-read and re-converted them per item — the 0.6B's 4096 × 1024 projection is 2048 items of two rows over
+  // 960 SIMD-groups (decode-kernels.md §11.1: 13.1 → 12.7 µs, and with one-row items 11.6)
+  float xh[PAYLOAD_WORDS][T][WPW];
+#if SCALE_BIAS
+  float xsh[PAYLOAD_WORDS][T][GPW];
+#endif
+  for (uint j = 0; j < PAYLOAD_WORDS; j++) {
+    const uint col = lane * KL + j * WPW;
+#if K_TAIL
+    const uint nvalid = (j + 1u == PAYLOAD_WORDS) ? K_TAIL : WPW;
+#else
+    const uint nvalid = WPW;
+#endif
+        // convert the activation chunk once per word and reuse it across the RG rows (T*WPW floats of registers)
+#if NORM
+        float nwv[WPW];
+        for (uint e = 0; e < WPW; e += 4) {
+          float4 q = (e < nvalid) ? *(device const float4*)(norm_w + col + e) : float4(0.0f);
+          nwv[e] = q.x; nwv[e + 1] = q.y; nwv[e + 2] = q.z; nwv[e + 3] = q.w;
+        }
+#endif
+        for (uint t = 0; t < T; t++) {
+          if (t < T_act) {
+            device const uint4* xp = (device const uint4*)(x + t * K + col);
+            for (uint v = 0; v < XW; v++) { uint4 q = (8u * v < nvalid) ? xp[v] : uint4(0u);
+              xh[j][t][8 * v] = bf16lo(q.x); xh[j][t][8 * v + 1] = bf16hi(q.x); xh[j][t][8 * v + 2] = bf16lo(q.y); xh[j][t][8 * v + 3] = bf16hi(q.y);
+              xh[j][t][8 * v + 4] = bf16lo(q.z); xh[j][t][8 * v + 5] = bf16hi(q.z); xh[j][t][8 * v + 6] = bf16lo(q.w); xh[j][t][8 * v + 7] = bf16hi(q.w); }
+#if NORM
+            for (uint e = 0; e < WPW; e++) xh[j][t][e] = round_bf16(xh[j][t][e] * rn[t] * nwv[e]);
+#endif
+          } else { for (uint e = 0; e < WPW; e++) xh[j][t][e] = 0.0f; }
+        }
+#if SCALE_BIAS
+                                       // Σ x over each scale group of the word, for the bias term
+        for (uint t = 0; t < T; t++) for (uint g = 0; g < GPW; g++) { float s = 0.0f; for (uint e = 0; e < WPG; e++) s += xh[j][t][g * WPG + e]; xsh[j][t][g] = s; }
+#endif
   }
 #endif
 #if PAIRS
@@ -276,6 +325,12 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
         const uint nvalid = WPW;
 #endif
 #if X_PRECONVERT
+#if X_HOIST
+        thread float (&xf)[T][WPW] = xh[j];                       // this word's converted activation, hoisted
+#if SCALE_BIAS
+        thread float (&xs)[T][GPW] = xsh[j];
+#endif
+#else
         // convert the activation chunk once per word and reuse it across the RG rows (T*WPW floats of registers)
         float xf[T][WPW];
 #if NORM
@@ -299,6 +354,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #if SCALE_BIAS
         float xs[T][GPW];                                       // Σ x over each scale group of the word, for the bias term
         for (uint t = 0; t < T; t++) for (uint g = 0; g < GPW; g++) { float s = 0.0f; for (uint e = 0; e < WPG; e++) s += xf[t][g * WPG + e]; xs[t][g] = s; }
+#endif
 #endif
 #else
         uint4 xq[T][XW];

@@ -71,12 +71,14 @@ class Gemv:
 
 
 @pytest.mark.parametrize("fmt", ["nvfp4", "int4_affine"])
-@pytest.mark.parametrize("epilogue,rsplit", [(None, 2), (None, 8), ("residual", 4), ("silu_mul", 2), ("silu_mul", 4)])
+@pytest.mark.parametrize("epilogue,rsplit", [(None, 2), (None, 8), (None, 16), ("residual", 4), ("residual", 16), ("silu_mul", 2), ("silu_mul", 4), ("silu_mul", 8)])
 def test_row_split_items_reproduce_the_whole(dev, fmt, epilogue, rsplit):
     """RSPLIT work items per block (each a share of the block's rows; silu_mul: gate rows with their up partners):
     bit-identical outputs to the unsplit kernel — the same per-row arithmetic — and STAT_OUT partials per item that
-    sum to the block's (the 0.6B's 1024-row projections are 64 blocks over 240 SIMD-groups: decode-kernels.md §10)."""
-    t, rows = 2, 16
+    sum to the block's (the 0.6B's 1024-row projections are 64 blocks over 240 SIMD-groups: decode-kernels.md §10).
+    RSPLIT 16 (8 for silu_mul) is the one-row item, RG 1, at T = 1 with the hoisted activation (§11.1)."""
+    one_row = rsplit == 16 or (epilogue == "silu_mul" and rsplit == 8)
+    t, rows = (1 if one_row else 2), 16
     n = 40 * rows
     g = Gemv(dev, fmt, n, rows, t)
     rng = np.random.default_rng(21)
@@ -84,12 +86,13 @@ def test_row_split_items_reproduce_the_whole(dev, fmt, epilogue, rsplit):
     res = f32_to_bf16(rng.uniform(-1, 1, size=(t, n)).astype(np.float32)) if epilogue == "residual" else None
     stat = epilogue != "silu_mul"
     whole, so_w = g.run(x, epilogue=epilogue, residual=res, stat_out=stat, out_bf16=True, rg=2)
-    split, so_s = g.run(x, epilogue=epilogue, residual=res, stat_out=stat, out_bf16=True, rsplit=rsplit, rg=2)
+    split, so_s = g.run(x, epilogue=epilogue, residual=res, stat_out=stat, out_bf16=True, rsplit=rsplit, rg=1 if one_row else 2)
     assert np.array_equal(whole, split)
     if stat:
         assert so_s.shape == (t, g.info.n_blocks * rsplit)
         np.testing.assert_allclose(so_s.reshape(t, g.info.n_blocks, rsplit).sum(axis=2), so_w, rtol=1e-5, atol=1e-6)
     assert kernels.gemv_rsplits(16, 2, None) == [1, 2, 4, 8] and kernels.gemv_rsplits(16, 2, "silu_mul") == [1, 2, 4] and kernels.gemv_rsplits(16, 8, None) == [1, 2]
+    assert kernels.gemv_rsplits(16, 1, None) == [1, 2, 4, 8, 16] and kernels.gemv_rsplits(16, 1, "silu_mul") == [1, 2, 4, 8]
     with pytest.raises(ValueError):
         kernels.gemv_macros(g.info, t=t, rg=8, rsplit=4)
 
@@ -114,7 +117,11 @@ def test_norm_input_matches_reference_norm(dev, fmt, t):
     ref = (x_ref.astype(np.float64) @ g.w.T).astype(np.float32)
     chk = check_against_oracle(y, ref)
     assert chk.ok(), chk
-    # T*WPW > 64 takes the word path (NVFP4 T=4 above already does); the preconvert path is BF16/FP8 T ≤ 8
+    # T*WPW > 64 takes the word path (NVFP4 T=4 above already does); the preconvert path is BF16/FP8 T ≤ 8; at T = 1 on
+    # this K (a lane's K / 32 columns × T ≤ 32 floats, whatever the format) the converted and normed activation is hoisted
+    # ahead of the items (X_HOIST, §11.1); at T = 4 it is not
+    macros = kernels.gemv_macros(g.info, t=t, norm=True)
+    assert macros["X_HOIST"] == ("1" if t == 1 else "0"), macros
 
 
 @pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3", "bf16", "int8", "int4_affine"])

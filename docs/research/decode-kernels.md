@@ -1007,3 +1007,39 @@ chain grows with rows · keys and v2 stays (its lane-per-key scoring has no per-
 step 18.2 → 17.7 ms (mlx-lm 16.3, 0.92×). Five dispatches per layer. What remains at T = 1 is the GEMVs: the 0.6B's
 K = 1024 slabs at ~150 GB/s in the program (59 of the layer's 62 µs of op time; MLX's `qmm` streams the same shapes at
 208–216 GB/s in isolation — 42 µs), the 8B's at 255 (434 of 450; MLX's step implies ~290).
+
+**The GEMVs' share, taken apart** (0.6B shapes at T = 1, isolated, DRAM-streaming, barriered; µs) [M]. Their in-program
+time exceeded the isolated one by 1.6–3.9 µs per GEMV; the candidates were tested one by one. The pack's file-mapped
+windows stream like device buffers (13.1 vs 13.0 for the 4096 × 1024 projection); the StepState-sourced T of the step
+program costs nothing (12.6 vs 13.1); a barrier between consecutive dispatches costs nothing on the serial encoder;
+what remains is the chain itself: the four different kernels in sequence run 50.7 µs against 48.1 for their sum alone
+(0.65 µs per pipeline switch), 52.7 on the concurrent encoder with barriers (the ICB's semantics), and the per-op
+timestamps carry ~1.1 µs of boundary each — the layer's slope equals the op sum less that. So the in-program GEMV
+cost is the kernel's isolated cost plus ~2 µs per dispatch of switch and barrier, and the kernels were the lever. The
+norm-fed GEMVs carried 1.7–2.3 µs more than bytes and floors explain (13.1 → 11.4 with the input pre-normalized): not
+the fold of the statistic's partials (512 → 1 partial: −0.3) but the per-item conversion and scaling of the activation.
+Three changes, kept: **`X_HOIST`** — the activation words converted and normed once per SIMD-group ahead of the items
+where a lane's K / 32 · T columns fit 32 floats (K ≤ 1024 at T = 1, any format; at 64 floats the 1024 × 2048 slab ran
+2.7× slower, occupancy); **one-row items** (RG 1 with RSPLIT 16, 8 for silu_mul), a tuner candidate at T = 1 now
+that the activation is not re-read per row — shorter tails on 240-wide crews; and the **norm fold** requesting 16
+loads per round instead of four (2048 partials, a row-split producer's 256 blocks × 8, were 16 latencies: the 8B's
+6144 × 4096 GEMV 60.2 → 57.9 µs; the same elements reach the same accumulators in the same order, so bit-identical).
+
+| GEMV (0.6B, INT4) | tuner's choice before | µs | **after** (tuner's choice) | µs | GB/s |
+|---|---|---|---|---|---|
+| qkv 4096 × 1024, norm | RG 2 crew4 RSPLIT 8 | 13.1 | **RG 1 crew2 RSPLIT 16, X_HOIST** | **11.6** | 226 |
+| o 1024 × 2048, residual | RG 2 crew4 RSPLIT 8 | 6.6 | **RG 1 crew4 RSPLIT 16** | **6.2** | 191 |
+| gate + up 6144 × 1024, silu · mul, norm | RG 2 crew3 RSPLIT 4 | 19.6 | **RG 1 crew3 RSPLIT 8, X_HOIST** | **17.0** | 231 |
+| down 1024 × 3072, residual | RG 2 crew3 RSPLIT 8 | 8.9 | **RG 1 crew3 RSPLIT 16** | **8.5** | 217 |
+
+MLX's `quantized_matmul` on the same four shapes, streaming from DRAM in its own concurrent stream: 10.9 / 5.7 / 17.1 /
+8.3 µs (208–216 GB/s) — our kernels are level with it per shape now; its layer keeps the concurrency of its
+independent kernels, ours the five dispatches' switches and barriers.
+
+**In the layer, T = 1, both packs re-tuned** [M]: the 0.6B's layer 62.4 → **60.1 µs against MLX's 59.7 — level
+(1.00×)** over 128 tokens of context, the step **2.06 ms against MLX's 2.07**; over 1024 tokens 77.6 → 72.9 (MLX
+57.4, 1.27×: the attention over 1024 keys, 16 µs where MLX's SDPA is ~7 — v3 re-reads a kv head's K/V per query row,
+and a per-kv-head block with rep rows is the next attention item). The 8B's layer 450.5 → **442.8 (MLX 404.3,
+1.10×)** and 483 → 465.8 (MLX 420.2, 1.11×), the step 17.7 → 17.2 ms (mlx-lm 15.7, 0.91×): its GEMVs stream at
+250–265 GB/s in isolation (qkv 6144 × 4096 at 251, o 261, gate + up 272, down 260, lm_head 288) where MLX's step
+implies ~290 — the NVFP4 shader's remaining 10 %, the last item at T = 1.

@@ -121,12 +121,16 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
     if info.rows % rg:
         raise ValueError(f"gemv_T: RG={rg} must divide R={info.rows}")
     preconvert = t * f.weights_per_word <= 64          # T*WPW floats of registers; beyond that convert per row
+    # the activation words hoisted out of the item loop (converted and normed once per SIMD-group) where they fit 32
+    # floats of registers: K ≤ 1024 at T = 1 for a 4-bit format — the 0.6B's projections (§11.1); at 64 floats the
+    # occupancy collapsed (a 1024 × 2048 slab 2.7× slower)
+    hoist = preconvert and int(geometry["PAYLOAD_WORDS"]) * t * f.weights_per_word <= 32 and pairs is None
     if epilogue not in EPILOGUES:
         raise ValueError(f"gemv_T: unknown epilogue {epilogue!r}")
     macros = {"K": str(info.k), "R": str(info.rows), "T": str(t), "RG": str(rg),
               "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1",
               "UNIT_WORDS": unit_words(info), **geometry, "OUT_BF16": "1" if out_bf16 else "0",
-              "X_PRECONVERT": "1" if preconvert else "0",
+              "X_PRECONVERT": "1" if preconvert else "0", "X_HOIST": "1" if hoist else "0",
               "NORM": "1" if norm else "0", "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
     if epilogue == "silu_mul":
         if info.rows % 2 or (info.rows // 2) % rg:

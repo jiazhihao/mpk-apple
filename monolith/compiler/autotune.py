@@ -111,7 +111,7 @@ class Autotuner:
         res = nt.Buffer(self.dev, t * info.n * 2)
         xn = nt.Buffer(self.dev, t * info.k * 2)
         variants: List[Tuple[str, Dict[str, Any]]] = []
-        rgs = [r for r in (2, 4, 8) if r <= info.rows and info.rows % r == 0]
+        rgs = [r for r in ((1, 2, 4, 8) if t == 1 else (2, 4, 8)) if r <= info.rows and info.rows % r == 0]   # RG 1: one-row items (RSPLIT 16), for the small-K slabs whose activation is hoisted
         for rg, mode in itertools.product(rgs, ("crew", "crew2", "crew3", "crew4", "block")):
             # the row splits (RSPLIT > 1) only where the blocks alone leave SIMD-groups idle or end in a short last wave
             for rs in kernels.gemv_rsplits(info.rows, rg, epilogue):
