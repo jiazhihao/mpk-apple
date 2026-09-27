@@ -77,12 +77,17 @@ def test_a_drafter_that_is_the_target_accepts_every_draft(packs):
     differently and a near tie may flip, so that run only asks for most drafts."""
     _, _, qdir = packs
     gamma = 4
-    plain = Session(Qwen3Model.from_checkpoint(str(qdir), max_context=MAX_CONTEXT), str(qdir / "pack"), eos=-1, autotune=False, accelerator="off")
+    # one attention kernel for both sessions as well: the drafter's chain steps (one row) take v3 under the profile's
+    # auto and the target's verify pass v1, and their folds differ by BF16 rounding — a near-tie argmax would be a
+    # rejected draft here, while the real round drafts with a different model anyway
+    plain = Session(Qwen3Model.from_checkpoint(str(qdir), max_context=MAX_CONTEXT), str(qdir / "pack"), eos=-1, autotune=False, accelerator="off",
+                    attention="v1")
     model = Qwen3Model.from_checkpoint(str(qdir), max_context=MAX_CONTEXT)
     drafter = _drafter(qdir, model.lm_head, gamma)                                     # the same checkpoint, the same pack
     ddir = qdir / "drafter_pack"
     pack_model(drafter, str(qdir), str(ddir), PackLayout(rows=16))
-    spec = Session(model, str(qdir / "pack"), eos=-1, autotune=False, drafter=drafter, drafter_pack=str(ddir), verify="cost", accelerator="off")
+    spec = Session(model, str(qdir / "pack"), eos=-1, autotune=False, drafter=drafter, drafter_pack=str(ddir), verify="cost", accelerator="off",
+                   attention="v1")
     rng = np.random.default_rng(11)
     for n_prompt, n_new in ((6, 31), (13, 26), (19, 22), (8, 20), (16, 18)):       # 8 and 16: a last chunk of t_max rows (the first chain step at t_max + 1)
         ids = [int(x) for x in rng.integers(0, 50, n_prompt)]

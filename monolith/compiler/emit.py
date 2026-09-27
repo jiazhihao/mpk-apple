@@ -56,7 +56,7 @@ class _Ctx:
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
-    attention: str = "v1"                                                 # the attention kernel (profile / override): v1 | v2 | auto
+    attention: str = "v1"                                                 # the attention kernel (profile / override): v1 | v2 | v3 | auto
     attn_rows: int = 4                                                    # v1's query rows per pass (the profile's attention_rows)
     attn_v2_tg: int = 2                                                   # v2's threadgroups per core (the profile's attention_v2_threadgroups)
     accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
@@ -567,19 +567,36 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
             row_range=[block0 * info.rows, n_rows] if op.attrs.get("row_range") is not None else None)
 
 
-def _gqa_src(ctx: _Ctx, v2: bool = False) -> str:
+def _gqa_src(ctx: _Ctx, v2: bool = False, v3: bool = False) -> str:
     return kernels.PRELUDE + kernels.PERM_OUT_MSL + ctx.layout.to_msl() + "\n" + kernels.template("gqa_common.metal") + "\n" + kernels.template(
-        "gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
+        "gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
+
+
+GQA_V3_ROWS = 4                                                   # auto: v3 up to this many query rows per block (rep · T)
+
+
+def _gqa_kernel(ctx: _Ctx, heads: int, kv: int, lm_mode: int = 0, t_c: Optional[int] = None) -> str:
+    """The attention kernel of an op: the profile's (or the override's) ``v1`` / ``v2`` / ``v3``, or ``auto`` by the
+    op's query rows rep · T — T the rows the op compiles to (``rows_of``: the static program's T, a dynamic program's
+    t_max, an LM drafter's chain step's one row; the program's T when not given): v3 (core and merge in one dispatch, a
+    threadgroup per row) up to 4 rows — 0.39–0.80× v2's core + merge at T = 1 from 128 to 8192 keys; v2 up to 16 rows
+    (2–3× v1 at T = 1 and at 1024 keys); v1 above (~10 % ahead at 32 rows over a short context) — decode-kernels.md
+    §11. v2 has no LM modes; v1 and v3 have them."""
+    rows = (heads // kv) * (ctx.t if t_c is None else t_c)
+    if ctx.attention == "v3":
+        return "v3"
+    if ctx.attention == "v2":
+        return "v2" if rows <= 32 and not lm_mode else "v1"
+    if ctx.attention == "auto":
+        if rows <= GQA_V3_ROWS:
+            return "v3"
+        if rows <= 16 and not lm_mode:
+            return "v2"
+    return "v1"
 
 
 def _gqa_v2(ctx: _Ctx, heads: int, kv: int) -> bool:
-    """v2 when the profile (or the override) asks and the block's rows fit its query cache; ``auto``: v2 up to 16 query
-    rows per step (rep · T) — measured 2–3× faster than v1 at T = 1 and at 1024 keys with two threadgroups per core,
-    while v1 keeps ~10 % at 32 rows over a short context (decode-kernels.md §11)."""
-    rows = (heads // kv) * ctx.t
-    if ctx.attention == "v2":
-        return rows <= 32
-    return ctx.attention == "auto" and rows <= 16
+    return _gqa_kernel(ctx, heads, kv) == "v2"
 
 
 def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
@@ -604,7 +621,10 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
-    v2 = _gqa_v2(ctx, heads, kv) and not a.get("lm_mode")
+    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0])
+    if kind == "v3":
+        return                                                    # core and merge are one dispatch: the merge's handler emits it (it holds the output and the gate)
+    v2 = kind == "v2"
     macros, n_sg, chunk = _gqa_geometry(ctx, a, ctx_max, v2)
     kd = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_decode_v2" if v2 else "gqa_decode", macros)
     rep = heads // kv
@@ -632,7 +652,11 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     out = op.outputs[0]
     a = op.attrs
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
-    v2 = _gqa_v2(ctx, heads, kv) and not a.get("lm_mode")
+    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0])
+    if kind == "v3":
+        _gqa_v3(ctx, op)
+        return
+    v2 = kind == "v2"
     rep = heads // kv
     core = part_o.producer
     ctx_max = ctx.shape(core.inputs[1])[0] if core is not None else 0
@@ -653,6 +677,43 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     gb = ctx.buf(gate) if gate is not None else ctx.buf(part_o)
     ctx.add(km, [(0, *ctx.buf(part_o)), (1, *ctx.buf(part_md)), (2, *gb), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
             (t_c * heads, 1, 1), (32, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
+
+
+def _gqa_v3(ctx: _Ctx, op: Op) -> None:
+    """v3: the core and the merge as one dispatch — a threadgroup of gqa_v3_simdgroups(D) SIMD-groups per (kv head, query
+    row) block, the keys strided over the SIMD-groups, the fold in threadgroup memory (kernels/gqa_decode_v3.metal) —
+    emitted at the merge op, which holds the output and the gate; the core op that produced its partials supplies the
+    projection, the caches, the tables and the norms (its partial values stay unwritten)."""
+    part_o = op.inputs[0]
+    gate = op.inputs[2] if len(op.inputs) > 2 else None
+    out = op.outputs[0]
+    core = part_o.producer
+    if core is None or core.kind != "gqa_decode":
+        raise ValueError("gqa_merge: the v3 kernel needs the gqa_decode op that produces the merge's partials")
+    proj, kc, vc, cos, sin, qn, kn = core.inputs
+    a = core.attrs
+    d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
+    segs = {name: (off, n) for name, off, n in a["segments"]}
+    ctx_max = ctx.shape(kc)[0]
+    macros = dict(kernels.gqa_v3_macros(d, lm_mode=int(a.get("lm_mode", 0)), chain_i=int(a.get("chain_i", 0))), STEP_STATE="1")
+    fused = _fused_permute(ctx, out)                              # o_proj's tile reads the output: written in its order
+    if fused:
+        macros = dict(macros, **fused[1])
+    k = ctx.kernel("gqa", _gqa_src(ctx, v3=True), "gqa_decode_v3", macros)
+    rep = heads // kv
+    t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
+    n_tg = heads * t_c                                            # a threadgroup per (kv head, row): kv · rep · T ≤ heads · t_c
+    prm = ctx.params("gqa_v3", kernels.gqa_params(
+        heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_tg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
+        v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
+        scaling=float(a["scaling"]), has_gate=gate is not None, n_chunks_max=1, rows_max=rep * t_c))
+    st = ctx.program.step_state
+    gb = ctx.buf(gate) if gate is not None else ctx.buf(proj)
+    ctx.add(k, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
+                (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *((fused[0], 0) if fused else ctx.buf(out))), (9, prm, 0),
+                (10, *gb), (15, st, 0)],
+            (n_tg, 1, 1), (kernels.gqa_v3_simdgroups(d) * 32, 1, 1), "gqa_decode", writes=[1, 2, 7], kind="gqa_decode", attention="v3",
+            perm_out=bool(fused))
 
 
 def _draft_attn(ctx: _Ctx, op: Op) -> None:

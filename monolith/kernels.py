@@ -409,13 +409,44 @@ def macro_key(macros: Mapping[str, str]) -> str:
 
 # ---- attention ----------------------------------------------------------------------------------------------------
 
-def gqa_source(v2: bool = False, steal: bool = False) -> str:
-    """The attention kernels: the shared helpers + v1 (``gqa_decode`` / ``gqa_merge``, with the DRAFT variant) or v2
-    (``gqa_decode_v2`` / ``gqa_merge_v2``: the long-context structure of design §5.6, #34)."""
+def gqa_source(v2: bool = False, steal: bool = False, v3: bool = False) -> str:
+    """The attention kernels: the shared helpers + v1 (``gqa_decode`` / ``gqa_merge``, with the DRAFT variant), v2
+    (``gqa_decode_v2`` / ``gqa_merge_v2``: the long-context structure of design §5.6, #34) or v3 (``gqa_decode_v3``:
+    core and merge in one dispatch, a threadgroup per query row — the few-rows kernel, #113)."""
     src = PRELUDE + PERM_OUT_MSL + template("gqa_common.metal") + "\n"
     if steal:
         src += template("common/steal.metal") + "\n"                                   # the claim protocol (#44), v1 only
-    return src + template("gqa_decode_v2.metal" if v2 else "gqa_decode.metal")
+    return src + template("gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
+
+
+GQA_V3_SIMDGROUPS = 32                  # v3's SIMD-groups per threadgroup at most (1024 threads; the fold gives each one D / (4·NSG3) dims)
+
+
+def gqa_v3_simdgroups(head_dim: int) -> int:
+    """v3's SIMD-groups per threadgroup for a head dim: 32 (1024 threads) where D / 4 slices and the fold buffer of
+    nsg · (D + 4) floats allow it (D = 128), halved otherwise (D = 32 → 8, D = 64 → 16, D = 256 → 16)."""
+    nsg = min(GQA_V3_SIMDGROUPS, max(4, head_dim // 4))
+    while nsg > 4 and ((head_dim // 4) % nsg or nsg * (head_dim + 4) * 4 > THREADGROUP_MEMORY_LIMIT):
+        nsg //= 2
+    return nsg
+
+
+def gqa_v3_macros(head_dim: int, *, nsg: Optional[int] = None, lm_mode: int = 0, chain_i: int = 0) -> Dict[str, str]:
+    """v3: ``nsg`` SIMD-groups per threadgroup (a power of two ≤ 32 dividing D / 4; its fold buffer of
+    nsg · (D + 4) floats must fit threadgroup memory; None = :func:`gqa_v3_simdgroups`). ``lm_mode`` / ``chain_i``
+    as :func:`gqa_macros`."""
+    if nsg is None:
+        nsg = gqa_v3_simdgroups(head_dim)
+    if head_dim % 32 or nsg not in (4, 8, 16, 32) or (head_dim // 4) % nsg or nsg * (head_dim + 4) * 4 > THREADGROUP_MEMORY_LIMIT:
+        raise ValueError("gqa_decode_v3: head_dim a multiple of 32, nsg in (4, 8, 16, 32) dividing head_dim / 4, the fold buffer within threadgroup memory")
+    if lm_mode not in (0, 1, 2, 3) or chain_i < 0 or (chain_i and lm_mode != 2):
+        raise ValueError(f"gqa_decode_v3: lm_mode must be 0, 1, 2 or 3 and chain_i belongs to mode 2 (got {lm_mode}, {chain_i})")
+    m = {"D": str(head_dim), "NSG3": f"{nsg}u"}
+    if lm_mode:
+        m["LM_MODE"] = str(lm_mode)
+    if chain_i:
+        m["CHAIN_I"] = f"{chain_i}u"
+    return m
 
 
 def gqa_macros(head_dim: int, *, chunk: int = 64, rb_max: int = 4, steal: bool = False, steal_hits: bool = False,
@@ -453,11 +484,12 @@ def gqa_v2_macros(head_dim: int, *, rmax: int, rg: int = 4) -> Dict[str, str]:
 
 def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg: int, q_off: int, gate_off: int, k_off: int,
                v_off: int, in_stride: int, out_stride: int, ctx_max: int, eps: float, scaling: float, has_gate: bool,
-               n_chunks_max: int, rows_max: int, nominal_sg: int = 0) -> bytes:
+               n_chunks_max: int, rows_max: int, nominal_sg: int = 0, gate_stride: int = 0) -> bytes:
     """The ``GqaParams`` record (buffer 9 of gqa_decode, 4 of gqa_merge); ``nominal_sg`` = the crew the STEAL variant's
-    slices are cut for (the dispatch may bring fewer or more SIMD-groups)."""
+    slices are cut for (the dispatch may bring fewer or more SIMD-groups); ``gate_stride`` (pad1) = v3's gate rows'
+    stride when the gate is not a [T, heads·D] value of its own (0: out_stride)."""
     return struct.pack("<IIIIIIIIIIIIffIIIIII", heads, kv_heads, t_active, position, n_sg, q_off, gate_off, k_off, v_off,
-                       in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, 0, nominal_sg)
+                       in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, gate_stride, nominal_sg)
 
 
 def steal_reset_params(n: int) -> bytes:

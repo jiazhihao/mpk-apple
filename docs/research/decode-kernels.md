@@ -950,3 +950,60 @@ kernels: the dispatch is short and its crews sparse — a single wider dispatch 
 across the 0.6B's small stages); the attention core — a short-context T = 1 kernel without the chunk merge, a v2 with
 more rows per threadgroup for T > 1 on few heads, and M9's SIMD-group-matrix scoring for many rows over a long
 context; then the 8B's GEMVs' last 12 % to MLX's streaming rate.
+
+### 11.1 The few-rows attention kernel (v3, 2026-09-27)
+
+**Where the attention's time went.** With the profile's `auto` (v2 at T = 1) the 0.6B's attention cost 20.7 + 5.0 µs
+per layer in the program and 12.6 + 4.6 in isolation (core + merge, 128 keys); MLX's SDPA call is 5.7. Ablating v2's
+phases in isolation (the core alone, 0.6B geometry, T = 1) [M]:
+
+| removed | 128 keys | 1024 keys | 8B, 1024 keys |
+|---|---|---|---|
+| — (baseline core) | 12.6 µs | 15.9 | 27.7 |
+| the P·V pass | −7.1 | −9.2 | −16.5 |
+| the K loads of the score pass | −3.6 | −1.9 | −2.8 |
+| the query rows' norm + RoPE | −2.7 | −0.2 | 0 |
+| the new key's append | −2.9 | 0 | −0.2 |
+| the partial stores (and what only they keep alive) | −3.8 | −2.7 | −5.5 |
+| P·V's value loads alone | −2.7 | −3.0 | −3.1 |
+| P·V's compute alone | −0.9 | −2.7 | −6.9 |
+| the score pass's threadgroup-memory q reads | −2.2 | −1.1 | −4.0 |
+
+Loading the values eight keys ahead (v1's fix) did nothing for v2; vectorizing every per-lane slice (`load_dl` as one
+8- or 16-byte access instead of DL scalar loads, the partials as float4) and batching the merge's loads took the core
+12.6 → 10.1 and the merge 4.6 → 2.6 (8.9 → 6.2 at 1024 keys) — kept — but the structure was the cost: at 128 keys v2
+gives the whole GPU 8 blocks (one per kv head) and every SIMD-group a 32-key chunk to walk alone, so a layer's
+attention is one SIMD-group's chain of ~8 dependent memory and reduction latencies on 5 of 240 SIMD-groups, plus a
+second dispatch to fold the chunks.
+
+**v3** (`kernels/gqa_decode_v3.metal`; profile `attention: v3`, and `auto` takes it up to 4 query rows per block) is
+the structure of MLX's decode attention: one threadgroup of 32 SIMD-groups (1024 threads; 16 at D = 256, 8 at D = 32)
+per (kv head, query row) block — heads · T threadgroups, so at T = 1 a head per core (plain decode's static program and an LM drafter's chain steps) — lane-per-dim as v1, SIMD-group s
+taking keys s, s + 32, s + 64, … (4 keys each at 128) with a per-key online softmax in exact FP32 rescaling, then the
+32 partials folded in threadgroup memory (lane ℓ = partial ℓ, one simd_max and one simd_sum per value, each
+SIMD-group writing one 4-dim slice) and the output written normalized, rounded, times bf16(σ(gate)): no partial
+workspace, no merge dispatch. The step's new key is normed, RoPE'd and appended by the SIMD-group that scores it
+(the kv head's first row), so no device fence. LM modes as v1. It meets the contract at 1.0 BF16 ulp against the numpy
+model at every tested geometry, repeats bit-identically, and matches the layer oracle. Isolated, T = 1 (core + merge
+vs the one dispatch, µs) [M]:
+
+| keys | 0.6B v2 | **0.6B v3** | 8B v2 | **8B v3** |
+|---|---|---|---|---|
+| 128 | 12.6 | **4.9** | 18.1 | **7.6** |
+| 512 | 15.1 | **9.7** | 23.6 | **15.4** |
+| 1024 | 22.3 | **16.3** | 34.5 | **26.8** |
+| 2048 | 41.0 | **25.7** | 65.6 | **47.6** |
+| 4096 | 75.2 | **50.7** | 121.9 | **97.7** |
+| 8192 | 165.8 | **120.4** | 288.5 | **215.2** |
+
+Faster at every context (0.39–0.80×); at 8192 keys the 0.6B's 120 µs is 33 MB of KV at 280 GB/s — the bus — while the
+8B's 215 pays the rep = 4 re-reads of one kv head's K/V by its four rows' threadgroups (a per-kv-head block with rep
+rows would read once; M9's long-context item, with the SIMD-group-matrix scoring). For rows above 4 the per-core
+chain grows with rows · keys and v2 stays (its lane-per-key scoring has no per-(key, row) reduction).
+
+**In the layer** (the same protocol, T = 1) [M]: the 0.6B's attention 25.7 → 8.7 µs per layer, the layer
+82 → **62.4 (MLX 57.3, 1.09×)** over 128 tokens of context and 94 → 77.6 (MLX 60.3) over 1024, the step 2.67 → 2.19 ms
+(MLX 2.10); the 8B's attention 32.8 → 12.5, the layer 473 → **450.5 (MLX 414.8, 1.09×)** and 486 → 483 (MLX 437), the
+step 18.2 → 17.7 ms (mlx-lm 16.3, 0.92×). Five dispatches per layer. What remains at T = 1 is the GEMVs: the 0.6B's
+K = 1024 slabs at ~150 GB/s in the program (59 of the layer's 62 µs of op time; MLX's `qmm` streams the same shapes at
+208–216 GB/s in isolation — 42 µs), the 8B's at 255 (434 of 450; MLX's step implies ~290).

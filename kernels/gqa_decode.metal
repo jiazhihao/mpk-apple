@@ -119,8 +119,8 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
           load_dl(kvp + tk * p.pad1 + j * D + lane * DL, kf);
           norm_rope(kf, k_norm, cos_t + key * D, sin_t + key * D, p.eps, lane);
           if (rg == 0) {
-            for (uint e = 0; e < DL; e++) k_cache[(key * p.kv_heads + j) * D + lane * DL + e] = bf16bits(kf[e]);
-            for (uint e = 0; e < DL; e++) v_cache[(key * p.kv_heads + j) * D + lane * DL + e] = kvp[tk * p.pad1 + p.kv_heads * D + j * D + lane * DL + e];
+            store_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, kf);
+            copy_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, kvp + tk * p.pad1 + p.kv_heads * D + j * D + lane * DL);
           }
         } else {                                           // the block's own key: normed and RoPE'd, never appended
           const uint tk = key - qpos0;
@@ -133,8 +133,8 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
           load_dl(qkvg + tk * p.in_stride + p.k_off + j * D + lane * DL, kf);
           norm_rope(kf, k_norm, cos_t + key * D, sin_t + key * D, p.eps, lane);
           if (rg == 0) {                                   // append k (normed, RoPE'd) and v to the caches once
-            for (uint e = 0; e < DL; e++) k_cache[(key * p.kv_heads + j) * D + lane * DL + e] = bf16bits(kf[e]);
-            for (uint e = 0; e < DL; e++) v_cache[(key * p.kv_heads + j) * D + lane * DL + e] = qkvg[tk * p.in_stride + p.v_off + j * D + lane * DL + e];
+            store_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, kf);
+            copy_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, qkvg + tk * p.in_stride + p.v_off + j * D + lane * DL);
           }
         }
 #endif
@@ -192,7 +192,7 @@ kernel void gqa_decode(device const ushort* qkvg [[buffer(0)]], device ushort* k
     for (uint r = 0; r < RBMAX; r++) {
       if (r < nr) {
         const uint base = (j * p.n_chunks_max + c) * p.rows_max + r0 + r;
-        for (uint e = 0; e < DL; e++) part_o[base * D + lane * DL + e] = o[r][e];
+        store_part(part_o + base * D + lane * DL, o[r]);
         if (lane == 0) { part_md[base * 2u] = m_c[r]; part_md[base * 2u + 1u] = d_c[r]; }
       }
     }
@@ -237,13 +237,22 @@ kernel void gqa_merge(device const float* part_o [[buffer(0)]], device const flo
   for (uint c = 0; c < n_chunks; c++) m_g = max(m_g, part_md[((j * p.n_chunks_max + c) * p.rows_max + row) * 2u]);
   float d_g = 0.0f, o[DL];
   for (uint e = 0; e < DL; e++) o[e] = 0.0f;
-  for (uint c = 0; c < n_chunks; c++) {
-    const uint base = (j * p.n_chunks_max + c) * p.rows_max + row;
-    const float m_c = part_md[base * 2u];
-    if (m_c == -INFINITY) continue;
-    const float w = exp(m_c - m_g);
-    d_g = fma(part_md[base * 2u + 1u], w, d_g);
-    for (uint e = 0; e < DL; e++) o[e] = fma(w, part_o[base * D + lane * DL + e], o[e]);
+  // MERGE_UNROLL chunks' (m, d, o) are requested before any is folded, and an empty chunk is skipped by a select, not a
+  // `continue` — one load latency per chunk in a row was 9 µs over 33 chunks (1024 keys); the fold order is unchanged
+  for (uint c0 = 0; c0 < n_chunks; c0 += MERGE_UNROLL) {
+    float m_c[MERGE_UNROLL], d_c[MERGE_UNROLL], oc[MERGE_UNROLL][DL];
+    for (uint u = 0; u < MERGE_UNROLL; u++) {
+      const uint base = (j * p.n_chunks_max + min(c0 + u, n_chunks - 1u)) * p.rows_max + row;   // clamped: in bounds, not folded
+      m_c[u] = part_md[base * 2u]; d_c[u] = part_md[base * 2u + 1u];
+      load_part(part_o + base * D + lane * DL, oc[u]);
+    }
+    for (uint u = 0; u < MERGE_UNROLL; u++) {
+      if (c0 + u >= n_chunks) break;
+      const bool live = m_c[u] != -INFINITY;
+      const float w = live ? exp(m_c[u] - m_g) : 0.0f;
+      d_g = live ? fma(d_c[u], w, d_g) : d_g;
+      for (uint e = 0; e < DL; e++) o[e] = live ? fma(w, oc[u][e], o[e]) : o[e];
+    }
   }
   const float inv = d_g > 0.0f ? 1.0f / d_g : 0.0f;
   for (uint e = 0; e < DL; e++) {

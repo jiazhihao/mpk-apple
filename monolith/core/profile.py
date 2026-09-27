@@ -29,9 +29,10 @@ class Profile:
     threadgroups_per_core: int = 1
     sibling_order: str = "either"     # "alu_first" | "bus_first" | "either"
     max_cb_ms: float = 16.0
-    attention: str = "v1"             # the attention kernel: "v1" (block = kv head × chunk × row group), "v2" (§5.6 v2, #34), or "auto":
-                                      # v2 where a step's query rows (rep · T) are at most 16, v1 above (#113: v2 with two threadgroups per core
-                                      # is 2–3× faster at T = 1 and at 1024 keys; v1 keeps a small edge at rep · T = 32 over a short context)
+    attention: str = "v1"             # the attention kernel: "v1" (block = kv head × chunk × row group), "v2" (§5.6 v2, #34), "v3" (core and
+                                      # merge in one dispatch, a threadgroup per query row, #113) or "auto": v3 where a step's query rows
+                                      # (rep · T) are at most 4, v2 up to 16, v1 above (#113: v3 is 2.6× v2 at 128 keys and ahead to ~2K; v2
+                                      # with two threadgroups per core is 2–3× v1 at T = 1 and at 1024 keys; v1 keeps a small edge at 32 rows)
     attention_rows: int = 4           # v1's query rows per pass over a chunk (RBMAX): more rows stream the chunk fewer times, at register cost
     attention_v2_threadgroups: int = 2  # v2's threadgroups per core (its blocks are threadgroups: two per core hide the latency of one)
     accelerator: str = "off"          # "on": T > 1 GEMVs run on the tensor-ops tile (gemm_tile, #50/#51) above accelerator_min_t
@@ -82,8 +83,8 @@ class Profile:
             raise ValueError(f"profile {name}: engine.lane_order must be 'contiguous' or 'interleaved16'")
         if eng.get("scale_placement", "inline") not in ("inline", "block"):
             raise ValueError(f"profile {name}: engine.scale_placement must be 'inline' or 'block'")
-        if eng.get("attention", "v1") not in ("v1", "v2", "auto"):
-            raise ValueError(f"profile {name}: engine.attention must be 'v1', 'v2' or 'auto'")
+        if eng.get("attention", "v1") not in ("v1", "v2", "v3", "auto"):
+            raise ValueError(f"profile {name}: engine.attention must be 'v1', 'v2', 'v3' or 'auto'")
         if int(eng.get("attention_rows", 4)) not in (1, 2, 4, 8, 16):
             raise ValueError(f"profile {name}: engine.attention_rows must be 1, 2, 4, 8 or 16")
         if int(eng.get("attention_v2_threadgroups", 2)) not in (1, 2, 3, 4):

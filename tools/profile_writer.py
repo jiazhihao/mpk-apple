@@ -6,7 +6,7 @@
 * ``cost_T`` per format: the shader GEMV's pass cost at T = 1, 2, 4, 8 relative to T = 1, at the best geometry per T,
 * ``accelerator_<fmt>``: the tensor-ops tile (gemm_tile) at 8 / 16 / 32 token rows in the same unit, and from the
   two the accelerator switch and ``accelerator_min_t`` per format (the smallest T the tile takes),
-* the attention kernel (v1 vs v2 over context lengths and T).
+* the attention kernel (v1, v2 and v3 over context lengths and T).
 
 Everything else in a profile is the probes' record (``./probes/run_all.sh``): ``sibling_order`` (p11) and
 ``max_cb_ms`` (p6/p6b) carry over from the existing file, or take the safe defaults on a new chip. Min-of-N over
@@ -133,21 +133,24 @@ def measure(*, shape: Tuple[int, int] = (17408, 5120), formats: Sequence[str] = 
         except Exception as e:  # noqa: BLE001
             m["tile_ms"], m["tile_error"] = {}, str(e)
             log(f"tile: not available on this device ({e})")
-    # 5. the attention kernel: v1 vs v2 over the contexts and T
+    # 5. the attention kernel: v1 vs v2 over the contexts and T, v3 where its rows apply (rep · T ≤ 4)
     if attention is not None:
         heads, kv, d = attention
-        m["attention_ms"] = {"v1": {}, "v2": {}}
+        m["attention_ms"] = {"v1": {}, "v2": {}, "v3": {}}
         m["attention_rep"] = heads // kv
         for ctx in ctxs:
             for t in attn_ts:
-                for v2 in (False, True):
-                    try:
-                        r = gqa_bench.run(b.dev, heads, kv, d, ctx, t, 64, min(4, (heads // kv) * t) if v2 else 4, reps, v2=v2, v2_tg=2)
-                    except Exception as e:  # noqa: BLE001
-                        log(f"attention {'v2' if v2 else 'v1'} ctx={ctx} T={t}: skipped ({e})")
+                for kind in ("v1", "v2", "v3"):
+                    if kind == "v3" and (heads // kv) * t > 4:
                         continue
-                    m["attention_ms"]["v2" if v2 else "v1"][(ctx, t)] = r["ms"]
-                    log(f"attention {'v2' if v2 else 'v1'} ctx={ctx} T={t}: {r['ms']:.3f} ms ({r['kv_gbps']:.0f} GB/s of KV)")
+                    try:
+                        r = gqa_bench.run(b.dev, heads, kv, d, ctx, t, 64, min(4, (heads // kv) * t) if kind == "v2" else 4, reps,
+                                          v2=kind == "v2", v2_tg=2, v3=kind == "v3")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"attention {kind} ctx={ctx} T={t}: skipped ({e})")
+                        continue
+                    m["attention_ms"][kind][(ctx, t)] = r["ms"]
+                    log(f"attention {kind} ctx={ctx} T={t}: {r['ms']:.3f} ms ({r['kv_gbps']:.0f} GB/s of KV)")
     return m
 
 

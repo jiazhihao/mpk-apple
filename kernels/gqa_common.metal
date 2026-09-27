@@ -64,9 +64,65 @@ static inline float bf16f(ushort u) { return as_type<float>(uint(u) << 16); }
 static inline float round_bf16(float v) { uint u = as_type<uint>(v); u += 0x7FFFu + ((u >> 16) & 1u); return as_type<float>(u & 0xFFFF0000u); }
 static inline ushort bf16bits(float v) { return ushort(as_type<uint>(round_bf16(v)) >> 16); }
 
+static inline float bf16lo(uint u) { return as_type<float>(u << 16); }
+static inline float bf16hi(uint u) { return as_type<float>(u & 0xFFFF0000u); }
+
+// a lane's DL BF16 values (its slice of a D-vector: rows are D-strided, so the slice is DL·2-byte aligned) as one
+// vector access — the scalar form issued DL loads per key, and the P·V pass over a 32-key chunk was 4× the
+// instructions it needed (decode-kernels.md §11)
 static inline void load_dl(device const ushort* p, thread float* f) {
+#if DL == 8
+  const uint4 q = *(device const uint4*)p;
+  f[0] = bf16lo(q.x); f[1] = bf16hi(q.x); f[2] = bf16lo(q.y); f[3] = bf16hi(q.y);
+  f[4] = bf16lo(q.z); f[5] = bf16hi(q.z); f[6] = bf16lo(q.w); f[7] = bf16hi(q.w);
+#elif DL == 4
+  const uint2 q = *(device const uint2*)p;
+  f[0] = bf16lo(q.x); f[1] = bf16hi(q.x); f[2] = bf16lo(q.y); f[3] = bf16hi(q.y);
+#elif DL == 2
+  const uint q = *(device const uint*)p;
+  f[0] = bf16lo(q); f[1] = bf16hi(q);
+#else
   for (uint e = 0; e < DL; e++) f[e] = bf16f(p[e]);
+#endif
 }
+static inline uint pack_bf16x2_bits(float lo, float hi) { return uint(bf16bits(lo)) | (uint(bf16bits(hi)) << 16); }
+static inline void store_dl(device ushort* p, const thread float* f) {   // the slice, rounded to BF16, as one vector store
+#if DL == 8
+  *(device uint4*)p = uint4(pack_bf16x2_bits(f[0], f[1]), pack_bf16x2_bits(f[2], f[3]), pack_bf16x2_bits(f[4], f[5]), pack_bf16x2_bits(f[6], f[7]));
+#elif DL == 4
+  *(device uint2*)p = uint2(pack_bf16x2_bits(f[0], f[1]), pack_bf16x2_bits(f[2], f[3]));
+#elif DL == 2
+  *(device uint*)p = pack_bf16x2_bits(f[0], f[1]);
+#else
+  for (uint e = 0; e < DL; e++) p[e] = bf16bits(f[e]);
+#endif
+}
+static inline void copy_dl(device ushort* dst, device const ushort* src) {   // a BF16 slice copied as it is
+#if DL == 8
+  *(device uint4*)dst = *(device const uint4*)src;
+#elif DL == 4
+  *(device uint2*)dst = *(device const uint2*)src;
+#elif DL == 2
+  *(device uint*)dst = *(device const uint*)src;
+#else
+  for (uint e = 0; e < DL; e++) dst[e] = src[e];
+#endif
+}
+static inline void load_part(device const float* p, thread float* f) {   // a lane's DL FP32 partials
+#if DL % 4 == 0
+  for (uint e = 0; e < DL; e += 4) { const float4 q = *(device const float4*)(p + e); f[e] = q.x; f[e + 1] = q.y; f[e + 2] = q.z; f[e + 3] = q.w; }
+#else
+  for (uint e = 0; e < DL; e++) f[e] = p[e];
+#endif
+}
+static inline void store_part(device float* p, const thread float* f) {
+#if DL % 4 == 0
+  for (uint e = 0; e < DL; e += 4) *(device float4*)(p + e) = float4(f[e], f[e + 1], f[e + 2], f[e + 3]);
+#else
+  for (uint e = 0; e < DL; e++) p[e] = f[e];
+#endif
+}
+#define MERGE_UNROLL 4u              // chunks whose partials the merge requests before folding any (the fold order is kept)
 
 // per-head RMSNorm (1 + w) and RoPE of one D-vector held DL-per-lane; the reference's rounding order
 static inline void norm_rope(thread float* f, device const float* nw, device const ushort* cos_row, device const ushort* sin_row,
@@ -86,9 +142,6 @@ static inline void norm_rope(thread float* f, device const float* nw, device con
   }
   for (uint e = 0; e < DL; e++) f[e] = r[e];
 }
-
-static inline float bf16lo(uint u) { return as_type<float>(u << 16); }
-static inline float bf16hi(uint u) { return as_type<float>(u & 0xFFFF0000u); }
 
 // the chunk (keys per SIMD-group partial) of the v2 kernels for a context: the finest (32) unless larger chunks
 // still give every threadgroup a (kv head, batch of NSG chunks) block — both kernels compute it from the same inputs

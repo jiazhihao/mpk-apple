@@ -93,11 +93,14 @@ program was never affected. A session shares its programs' buffers by name, and 
 records collided with the dynamic program's (both compile at T = 8): three o_proj tiles ran another GEMV's record —
 out-of-bounds loads and stores, the bench's 16 s steps and stall; params names carry the program kind and `Engine`
 never shares a params record now. The INT4 pack keeps its (scale, bias) pairs as BF16 (the checkpoint's bytes;
-`scale_unit_bytes` in the manifest, older INT4 packs are refused). The 0.6B decodes at 2.67 ms per token (MLX 2.11),
-the 8B plain at 18.2 (0.87× mlx-lm); per layer at T = 1 the 0.6B is 1.33× MLX and the 8B 1.16×, at T = 8 the 8B
-is 0.70× over 128 tokens of context and level at 1024 while the 0.6B is 1.3–1.4× — the layer gate (every layer
-strictly faster than MLX's) is open: the K = 1024 GEMVs' in-program efficiency and the attention core, at T = 1
-against MLX's SDPA and at T > 1 over the small model's heads (§11).
+`scale_unit_bytes` in the manifest, older INT4 packs are refused). The attention at few query rows is a third
+kernel (`gqa_decode_v3`, §11.1): core and merge in one dispatch, a 1024-thread threadgroup per query row with the
+keys strided over its SIMD-groups and the fold in threadgroup memory — MLX's decode-attention structure — 0.39–0.80×
+v2's core + merge at T = 1 from 128 to 8192 keys; the profile's `auto` takes it up to 4 query rows, v2 to 16, v1 above.
+The 0.6B decodes at 2.19 ms per token (MLX 2.10), the 8B plain at 17.7 (0.92× mlx-lm); per layer at T = 1 both are
+1.09× MLX (62 vs 57 µs, 450 vs 415), at T = 8 the 8B is 0.70× over 128 tokens of context and level at 1024 while the
+0.6B is 1.3–1.4× — the layer gate (every layer strictly faster than MLX's) is open on the GEMVs alone: the 0.6B's
+K = 1024 slabs stream at ~150 GB/s in the program where MLX's `qmm` reaches 210, the 8B's at 255 against ~290 (§11.1).
 
 ## Read these, in this order
 

@@ -323,7 +323,7 @@
       "lane_order": "interleaved16 at 259 GB/s against 230",
       "threadgroups_per_core": "a tie (x1 0.344 ms, x2 0.353 ms): keeps 1",
       "accelerator": "nvfp4: the tile from T = 2 (tile TM8 1.04, TM16 1.06, TM32 2.57 vs shader T2 1.60, T4 2.50, T8 7.64); fp8: the tile from T = 2 (tile TM8 1.11, TM16 1.14, TM32 2.01 vs shader T2 1.08, T4 2.13, T8 3.26); int4_affine: the tile from T = 2 (tile TM8 1.17, TM16 1.21, TM32 2.78 vs shader T2 1.79, T4 2.74, T8 8.25); bf16: the tile from T = 4 (tile TM8 1.07, TM16 1.08, TM32 1.27 vs shader T2 1.02, T4 1.06, T8 2.62)",
-      "attention": "auto (2026-09-26, #113): v2 with two threadgroups per core is 2-3x faster than v1 at T = 1 (0.6B geometry, 128 keys: 12 vs 39 us; 8B: 16 vs 28) and at 1024 keys for every T; v1 keeps ~10 % at 32 query rows over a short context (8B, T = 8, 128 keys: 69 vs 76 us); the writer's own points were (4096, 4): 0.823 vs 0.674 ms with one threadgroup per core"
+      "attention": "auto (2026-09-27, #113): v3 (one dispatch, a threadgroup per query row) up to 4 query rows per step - 0.39-0.80x v2's core + merge at T = 1 from 128 to 8192 keys (0.6B geometry, 128 keys: 4.9 vs 12.6 us; 8B: 7.6 vs 18.1); v2 with two threadgroups per core up to 16 rows (2-3x faster than v1 at T = 1 and at 1024 keys for every T); v1 above (it keeps ~10 % at 32 query rows over a short context: 8B, T = 8, 128 keys, 69 vs 76 us); the writer's own points were (4096, 4): 0.823 vs 0.674 ms with one threadgroup per core"
     },
     "measurements": {
       "family": "Apple10",

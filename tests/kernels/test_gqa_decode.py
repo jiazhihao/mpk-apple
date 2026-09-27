@@ -27,9 +27,10 @@ def dev():
 
 
 class Cfg:
-    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False):
+    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None):
         self.heads, self.kv, self.d, self.rot, self.ctx_max, self.t_max = heads, kv, d, rot, ctx_max, t_max
         self.v2, self.n_tg, self.steal = v2, n_tg, steal                # v2: the partial granularity is 32 keys (the numpy model's chunk)
+        self.v3, self.nsg3 = v3, nsg3 or kernels.gqa_v3_simdgroups(d)   # v3: one dispatch, a threadgroup of nsg3 SIMD-groups per query row
         if v2:
             chunk = 32
         self.chunk, self.rb, self.gate = chunk, rb, gate
@@ -48,7 +49,11 @@ class Harness:
 
     def __init__(self, dev, cfg, qn, kn):
         self.dev, self.cfg = dev, cfg
-        if cfg.v2:
+        if cfg.v3:
+            lib = nt.Library(dev, kernels.gqa_source(v3=True), kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3))
+            self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v3"), None
+            assert self.p_dec.max_threads_per_threadgroup >= cfg.nsg3 * 32
+        elif cfg.v2:
             lib = nt.Library(dev, kernels.gqa_source(True), kernels.gqa_v2_macros(cfg.d, rmax=cfg.rows_max, rg=cfg.rb))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v2"), nt.Pipeline(lib, "gqa_merge_v2")
         else:
@@ -85,12 +90,20 @@ class Harness:
         c = self.cfg
         t = proj_bf16.shape[0]
         t_act = t if t_active is None else t_active
-        params = kernels.gqa_params(heads=c.heads, kv_heads=c.kv, t_active=t_act, position=position, n_sg=self.n_tg if c.v2 else self.n_sg,
+        params = kernels.gqa_params(heads=c.heads, kv_heads=c.kv, t_active=t_act, position=position,
+                                    n_sg=(t * c.heads) if c.v3 else (self.n_tg if c.v2 else self.n_sg),
                                     q_off=c.q_off, gate_off=c.gate_off, k_off=c.k_off, v_off=c.v_off, in_stride=c.n1,
                                     out_stride=c.heads * c.d, ctx_max=c.ctx_max, eps=EPS, scaling=c.scaling, has_gate=c.gate,
-                                    n_chunks_max=c.n_chunks_max, rows_max=c.rows_max, nominal_sg=self.n_sg)
+                                    n_chunks_max=c.n_chunks_max, rows_max=c.rows_max, nominal_sg=self.n_sg, gate_stride=c.n1 if c.v3 else 0)
         pb = nt.Buffer(self.dev, proj_bf16.tobytes())
         out = nt.Buffer(self.dev, t * c.heads * c.d * 2); out.fill(0)
+        if c.v3:                                                       # one dispatch: heads · T threadgroups; the gate read from the projection (buffer 10, stride n1)
+            d3 = (nt.Dispatch().pipeline(self.p_dec).buffer(0, pb).buffer(1, self.k_cache).buffer(2, self.v_cache)
+                  .buffer(3, self.bufs["cos"]).buffer(4, self.bufs["sin"]).buffer(5, self.bufs["qn"]).buffer(6, self.bufs["kn"])
+                  .buffer(7, out).bytes(9, params).buffer(10, pb).grid(t * c.heads).threadgroup(c.nsg3 * 32).barrier())
+            r = nt.Queue(self.dev).run([d3])
+            assert not r.error, r.error
+            return bf16_to_f32(np.frombuffer(out.read(0, t * c.heads * c.d * 2), dtype=np.uint16).reshape(t, c.heads * c.d))
         n_disp = self.n_sg if dispatch_sg is None else dispatch_sg
         d1 = (nt.Dispatch().pipeline(self.p_dec).buffer(0, pb).buffer(1, self.k_cache).buffer(2, self.v_cache)
               .buffer(3, self.bufs["cos"]).buffer(4, self.bufs["sin"]).buffer(5, self.bufs["qn"]).buffer(6, self.bufs["kn"])
@@ -382,3 +395,87 @@ def test_steal_variant_is_exactly_once_and_identical(dev):
         kk, vv = steal.caches()
         rk, rv = plain.caches()
         assert np.array_equal(kk, rk) and np.array_equal(vv, rv), name
+
+
+# ---- v3: core and merge in one dispatch, a threadgroup per query row (#113) -----------------------------------------------
+
+@pytest.mark.parametrize("cfg", [Cfg(16, 8, 128, 128, 1024, 8, v3=True), Cfg(8, 2, 256, 64, 512, 8, v3=True, nsg3=16),
+                                 Cfg(4, 1, 128, 32, 4096, 8, v3=True, nsg3=16), Cfg(4, 2, 128, 128, 128, 4, gate=False, v3=True)],
+                         ids=["v3_0.6B_geometry", "v3_d256_16sg", "v3_d128_16sg_long", "v3_nogate_fullrope"])
+def test_v3_matches_kernel_contract(dev, cfg):
+    """v3 against the numpy model of the kernel contract: its fold is per key within a SIMD-group (exact FP32 rescaling)
+    and over the SIMD-groups in threadgroup memory, so it meets the same 2-ulp bar as v2's hierarchical fold; contexts
+    from empty to thousands of keys, T = 1 / 5 / 4 (causal inside the step), the new keys appended by the first row."""
+    rng = np.random.default_rng(cfg.heads * 37 + cfg.d + cfg.ctx_max)
+    qn, kn = _norms(rng, cfg.d)
+    h = Harness(dev, cfg, qn, kn)
+    k_ref, v_ref = np.zeros((cfg.ctx_max, cfg.kv, cfg.d), np.float32), np.zeros((cfg.ctx_max, cfg.kv, cfg.d), np.float32)
+    pre = min(3000, cfg.ctx_max - 32) if cfg.ctx_max > 256 else 0        # a long filled prefix, or an empty cache
+    k_ref[:pre], v_ref[:pre] = rbf(rng.standard_normal((pre, cfg.kv, cfg.d)) * 0.5), rbf(rng.standard_normal((pre, cfg.kv, cfg.d)))
+    h.set_caches(k_ref, v_ref)
+    pos = pre
+    for t in (1, 5, 1, 4):
+        if t > cfg.t_max:
+            continue
+        proj = _random_proj(rng, cfg, t)
+        got = h.step(proj, pos)
+        ref = ref_step(h, bf16_to_f32(proj), pos, k_ref, v_ref)
+        cos, max_abs, scale = _bars(got, ref)
+        assert cos > 0.99999 and max_abs <= 2 * _ulp(scale), (t, pos, cos, max_abs, scale)
+        kc, vc = h.caches()
+        assert np.abs(kc[: pos + t] - k_ref[: pos + t]).max() <= 1e-2 * max(np.abs(k_ref[: pos + t]).max(), 1e-6)
+        assert np.array_equal(vc[: pos + t], v_ref[: pos + t])
+        pos += t
+
+
+def test_v3_is_bit_stable_and_t_active(dev):
+    """Repeats are bit-identical; t_active limits the rows and the append; the same inputs through v1 agree within the
+    composite bar (the two contracts round p̃ against different maxima)."""
+    heads, kv, d, ctx_max = 8, 2, 128, 2048
+    rng = np.random.default_rng(78)
+    qn, kn = _norms(rng, d)
+    h1 = Harness(dev, Cfg(heads, kv, d, 64, ctx_max, 8), qn, kn)
+    h3 = Harness(dev, Cfg(heads, kv, d, 64, ctx_max, 8, v3=True), qn, kn)
+    pre = 1500
+    k0, v0 = rbf(rng.standard_normal((pre, kv, d)) * 0.5), rbf(rng.standard_normal((pre, kv, d)))
+    full = lambda x: np.concatenate([x, np.zeros((ctx_max - pre, kv, d), np.float32)])   # noqa: E731
+    for h in (h1, h3):
+        h.set_caches(full(k0), full(v0))
+    proj = _random_proj(rng, Cfg(heads, kv, d, 64, ctx_max, 8), 4)
+    a, b = h1.step(proj, pre), h3.step(proj, pre)
+    cos, max_abs, scale = _bars(b, a)
+    assert cos > 0.9999 and max_abs <= 1e-2 * scale, (cos, max_abs, scale)
+    h3.set_caches(full(k0), full(v0))
+    assert np.array_equal(b, h3.step(proj, pre))
+    h3.set_caches(full(k0), full(v0))
+    c = h3.step(proj, pre, t_active=2)
+    assert np.array_equal(c[:2], b[:2]) and np.all(c[2:] == 0)
+    kc, _ = h3.caches()
+    assert np.all(kc[pre + 2:] == 0)
+
+
+def test_v3_matches_layer_oracle(dev):
+    torch = pytest.importorskip("torch")
+    from monolith.nn import GQAAttention
+
+    heads, kv, d, rot, hidden, ctx_max = 8, 2, 128, 64, 64, 512
+    cfg = Cfg(heads, kv, d, rot, ctx_max, 8, v3=True)
+    rng = np.random.default_rng(10)
+    torch.manual_seed(10)
+    mod = GQAAttention(hidden, heads, kv, d, rot, THETA, EPS, hf_prefix="x.", prefix="l.", max_context=ctx_max)
+    qn_w, kn_w = (rng.standard_normal(d) * 0.1).astype(np.float32), (rng.standard_normal(d) * 0.1).astype(np.float32)
+    mod.set_param("q_norm", torch.from_numpy(qn_w).to(torch.bfloat16))
+    mod.set_param("k_norm", torch.from_numpy(kn_w).to(torch.bfloat16))
+    perm = rope_head_perm(d, rot)
+    h = Harness(dev, cfg, (1.0 + bf16_to_f32(f32_to_bf16(qn_w)))[perm], (1.0 + bf16_to_f32(f32_to_bf16(kn_w)))[perm])
+    state = {"l.k_cache": torch.zeros(ctx_max, kv, d, dtype=torch.bfloat16), "l.v_cache": torch.zeros(ctx_max, kv, d, dtype=torch.bfloat16)}
+    col_perm = mod.qkv.row_perm
+    pos = 0
+    for t in (6, 1, 3, 8):
+        proj_hf = torch.from_numpy(rng.standard_normal((t, cfg.n1)).astype(np.float32)).to(torch.bfloat16)
+        with torch.no_grad():
+            ref = mod.mix(proj_hf, state, pos).float().numpy()
+        got = h.step(f32_to_bf16(proj_hf.float().numpy()[:, col_perm]), pos)
+        cos, max_abs, scale = _bars(got, ref)
+        assert cos > 0.9999 and max_abs <= 1e-2 * scale, (t, pos, cos, max_abs, scale)
+        pos += t
