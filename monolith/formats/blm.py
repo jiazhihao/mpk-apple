@@ -69,6 +69,7 @@ class PackInfo:
     tensor_scale: float = 1.0
     scale_group: int = 0      # weights per block scale (0 = no block scales)
     scale_placement: str = "inline"   # "inline": scales inside the unit; "block": the block's scale region after its payload words
+    scale_unit_bytes: int = 0 # bytes per block-scale entry as the pack was written (0 = the format's; a pack from an older format layout is refused)
 
     @property
     def lanes_per_word(self) -> int:
@@ -168,8 +169,11 @@ def pack_blm(payload: np.ndarray, scales: Optional[np.ndarray], layout: PackLayo
     else:
         w = unit // 16
         data = blocks.reshape(n_blocks, r, LANES, w, 16).transpose(0, 1, 3, 2, 4)   # [b, row, word, lane, 16]
+    from .registry import FORMATS
+
     info = PackInfo(format, n, k, r, unit, p_bytes, s_bytes, layout.lane_order, n_blocks, float(tensor_scale),
-                    scale_group, "block" if block_scales else "inline")
+                    scale_group, "block" if block_scales else "inline",
+                    int(getattr(FORMATS.get(format), "scale_unit_bytes", 1)) if s_bytes else 0)
     payload_region = np.ascontiguousarray(data).reshape(n_blocks, r * LANES * unit)
     if not block_scales:
         return payload_region.tobytes(), info

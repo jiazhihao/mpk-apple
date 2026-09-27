@@ -1,15 +1,20 @@
 """Affine INT4 groups — the MLX / AWQ / GPTQ family (``mlx.core.quantize`` with ``bits = 4``, ``mode = "affine"``):
 unsigned 4-bit codes, eight per ``uint32`` low nibble first, in ``weight`` ``U32 [N, K/8]``; a scale and a bias per
 group of ``group_size`` columns (64 by default, 32 and 128 exist) in ``scales`` / ``biases`` ``F16`` or ``BF16``
-``[N, K/g]``. Dequantization: ``w = scale · code + bias``. The plugin keeps the scales and biases as FP32 (exact for
-either checkpoint dtype) — 8 bytes per group; the GEMV's bias term is ``bias · Σ x`` over the group (``SCALE_BIAS``).
+``[N, K/g]``. Dequantization: ``w = scale · code + bias``. The plugin keeps the scales and biases as **BF16 pairs**
+(the dtype the MLX checkpoints store them in, so exact; a matrix quantized at pack time rounds its FP32 pair to BF16
+first — mlx's quantizer does the same for a BF16 matrix) — 4 bytes per group, the bytes mlx streams (#113: the FP32
+pairs it kept before were 12 % of the 0.6B's GEMV traffic); the GEMV's bias term is ``bias · Σ x`` over the group
+(``SCALE_BIAS``).
 
-Lane-row unit (K = 4096): 64 bytes of nibbles (4 words) + 16 bytes of scale/bias pairs → 80; ``SCALE_GROUP = 64``.
+Lane-row unit (K = 4096): 64 bytes of nibbles (4 words) + 8 bytes of scale/bias pairs → 72, padded to 80 inline or
+kept as whole words with the pairs in the block's scale region (``scale_placement = "block"``); ``SCALE_GROUP = 64``.
 A lane's stripe (K/32 columns) may be a fraction of a group (K = 1024: half a group per lane) or start inside one
 (K = 3584: stripes of 112 columns — 3.5 words, a *ragged* stripe — start 0/48/32/16 columns into a group): the lane
-carries the pairs of every group its stripe touches (the max over lanes, zero-padded — K = 3584: three pairs, 24 bytes
-after 56 of nibbles, an 80-byte unit), and the kernels index them from the stripe's offset in its first group
-(``LANE_OFF`` / ``GROUP_SEG`` in gemv_T, the same arithmetic in embed). K must be a multiple of 256.
+carries the pairs of every group its stripe touches (the max over lanes, zero-padded — K = 3584: three pairs, 12
+bytes after 56 of nibbles), and the kernels index them from the stripe's offset in its first group (``LANE_OFF`` /
+``GROUP_SEG`` in gemv_T, the same arithmetic in embed). K must be a multiple of 256. A pack written with the FP32
+pairs (before 2026-09-26) records ``scale_unit_bytes`` 8 and is refused by the decode kernels: re-pack it.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ import numpy as np
 
 from .base import DequantSpec, Format, PackLayout
 from .blm import LANES, PackInfo, join_lanes, lane_groups, pack_blm, split_lanes, unpack_blm
-from .fp import bf16_to_f32, pack_nibbles, unpack_nibbles
+from .fp import bf16_to_f32, f32_to_bf16, pack_nibbles, unpack_nibbles
 from .registry import register_format
 
 GROUP = 64
@@ -35,11 +40,11 @@ def _lane_groups(k: int, group: int) -> Tuple[np.ndarray, np.ndarray, int]:
 
 @register_format("int4_affine")
 class INT4Affine(Format):
-    bytes_per_weight = 0.5 + 8.0 / GROUP
+    bytes_per_weight = 0.5 + 4.0 / GROUP
     weights_per_word = 32
     scale_group = GROUP
     pack_k_multiple = 256
-    scale_unit_bytes = 8            # a float32 (scale, bias) pair per group
+    scale_unit_bytes = 4            # a BF16 (scale, bias) pair per group: scale in the low half, bias in the high
     msl_decode = """
 #define WEIGHTS_PER_WORD 32u
 #define SCALE_GROUP 64u
@@ -49,9 +54,9 @@ static inline void decode_word(uint4 q, thread float* out) {
   uint w[4] = {q.x, q.y, q.z, q.w};
   for (uint e = 0; e < 32; e++) out[e] = float((w[e >> 3] >> ((e & 7u) * 4u)) & 0xFu);
 }
-// group g of this lane-row: the FP32 pair (scale, bias) at words 2g, 2g + 1 of the unit's scale region
-static inline float decode_scale(thread const uint* sw, uint g) { return as_type<float>(sw[2u * g]); }
-static inline float decode_bias(thread const uint* sw, uint g) { return as_type<float>(sw[2u * g + 1u]); }
+// group g of this lane-row: the BF16 pair (scale, bias) in uint g of the unit's scale region — scale low, bias high
+static inline float decode_scale(thread const uint* sw, uint g) { return as_type<float>(sw[g] << 16); }
+static inline float decode_bias(thread const uint* sw, uint g) { return as_type<float>(sw[g] & 0xFFFF0000u); }
 """
 
     def unpack(self, tensors: Mapping[str, Any], *, shape: Tuple[int, int]) -> DequantSpec:
@@ -99,6 +104,7 @@ static inline float decode_bias(thread const uint* sw, uint g) { return as_type<
         scale = np.where(at_zero, scale, edge / np.where(at_zero, np.float32(1), q0)).astype(np.float32)
         bias = np.where(at_zero, np.float32(0), edge).astype(np.float32)
         codes = np.clip(_round_away((blocks - bias[..., None]) / scale[..., None]), 0, 15).astype(np.uint8).reshape(n, k)
+        scale, bias = bf16_to_f32(f32_to_bf16(scale)), bf16_to_f32(f32_to_bf16(bias))          # the pack's (and mlx's) BF16 pairs
         return DequantSpec("int4_affine", (n, k), {"weight": pack_nibbles(codes), "scales": scale, "biases": bias}, {"group": group})
 
     def _lanes(self, spec: DequantSpec) -> Tuple[np.ndarray, np.ndarray]:
@@ -111,7 +117,7 @@ static inline float decode_bias(thread const uint* sw, uint g) { return as_type<
             gs = slice(int(first[lane]), int(first[lane] + count[lane]))
             pairs[:, lane, : count[lane], 0] = spec.tensors["scales"][:, gs]
             pairs[:, lane, : count[lane], 1] = spec.tensors["biases"][:, gs]
-        scales = np.ascontiguousarray(pairs).view(np.uint8).reshape(n, LANES, gpl * 8)
+        scales = np.ascontiguousarray(f32_to_bf16(pairs)).view(np.uint8).reshape(n, LANES, gpl * 4)   # BF16 pairs: scale, bias
         return payload, scales
 
     def pack(self, spec: DequantSpec, layout: PackLayout) -> Tuple[bytes, PackInfo]:
@@ -126,7 +132,9 @@ static inline float decode_bias(thread const uint* sw, uint g) { return as_type<
         payload, scales = unpack_blm(data, info)
         n, k = info.n, info.k
         first, count, gpl = _lane_groups(k, GROUP)
-        pairs = np.ascontiguousarray(scales).view(np.float32).reshape(n, LANES, gpl, 2)
+        if info.scale_unit_bytes and info.scale_unit_bytes != self.scale_unit_bytes:
+            raise ValueError(f"int4_affine: the pack keeps {info.scale_unit_bytes}-byte scale pairs (FP32, before 2026-09-26): re-pack it")
+        pairs = bf16_to_f32(np.ascontiguousarray(scales).view(np.uint16)).reshape(n, LANES, gpl, 2)
         sc, bi = np.zeros((n, k // GROUP), np.float32), np.zeros((n, k // GROUP), np.float32)
         for lane in range(LANES):                                                       # a group shared by two lanes is stored twice, identically
             gs = slice(int(first[lane]), int(first[lane] + count[lane]))

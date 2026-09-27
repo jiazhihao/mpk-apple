@@ -24,7 +24,7 @@ def test_quantize_dequantize_is_close_and_exact_on_requantize(fmt):
     wqq = f.dequantize(f.quantize(wq))
     if fmt == "int4_affine":                                                              # MLX's snapped scale re-snaps in some groups
         step = np.repeat(np.abs(f.quantize(wq).tensors["scales"]), 64, axis=1)
-        assert np.all(np.abs(wqq - wq) <= step + 1e-7) and np.mean(wqq == wq) > 0.8      # drift ≤ one code step, most values fixed
+        assert np.all(np.abs(wqq - wq) <= step + 1e-7) and np.mean(wqq == wq) > 0.7      # drift ≤ one code step, most values fixed (0.78 with the BF16 pairs)
     else:
         assert np.array_equal(wqq, wq)                                                    # idempotent on its own grid
 
@@ -81,7 +81,7 @@ def test_pack_roundtrip_and_geometry(fmt, lane_order, rows):
     layout = PackLayout(rows=rows, lane_order=lane_order)
     data, info = f.pack(spec, layout)
     assert info.n_blocks == -(-37 // rows) and len(data) == info.nbytes and info.unit_bytes % 16 == 0
-    expected_unit = {"nvfp4": 16 + 2, "fp8_e4m3": 32, "bf16": 64, "int8": 32 + 2, "int4_affine": 16 + 8}[fmt]  # K/32 = 32 columns per lane
+    expected_unit = {"nvfp4": 16 + 2, "fp8_e4m3": 32, "bf16": 64, "int8": 32 + 2, "int4_affine": 16 + 4}[fmt]  # K/32 = 32 columns per lane
     assert info.unit_bytes == (expected_unit + 15) // 16 * 16
     back = f.unpack_pack(data, info)
     assert np.array_equal(f.dequantize(back), f.dequantize(spec))                        # bit-exact round trip
@@ -113,7 +113,7 @@ def test_int4_affine_matches_mlx_and_the_checkpoint_layout():
     from monolith.formats.checkpoint import group_tensors, logical_shape
 
     f = FORMATS.get("int4_affine")
-    for k, (scale_bytes, unit) in {1024: (8, 32), 2048: (8, 48), 3584: (24, 80)}.items():   # 3584: ragged stripes of 112
+    for k, (scale_bytes, unit) in {1024: (4, 32), 2048: (4, 48), 3584: (12, 80)}.items():   # BF16 pairs; 3584: ragged stripes of 112
         w = _w(n=13, k=k)
         spec = f.quantize(w)
         assert spec.tensors["scales"].shape == (13, k // 64) and f.dequantize(spec).shape == (13, k)

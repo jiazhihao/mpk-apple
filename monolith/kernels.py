@@ -66,6 +66,9 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
     p, s = info.payload_bytes, info.scale_bytes
     if info.lanes_per_word > 1 and (info.lane_order != "interleaved16" or (s and info.scale_placement != "block")):
         raise ValueError(f"decode kernels: a sub-word unit needs the interleaved order and block scales ({info.format}, K={info.k})")
+    if s and info.scale_unit_bytes and info.scale_unit_bytes != int(getattr(f, "scale_unit_bytes", 1)):
+        raise ValueError(f"decode kernels: the pack keeps {info.scale_unit_bytes}-byte scale entries, {info.format} decodes "
+                         f"{getattr(f, 'scale_unit_bytes', 1)}-byte ones now: re-pack it (tools/pack_weights.py)")
     if info.scale_placement == "block" and s:
         # the block's scale region after its payload words: a lane's S bytes start (lane·S) % 16 into a word; the
         # kernels load scale_words words from there and index the scales by SCALE_SOFF (in the format's scale units)

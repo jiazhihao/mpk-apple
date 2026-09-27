@@ -33,6 +33,7 @@ def random_spec(fmt: str, n: int, k: int, rng: np.random.Generator) -> DequantSp
         codes = rng.integers(0, 256, size=(n, k // 2), dtype=np.uint8)
         scales = (rng.uniform(0.5, 2.0, size=(n, k // 64)) * 0.02 / 7.5).astype(np.float32)
         biases = (-7.5 * scales * rng.uniform(0.8, 1.2, size=scales.shape)).astype(np.float32)
+        scales, biases = bf16_to_f32(f32_to_bf16(scales)), bf16_to_f32(f32_to_bf16(biases))   # the checkpoints' (and the pack's) BF16 pairs
         return DequantSpec(fmt, (n, k), {"weight": codes, "scales": scales, "biases": biases}, {"group": 64})
     raise KeyError(fmt)
 

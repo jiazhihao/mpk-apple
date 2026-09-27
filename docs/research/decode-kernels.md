@@ -897,27 +897,56 @@ merge back to back, 50 pairs, min of 5, the GPU warm) [M]:
   the writer measures v2 at that geometry and can decide `auto` itself (`attention_choice`). In the step: the 0.6B
   2.91 → 2.75 ms per token, the 8B's plain decode 18.40 → 18.03 (0.87× mlx-lm, from 0.76× at #103's start).
 
-**With the auto attention** (the same protocol) [M]:
+**What the final run's stall was.** The bench's 8B half stalled at the 18-layer, T = 8 configuration — 16 s per
+step, then no progress for an hour — and under shader validation three of that static T = 8 program's eighteen
+`o_proj` tiles reported device loads past a 65536-byte binding. Both were one defect, in neither the kernel nor the
+bench: a session shares its programs' buffers **by name** (`Engine`: the dynamic-T program's weights, states, StepState,
+ring and activations serve the static programs `Session.engine(t)` compiles beside it), and a params record was named
+`params.T{t}.{kind}.{counter}` — the dynamic program compiles at its `t_max` = 8, a static T = 8 program at 8, and the
+counters of two different op sequences land on the same names for different ops. The o_proj tiles of layers 6, 8 and
+17 read a gate-up (24576 rows) and a qkv (6144 rows) record: an output stride of 24576 into a [8, 4096] value, twice
+the tiles, loads and stores hundreds of KB past their bindings — harmless where the neighbour is mapped (the fresh
+process: 24 ms steps, tokens unaffected in the T = 1 and T = 4 programs, which never collide), a 16 s command buffer
+where it is not (the bench process with mlx-lm's model resident). The name carries the program kind now
+(`params.D8.…` / `params.S8.…`) and `Engine` never takes a params record from the shared set; a contract test compiles
+both programs and a kernel test builds both engines over one buffer set (`test_program_sharing.py`). The same
+36-then-18-layer sequence with mlx-lm resident runs at 22.8 / 12.2 ms per step since, validation clean, and every
+T = 8 row measured before it (the tables above, the results file) is struck: those programs did other work. The
+static-T tile-alone finding below stands (T = 4 programs were never affected). The residual and row-scale addresses
+of the tile's epilogue are clamped into their bindings regardless of the row predicate as well — cheap, and the
+hoisted-load hazard is real.
+
+**With the auto attention, the tile alone for a static T, the params fix and the INT4 pairs** (the same protocol, both packs re-tuned) [M]:
 
 | model | T | ctx | before µs / layer | **after** | mlx-lm | after / mlx | our step → | mlx-lm step |
 |---|---|---|---|---|---|---|---|---|
-| 0.6B 4-bit | 1 | 128 | 140 | **84** | 60 | 1.42 | 4.38 → 2.81 ms | 2.08 ms |
-| 0.6B 4-bit | 1 | 1024 | 147 | **101** | 58 | 1.74 | 4.57 → 3.27 ms | 2.53 ms |
-| 0.6B 4-bit | 4 | 128 | 252 | **202** | 71 | 2.86 | 7.97 → 6.52 ms | 2.42 ms |
-| 0.6B 4-bit | 4 | 1024 | 346 | **239** | 86 | 2.78 | 10.60 → 7.55 ms | 3.05 ms |
-| 0.6B 4-bit | 8 | 128 | 272 | **228** | 115 | 1.99 | 8.54 → 7.29 ms | 3.95 ms |
-| 0.6B 4-bit | 8 | 1024 | 442 | **291** | 144 | 2.02 | 13.26 → 9.08 ms | 5.03 ms |
-| 8B NVFP4 | 1 | 128 | 549 | **468** | 402 | 1.16 | 21.08 → 18.08 ms | 15.64 ms |
-| 8B NVFP4 | 1 | 1024 | 563 | **483** | 422 | 1.14 | 21.57 → 18.65 ms | 16.35 ms |
-| 8B NVFP4 | 4 | 128 | 1029 | **994** | 455 | 2.18 | 39.37 → 38.17 ms | 17.20 ms |
-| 8B NVFP4 | 4 | 1024 | 1212 | **1054** | 524 | 2.01 | 45.98 → 40.34 ms | 19.45 ms |
-| 8B NVFP4 | 8 | 128 | 1085 | **1072** | 842 | 1.27 | 41.57 → 40.97 ms | 33.18 ms |
-| 8B NVFP4 | 8 | 1024 | 1391 | **1395** | 964 | 1.45 | 52.58 → 52.61 ms | 36.51 ms |
- The T > 1 rows barely moved: the tuner keeps the tile
-there because its isolated timing (9–17 µs per 0.6B GEMV) is half what the same dispatch takes in the program
-(35–45 µs) — a discrepancy the tile's own harness reproduces only with a streamed weight set; in the program the
-tile follows a shader kernel and reads a small x'. Until that is understood the small-K verify pass is a shader
-matter. **The layer gate is open.** In order of what it would return per 0.6B layer at T = 1: a small-context
-attention core for T = 1 (24 µs against MLX's 5.6: a lanes-over-keys kernel with no chunk merge), the int4 pack's
-scales as BF16 pairs (8 → 4 bytes per group: 12 → 10.3 MB per layer, the bytes MLX streams), the K = 1024 GEMVs'
-in-program efficiency (190 GB/s; MLX's qmm ~270 in its step), then the T > 1 regime.
+| 0.6B 4-bit | 1 | 128 | 140 | **82** | 62 | 1.33 | 4.38 → 2.67 ms | 2.11 ms |
+| 0.6B 4-bit | 1 | 1024 | 147 | **94** | 60 | 1.56 | 4.57 → 3.09 ms | 2.56 ms |
+| 0.6B 4-bit | 4 | 128 | 252 | **124** | 71 | 1.73 | 7.97 → 3.85 ms | 2.44 ms |
+| 0.6B 4-bit | 4 | 1024 | 346 | **153** | 86 | 1.77 | 10.60 → 4.79 ms | 3.09 ms |
+| 0.6B 4-bit | 8 | 128 | 272 | **149** | 115 | 1.30 | 8.54 → 4.60 ms | 3.97 ms |
+| 0.6B 4-bit | 8 | 1024 | 442 | **202** | 144 | 1.40 | 13.26 → 6.26 ms | 5.06 ms |
+| 8B NVFP4 | 1 | 128 | 549 | **473** | 407 | 1.16 | 21.08 → 18.22 ms | 15.84 ms |
+| 8B NVFP4 | 1 | 1024 | 563 | **486** | 421 | 1.15 | 21.57 → 18.83 ms | 16.44 ms |
+| 8B NVFP4 | 4 | 128 | 1029 | **539** | 458 | 1.18 | 39.37 → 20.67 ms | 17.28 ms |
+| 8B NVFP4 | 4 | 1024 | 1212 | **602** | 536 | 1.12 | 45.98 → 22.96 ms | 19.77 ms |
+| 8B NVFP4 | 8 | 128 | 1085 | **614** | 871 | 0.70 | 41.57 → 23.55 ms | 33.56 ms |
+| 8B NVFP4 | 8 | 1024 | 1391 | **949** | 950 | 1.00 | 52.58 → 35.30 ms | 36.74 ms |
+
+Where the layers stand [M]. At **T = 1** the 0.6B's layer is 82 µs against MLX's 62 (1.33×; 1.56× over 1024 tokens of
+context) and the 8B's 474 against 407 (1.16×; 1.15× at 1024). At **T = 4** both are 1.1–1.8× MLX. At **T = 8** the 8B's
+layer is **0.70× MLX's** over 128 tokens of context (614 vs 871 µs: MLX's `qmm` doubles from T = 1 to T = 8, the tile
+costs what it costs at T = 1) and level at 1024 (949 vs 950), the 0.6B's 1.30× and 1.40×. The INT4 pairs returned
+2 % on the 0.6B (84 → 82 µs at T = 1) for 12 % fewer bytes: its K = 1024 GEMVs run at ~150 GB/s in the program, not
+at the bus. Per op (ours from the program's trace; MLX's from isolated cache-warm calls whose sum, 326 µs for an 8B
+layer, is under its own slope of 407 — read them as indications): the 8B's GEMVs stream at 255 GB/s (gate + up
+219 µs, down 111, qkv 65, o 39) where MLX's step implies ~290 for the same bytes; the 0.6B's at T = 1 spend 59 µs on
+8.9 MB and 26 µs on attention (core + merge, 16-key chunks) against MLX's SDPA at 6; at T = 8 the 0.6B's tiles take
+77 µs where MLX's projections sum to 98, and its attention 56 against MLX's 20; over 1024 keys at 32 query rows (the
+8B at T = 8, v1 by the auto rule) our attention grows by 335 µs per layer against MLX's 79. **The layer gate is open**
+at T = 1 and T = 4 for both models and at T = 8 for the 0.6B, met for the 8B at T = 8 over a short context. In the order
+of what each would return: the K = 1024 GEMVs' in-program efficiency (150 GB/s against the 8B slabs' 255 on the same
+kernels: the dispatch is short and its crews sparse — a single wider dispatch per layer stage, or the sibling overlap
+across the 0.6B's small stages); the attention core — a short-context T = 1 kernel without the chunk merge, a v2 with
+more rows per threadgroup for T > 1 on few heads, and M9's SIMD-group-matrix scoring for many rows over a long
+context; then the 8B's GEMVs' last 12 % to MLX's streaming rate.

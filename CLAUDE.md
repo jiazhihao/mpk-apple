@@ -87,8 +87,17 @@ SIMD-groups: the chunk is chosen at run time now, 65 → 24 µs), then the GEMVs
 tuner candidates, the fused norm's fold unrolled, the tuner timing with the program's partial count, shader or tile
 per op by measured time), and #34's verdict on the v2 attention was geometry-bound: with two threadgroups per core v2
 is 2–3× faster than v1 at T = 1 and at 1024 keys for every T, so the profile's `attention` is `auto` (v2 up to 16
-query rows per step). The 0.6B decodes at 2.75 ms per token (MLX 2.08), the 8B plain at 18.0 (0.87× mlx-lm); the
-layer gate (every layer strictly faster than MLX's) is open.
+query rows per step). A static-T program emitted the T = 1 shader variant beside the tile without a predicate
+(the predication lives behind `STEP_STATE`), streaming every slab twice — the tile alone now; the round's dynamic
+program was never affected. A session shares its programs' buffers by name, and a static T = 8 program's params
+records collided with the dynamic program's (both compile at T = 8): three o_proj tiles ran another GEMV's record —
+out-of-bounds loads and stores, the bench's 16 s steps and stall; params names carry the program kind and `Engine`
+never shares a params record now. The INT4 pack keeps its (scale, bias) pairs as BF16 (the checkpoint's bytes;
+`scale_unit_bytes` in the manifest, older INT4 packs are refused). The 0.6B decodes at 2.67 ms per token (MLX 2.11),
+the 8B plain at 18.2 (0.87× mlx-lm); per layer at T = 1 the 0.6B is 1.33× MLX and the 8B 1.16×, at T = 8 the 8B
+is 0.70× over 128 tokens of context and level at 1024 while the 0.6B is 1.3–1.4× — the layer gate (every layer
+strictly faster than MLX's) is open: the K = 1024 GEMVs' in-program efficiency and the attention core, at T = 1
+against MLX's SDPA and at T > 1 over the small model's heads (§11).
 
 ## Read these, in this order
 
@@ -143,7 +152,9 @@ layer gate (every layer strictly faster than MLX's) is open.
   Metal allocations, so a store past one lands in a neighbour — StepState, a params record, an activation — and
   shows up later as a wrong token, a hang or an empty generation that never reproduces alone. After a kernel or
   emitter change run the GPU tiers under `MTL_SHADER_VALIDATION=1 MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1`
-  (porting.md §0); a `Program` carries its `context_capacity` and the serial ops stop at it (`error = 2`).
+  (porting.md §0); a `Program` carries its `context_capacity` and the serial ops stop at it (`error = 2`). A
+  session's programs share buffers by name (weights, states, StepState, ring, activations); a params record is a
+  program's own and is never shared (`Engine`), and its name carries the program kind.
 * Correctness may depend only on documented Metal semantics (dispatch ordering, ICB barriers, the MSL memory model).
   Threadgroup→core mapping, in-flight limits and sharing behaviour are per-chip *profile values*, measured by the probes.
 * Only bare-metal Macs give meaningful numbers; virtualized macOS (hosted CI runners) exposes a paravirtual GPU.
