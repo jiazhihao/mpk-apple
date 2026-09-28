@@ -1,4 +1,4 @@
-// Copyright © 2023-2024 Apple Inc.
+// Copyright © 2025-2026 Apple Inc.
 // Adapted from ml-explore/mlx mlx/backend/metal/kernels/fp_quantized.h @
 // 1f8e74e3f12f31365464a6867c6579f0e9b29d85 (MIT; third_party/NOTICE).
 // Quantization-group dot products reuse four activation vectors across two rows.
@@ -41,6 +41,8 @@ kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const fl
  if(ta > T_HI || ta <= T_LO)return;
 #endif
  const uint sg=gid/32u,block=sg/(R/NV_ROWS),r0=(sg%(R/NV_ROWS))*NV_ROWS,row0=p.tile0*TN+block*R+r0;
+ // A 512-column step advances whole input tiles; its lane offset is invariant.
+ const uint xslot=nvfp4_slot4(lane*16u);
  float acc[NV_ROWS]={0};
  device const uint4* wb=w+(ulong)(p.tile0*TN/R+block)*BLOCK_WORDS;
 #pragma clang loop unroll_count(2)
@@ -49,11 +51,11 @@ kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const fl
   const uint local_g=j*2u+sub;
   float4 x[4];
 #pragma clang loop unroll(full)
-  for(uint v=0;v<4;v++)x[v]=float4(xp[nvfp4_slot4(phys+v*4u)]);
+  for(uint v=0;v<4;v++)x[v]=float4(xp[base/4u+xslot+4u*v]);
 #pragma clang loop unroll(full)
   for(uint r=0;r<NV_ROWS;r++) {
    const uint rr=r0+r;
-   uint2 q=reinterpret_cast<device const uint2*>(wb)[2u*unit_word(ln,rr,j)+sub];
+   uint2 q=reinterpret_cast<device const uint2*>(wb)[64u*rr*UNIT_WORDS+base/16u+lane];
    float wv[32];decode_word(uint4(q.x,q.y,0,0),wv);
 #if SCALE_PLACEMENT
    const uint off=(rr*32u+ln)*SCALE_RUN+local_g;

@@ -183,6 +183,23 @@ static inline void prepare_token(device const ushort* proj, device const ushort*
                                  device const float* dt_bias, constant GdnParams& p,
                                  uint t, uint T, uint h, uint kh, uint kind, uint lane, Output dst) {
   device const ushort* pq = proj + p.q_off;
+#if DK == DV
+  // Equal head dimensions share the convolution body; only q/k need L2 normalization.
+  float vec[KR];
+  const uint base = kind < 2u ? kind * p.key_dim + kh * DK : 2u * p.key_dim + h * DV;
+  for (uint i = 0; i < KR; i++)
+    vec[i] = conv_at(pq, p.in_stride, conv_state, conv_w, base + lane + 32u * i, t);
+  if (kind < 2u) {
+    float ss = 0.f;
+    for (uint i = 0; i < KR; i++) ss = fma(vec[i], vec[i], ss);
+    const float inv = rsqrt(simd_sum(ss) + 1e-6f);
+    for (uint i = 0; i < KR; i++) {
+      vec[i] *= inv;
+      if (kind == 0u) vec[i] /= sqrt(float(DK));
+    }
+  }
+  for (uint i = 0; i < KR; i++) dst[kind * DK + lane + 32u * i] = vec[i];
+#else
   if (kind < 2u) {
     float vec[KR], ss = 0.0f;
     const uint base = kind * p.key_dim + kh * DK;
@@ -200,6 +217,7 @@ static inline void prepare_token(device const ushort* proj, device const ushort*
     for (uint i = 0; i < VR; i++)
       dst[2u * DK + lane + 32u * i] = conv_at(pq, p.in_stride, conv_state, conv_w, 2u * p.key_dim + h * DV + lane + 32u * i, t);
   }
+#endif
   if (kind == 2u && lane == 0) {
     device const ushort* ab = p.ab_separate ? proj_ab : proj;
     const uint stride = p.ab_separate ? p.ab_stride : p.in_stride;

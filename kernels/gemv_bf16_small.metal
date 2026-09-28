@@ -63,7 +63,10 @@ kernel void gemv_bf16_small(device const uint4* w [[buffer(0)]], device const fl
   // Share one normalized input tile across all weight rows in this block.
 #if SHARED_NORM
   threadgroup bfloat4 local_x[4u * K / 4u];
-  for (uint nv = 0; nv < 4u; nv++) {
+  // Distribute the four token norms across SIMD-groups instead of repeating
+  // all four reductions in every group. R=8/16 gives one/two groups per token.
+  const uint nv = (gid / 32u) % 4u;
+  {
     const uint active_v = min(nv, T_act - 1u);
     float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
     for (uint b = lane; b < STAT_PARTS; b += 512u) {
@@ -73,7 +76,7 @@ kernel void gemv_bf16_small(device const uint4* w [[buffer(0)]], device const fl
       for (uint u = 0; u < 16; u += 4) { s0 += v[u]; s1 += v[u+1]; s2 += v[u+2]; s3 += v[u+3]; }
     }
     const float rn = rsqrt(simd_sum((s0 + s1) + (s2 + s3)) / float(K) + EPS);
-    for (uint i = gid % (KLANES * R); i < K / 4u; i += KLANES * R) {
+    for (uint i = lane + 32u * ((gid / 32u) % (R / 2u) / 4u); i < K / 4u; i += 32u * (R / 8u)) {
       const uint phys = i * 4u, ln = (phys % (32u * WPW)) / WPW, j = phys / (32u * WPW);
       const uint col = ln * KL + j * WPW + phys % WPW;
       const float4 raw = float4(((device const bfloat4*)xp)[col / 4u + active_v * (K / 4u)]);

@@ -1060,3 +1060,51 @@ partial/full/empty active lengths, cache updates and specialized V3 geometry.
 The known #123 exclusion remains unchanged. The selected NVFP4 golden fixture
 uses its original inline pack; compact packing additionally passes full fixed-T
 MLX layer gates and the exact packing/kernel comparisons above.
+
+## Hoisting addresses and sharing preparation work
+
+NVFP4's 512-column loop step advances whole activation tiles. Hoisting each
+lane's permuted input offset out of that loop, and expressing the interleaved
+weight address directly as a row stride plus the linear chunk offset, removes
+repeated bit arithmetic. The stored pack and arithmetic order stay unchanged.
+At T=4, SIMD-groups now divide the four BF16 input norms among themselves rather
+than each repeating all four reductions. With equal GDN key/value dimensions,
+q/k/v share the convolution body; only q/k take the L2-normalization branch.
+Unequal dimensions retain the original preparation code.
+
+A combined nine-pair A/B against 4ce4870 preserves every captured layer output,
+convolution state and recurrent state byte. GDN T=1/4/6/8 improves
+173.16/189.20/190.41/191.82→172.45/186.55/188.62/190.92 µs/layer. NVFP4 T=1
+improves 405.85→403.11 at context 128 and 424.36→421.13 at context 1024;
+both NVFP4 cases win every pair. All 193 selected kernel/compiler tests pass
+under Metal validation, including filled-state continuation and normalization
+with 1/65/517 statistic parts. The previous five real-model checks passed before
+these exact-output simplifications; they are not mislabeled as a new model run.
+
+Further experiments remain candidates: BF16 matrix geometry changes save up
+to ~3.5 µs at T=6/8 but alter accumulation order. Retesting compact NVFP4 matrix
+partials saves ~3.3 µs at T=4 with changed accumulation rounding. Neither is
+selected without fresh numerical/model validation. Removing the matrix tile
+loop or adding an explicit threadgroup-size cap is neutral/slower and rejected.
+
+Autotuning currently times unspecialized matrix parameters and uses a whole
+slab's row count even for a partial projection. A prototype matching production's
+constant geometry saves ~1.3–1.6 µs at T=6/8; additionally tuning the smaller row
+ranges regresses ~4.4–4.5 µs. More faithful individual-kernel measurements do not
+automatically choose the fastest overlapping layer schedule. The production
+autotuner is unchanged, and raw choices/timings are retained.
+
+The exhaustive individual-layer sweep of these three exact simplifications
+covers all 24 BF16, 36 NVFP4 and 28 INT4 checkpoint layers at T=1/4/6/8 and
+context 128/1024: **704/704 latency minima are below MLX** (seven alternating
+pairs, 64 replay steps). BF16 wins every pair in 192/192 cases, NVFP4 in 286/288,
+and INT4 in 222/224. Worst minimum ratios are 0.91774, 0.97983 and 0.97767,
+respectively. Raw `individual_*_hoisted` files retain every sample.
+
+Numerical checks pass 703/704: INT4 layer 24, T=1, context 1024 reproduces the
+same direct-reference mismatch tracked in #124 (cosine 0.99895838). The earlier
+independent CPU audit favors MPK for that case; no threshold or failed result
+has been changed. These individual replays have different cache reuse and host
+amortization from the streaming stack. They meet the measured per-layer latency
+minimum gate, but do **not** close the streaming GDN/NVFP4 gaps above or establish
+an all-pairs win for the four noisy cases.
