@@ -89,6 +89,8 @@ def test_commuted_norm_formula_and_partial_rows(tmp_path, fmt, k, dynamic):
         raw = read('y').reshape(t, k)[:active]
         scaled = f32_to_bf16(bf16_to_f32(raw) * gamma)
         np.testing.assert_array_equal(read(scratch).reshape(t, k)[:active], scaled[:, perm])
+        if active == 0:
+            continue
         parts = read('stat', np.float32).reshape(t, -1)[:active]
         r = 1 / np.sqrt(parts.astype(np.float64).sum(-1) / k + 1e-6)
         dot = bf16_to_f32(scaled).astype(np.float64) @ weight.T * r[:, None]

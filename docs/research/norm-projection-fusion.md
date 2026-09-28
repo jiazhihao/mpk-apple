@@ -33,6 +33,8 @@ All checkpoint layers execute in a dependency chain with distinct weights, fixed
 context 128, random BF16 input/KV prefix, and unchanged checkpoint weights. Times
 are wall microseconds per layer (stack latency divided by layer count), not
 isolated kernel times or acceptance-dependent generation throughput. `T=N+1`.
+The harness specializes each program to T; live speculative sessions may compile
+a larger row bound, so these timings do not establish a generation speedup.
 
 Each result uses nine paired repetitions of 48 replays, rotating through the six
 orders of original Monolith, fused Monolith and MLX. Compilation/first-touch is
