@@ -111,6 +111,27 @@ class Harness:
                                     q_off=c.q_off, gate_off=c.gate_off, k_off=c.k_off, v_off=c.v_off, in_stride=c.n1,
                                     out_stride=c.heads * c.d, ctx_max=c.ctx_max, eps=EPS, scaling=c.scaling, has_gate=c.gate,
                                     n_chunks_max=c.n_chunks_max, rows_max=c.rows_max, nominal_sg=self.n_sg, gate_stride=c.n1 if c.v3 else 0)
+        if getattr(c, "specialize", False) and not getattr(self, "specialized", False):
+            source = kernels.gqa_source(v2=c.v2, v3=c.v3, mma=c.mma)
+            if c.v3:
+                macros = kernels.gqa_v3_macros(c.d, nsg=c.nsg3)
+            elif c.v2:
+                macros = kernels.gqa_v2_macros(c.d, rmax=c.rows_max, rg=c.rb)
+            else:
+                macros = kernels.gqa_macros(c.d, chunk=c.chunk, rb_max=16 if c.mma else c.rb)
+            if c.mma:
+                macros.update(FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(c.d, c.rep)))
+                if c.adaptive:
+                    macros["ADAPTIVE_CHUNK"] = "1"
+            if c.step_state:
+                macros["STEP_STATE"] = "1"
+                source = source.replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl(), 1)
+            source, constants = kernels.specialize_params(source, "gqa", params)
+            lib = nt.Library(self.dev, source, dict(macros, **constants), kernels.MSL_TENSOR_OPS if c.mma else 0)
+            name = "gqa_decode_mma" if c.mma else "gqa_decode_v3" if c.v3 else "gqa_decode_v2" if c.v2 else "gqa_decode"
+            self.p_dec = nt.Pipeline(lib, name)
+            self.p_merge = None if c.v3 else nt.Pipeline(lib, "gqa_merge_v2" if c.v2 else "gqa_merge")
+            self.specialized = True
         pb = nt.Buffer(self.dev, proj_bf16.tobytes())
         out = nt.Buffer(self.dev, t * c.heads * c.d * 2); out.fill(0)
         if c.v3:                                                       # one dispatch: heads · T threadgroups; the gate read from the projection (buffer 10, stride n1)
@@ -570,3 +591,26 @@ def test_adaptive_mma_matches_fixed_chunk_and_cache(dev, position, t):
     for state in [dict(position=position, t_this_step=t, done=1), dict(position=position, t_this_step=0)]:
         assert np.all(adaptive.step(proj, position, dispatch_sg=3, state=state) == 0)
         assert all(np.array_equal(a, b) for a, b in zip(before, adaptive.caches()))
+
+
+@pytest.mark.parametrize("kind,d,gate", [("v1", 64, True), ("v2", 128, False), ("v3", 128, True),
+                                       ("mma", 256, True), ("adaptive", 128, False)])
+def test_static_geometry_keeps_position_and_active_length_dynamic(dev, kind, d, gate):
+    rng = np.random.default_rng(159)
+    configs = [Cfg(4, 2, d, d, 512, 4, gate=gate, v2=kind == "v2", v3=kind == "v3",
+                   mma=kind in ("mma", "adaptive"), adaptive=kind == "adaptive",
+                   step_state=kind in ("mma", "adaptive")) for _ in range(2)]
+    configs[1].specialize = True
+    qn, kn = [rng.uniform(.8, 1.2, d).astype(np.float32) for _ in range(2)]
+    hs = [Harness(dev, c, qn, kn) for c in configs]
+    prefix = [rbf(rng.normal(0, .2, (512, 2, d))) for _ in range(2)]
+    for h in hs:
+        h.set_caches(*prefix)
+    # Reuse one specialized pipeline across partial/full/empty steps and the
+    # adaptive chunk boundary. Neither position nor active length may freeze.
+    for position, active in [(127, 1), (252, 4), (253, 4), (300, 0)]:
+        proj = f32_to_bf16(rng.normal(0, .3, (4, configs[0].n1)).astype(np.float32))
+        out = [h.step(proj, position, active) for h in hs]
+        np.testing.assert_array_equal(*out)
+        for a, b in zip(hs[0].caches(), hs[1].caches()):
+            np.testing.assert_array_equal(a, b)

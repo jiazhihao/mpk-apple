@@ -503,3 +503,95 @@ minimum latencies (baseline / narrow / identical-source control), in µs/layer:
 | 8 | 1024 | 108.48 | 107.83 | 107.90 |
 
 Raw shared-buffer samples are `narrow_affine_scales_shared_ab_20260928.jsonl`.
+
+
+## Specializing immutable parameter records
+
+The fixed layer graphs supplied head counts, strides, row ranges, launch widths
+and workspace sizes through constant buffers even though those records never
+change after compilation. The emitter now exposes those values as compile-time
+macros. The macros participate in the pipeline key: different gate/QKV row
+ranges and fused GDN norm strides cannot accidentally reuse a specialization.
+Values are decoded from the packed record, preserving its exact FP32 rounding.
+Active token counts, cache positions, recurrent slots and done predicates remain
+runtime inputs. The standalone kernel interfaces remain parameterized.
+
+This is enabled for attention and GDN, INT4/NVFP4 projections, and multi-token
+BF16 projections. Single-token BF16 projection specialization was slightly slower
+and is excluded. Other formats keep their existing projection path.
+
+Native code from the production mixer specialization, compared with bc4decd:
+
+| Kernel | Main bytes before → after | Registers before → after |
+|---|---:|---:|
+| D=128 T=1 attention | 6,534 → 4,828 | 52 → 52 |
+| D=128 T=4 adaptive matrix attention | 17,128 → 15,854 | 72 → 72 |
+| T=4 attention merge | 3,586 → 1,626 | 52 → 51 |
+| T=1 GDN recurrence | 16,650 → 15,826 | 94 → 90 |
+| Prepared GDN convolution | 10,298 → 9,290 | 48 → 44 |
+| Fused GDN recurrence/norm | 4,370 → 4,132 | 63 → 67 |
+
+Scratch and shared-memory sizes are unchanged. These are native binary sizes
+and experimental resource metadata, not an instruction disassembly. The timing
+improvement despite unchanged (or slightly increased) register allocation points
+to work removed by specializing address and control calculations; register count
+alone did not predict the gain.
+
+Rejected follow-ups: distributing attention softmax scores across lanes was
+slower; fusing normalization into the small BF16 projection also lost. Extending
+the BF16 SIMD path to eight vectors increased layer time by 7–19 µs and is not
+retained. A combined preparation/recurrence prototype is being investigated
+separately; it is not part of this parameter-specialization change.
+
+
+The combined production A/B against bc4decd uses shared weight/state/activation
+buffers, seven alternating pairs of 32 steps, and immediate captures of every
+layer output and recurrent/conv state. All captures are byte-identical; every
+paired timing improves in this run:
+
+| Format / layer | T | Context | Before µs | After µs |
+|---|---:|---:|---:|---:|
+| int4 | 1 | 128 | 58.56 | 54.64 |
+| int4 | 1 | 1024 | 71.29 | 67.64 |
+| int4 | 4 | 128 | 78.24 | 70.92 |
+| int4 | 4 | 1024 | 104.20 | 97.04 |
+| int4 | 6 | 128 | 83.35 | 77.04 |
+| int4 | 8 | 128 | 84.43 | 78.02 |
+| int4 | 8 | 1024 | 109.94 | 103.41 |
+| bf16 | 1 | 128 | 192.05 | 190.55 |
+| bf16 | 4 | 128 | 198.07 | 195.46 |
+| bf16 | 6 | 128 | 200.51 | 195.67 |
+| bf16 | 8 | 128 | 203.61 | 198.99 |
+
+An additional NVFP4 projection-only A/B, on top of mixer specialization, is
+437.63→435.66 µs at T=1, 485.47→476.86 at T=4 and 490.53→481.16 at T=8.
+All layer outputs match exactly. These runs are not directly comparable to each
+other's absolute baseline times.
+
+Validation: 162 contract tests, 104 attention/GDN/selected real-model checks and
+12 projection-tail/partial-token checks pass. GPU checks use Metal validation.
+The eight new mixer cases reuse specialized pipelines across changing cache
+positions, partial/empty/full steps, recurrent slot changes and done predicates.
+The existing long-prompt session-reuse issue #123 remains separate and unresolved.
+
+
+The refreshed INT4 MLX gate now passes all eight measured configurations, with
+MPK faster in every one of seven alternating pairs (48 steps per sample):
+
+| T | Context | MPK µs/layer | MLX µs/layer |
+|---:|---:|---:|---:|
+| 1 | 128 | 54.58 | 58.11 |
+| 1 | 1024 | 67.37 | 68.26 |
+| 4 | 128 | 68.60 | 71.38 |
+| 4 | 1024 | 93.99 | 94.79 |
+| 6 | 128 | 75.10 | 87.62 |
+| 6 | 1024 | 98.86 | 120.08 |
+| 8 | 128 | 75.92 | 103.16 |
+| 8 | 1024 | 101.25 | 146.54 |
+
+These are streaming layer-stack means; individual-layer checks are tracked
+separately. BF16 remains open: GDN T=1/4/6/8 is 190.15/195.31/194.91/198.58 µs
+versus MLX 172.90/183.19/183.05/188.77 µs. Full-attention BF16 layers still lose
+at context 128 for T=1 (157.31/151.62) and T=4 (165.57/162.63); the other six
+measured configurations win every pair. Exact 32-token INT4 generations after
+five- and nineteen-token prompts also pass under Metal validation.

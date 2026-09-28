@@ -68,7 +68,7 @@ def test_x_permute_column_order():
     assert perm[4] == 2 * kl and perm[8] == 4 * kl and perm[16] == 4 and perm[64] == 16 and perm[256] == 8 * kl
 
 
-def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1, placement="inline"):
+def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1, placement="inline", specialize=False):
     rng = np.random.default_rng(5)
     spec = random_spec(fmt, n, k, rng)
     data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
@@ -83,6 +83,10 @@ def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None
     y = nt.Buffer(dev, tm * n * (2 if out_bf16 else 4)); y.fill(0)
     n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", kernels.gemm_tiles(n, tn), dev.info().gpu_cores,
                                            min(384, pso.max_threads_per_threadgroup))
+    if specialize:
+        source, constants = kernels.specialize_params(kernels.gemm_source(fmt), "gemm",
+            kernels.gemm_params(n, kernels.gemm_tiles(n, tn), n_sg, tm))
+        pso = nt.Pipeline(nt.Library(dev, source, dict(macros, **constants), kernels.MSL_TENSOR_OPS), "gemm_tile")
     d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(dev, xb.tobytes())).buffer(3, xp)
           .bytes(4, kernels.x_permute_params(k, t_act, tm, int(f.weights_per_word), tk)).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
     d1 = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, data)).buffer(1, nt.Buffer(dev, row_scales.tobytes())).buffer(2, xp).buffer(3, y)
@@ -440,3 +444,12 @@ def test_small_affine_tile(dev, tk, ksplit):
                     tn=16, tk=tk, ksplit=ksplit, placement="block")
     assert check_against_oracle(out[:5], bf16_to_f32(f32_to_bf16(ref))).ok()
     assert np.all(out[5:] == 0)
+
+
+@pytest.mark.parametrize("fmt", ["int4_affine", "nvfp4", "bf16"])
+@pytest.mark.parametrize("active,ksplit", [(3, 1), (6, 2)])
+def test_static_geometry_preserves_matrix_tails_and_partial_tokens(dev, fmt, active, ksplit):
+    outputs = [_run(dev, fmt, 100, 1024, 8, active, "interleaved16", ksplit=ksplit, specialize=flag)[0]
+               for flag in (False, True)]
+    np.testing.assert_array_equal(*outputs)
+    assert not outputs[1][active:].any()

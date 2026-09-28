@@ -183,6 +183,10 @@ def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d, kv):
     assert prog.kernels[core.kernel].language_version == kernels.MSL_TENSOR_OPS
     bindings = {i: b for i, b, _ in core.bindings}
     params = struct.unpack("<IIIIIIIIIIIIffIIIIII", prog.buffers[bindings[9]].init)
+    constants = prog.kernels[core.kernel].macros
+    assert constants["STATIC_GQA_P_HEADS"] == "8u"
+    assert constants["STATIC_GQA_P_KV_HEADS"] == f"{kv}u"
+    assert "STATIC_GQA_P_POSITION" not in constants and "STATIC_GQA_P_T_ACTIVE" not in constants
     chunks, rows = params[15:17]
     assert chunks == 8192 // (32 if d == 256 or adaptive else 64)
     assert prog.buffers[bindings[7]].nbytes >= kv * chunks * rows * d * 4
@@ -217,7 +221,12 @@ def test_fused_gdn_norm_waits_for_gate_and_preserves_state_writes(tmp_path, monk
     pb = {i: name for i, name, _ in prep.bindings}
     assert fb[2] == pb[2] and fb[8] == pb[8]
     assert fb[3].endswith("rec_state")
-    assert prog.kernels[fused.kernel].macros["FUSED_NORM"] == "1"
+    constants = prog.kernels[fused.kernel].macros
+    assert constants["FUSED_NORM"] == "1"
+    assert constants["STATIC_GDN_P_HK"] == "8u"
+    assert constants["STATIC_GDN_P_IN_STRIDE"] != constants["STATIC_GDN_NP_IN_STRIDE"]
+    assert "STATIC_GDN_P_T_ACTIVE" not in constants
+    assert "st->t_this_step" in prog.kernels[fused.kernel].source
     before = prog.ops[:prog.ops.index(fused)]
     assert any(any(i in op.meta.get("writes", []) and name == fb[13] for i, name, _ in op.bindings) for op in before)
     after = prog.ops[prog.ops.index(fused) + 1:]

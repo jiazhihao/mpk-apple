@@ -18,7 +18,7 @@ def dev():
     return nt.Device()
 
 
-def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None, K=K, placement="inline"):
+def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None, K=K, placement="inline", specialize=False):
     rng = np.random.default_rng(3)
     spec = random_spec(fmt, n, K, rng)
     data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
@@ -31,6 +31,10 @@ def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False
     tg = 64 if one_block_per_sg else 384
     y = nt.Buffer(dev, t * n * 4); y.fill(0)
     t_act = t if t_active is None else t_active
+    if specialize:
+        source, constants = kernels.specialize_params(kernels.gemv_source(fmt), "gemv",
+            kernels.gemv_params(n, info.n_blocks, n_sg, t))
+        pso = nt.Pipeline(nt.Library(dev, source, dict(macros, **constants)), "gemv_T")
     d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, data)).buffer(1, nt.Buffer(dev, row_scales.tobytes()))
          .buffer(2, nt.Buffer(dev, xb.tobytes())).buffer(3, y).bytes(4, struct.pack("<IIIIfIII", n, info.n_blocks, n_sg, t_act, 1.0, 0, 0, 0))
          .grid(-(-(n_sg * 32) // tg)).threadgroup(tg))
@@ -135,3 +139,12 @@ def test_int4_affine_f16_pairs_match_oracle(dev):
         out = np.frombuffer(y.read(0, t * n * 4), dtype=np.float32).reshape(t, n)
         chk = check_against_oracle(out, ref)
         assert chk.ok(), (placement, chk)
+
+
+@pytest.mark.parametrize("fmt", ["int4_affine", "nvfp4", "bf16"])
+@pytest.mark.parametrize("active", [1, 3])
+def test_static_geometry_preserves_row_tails_and_partial_tokens(dev, fmt, active):
+    outputs = [_run(dev, fmt, 100, 16, 4, "interleaved16", t_active=active, specialize=flag)[0]
+               for flag in (False, True)]
+    np.testing.assert_array_equal(*outputs)
+    assert not outputs[1][active:].any()

@@ -4,6 +4,7 @@ decode snippets and the macros that specialize them (design §5.7: block bodies 
 from __future__ import annotations
 
 import math
+import re
 import struct
 from pathlib import Path
 from typing import List, Dict, Mapping, Optional, Sequence, Tuple
@@ -515,6 +516,48 @@ def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg:
     stride when the gate is not a [T, heads·D] value of its own (0: out_stride)."""
     return struct.pack("<IIIIIIIIIIIIffIIIIII", heads, kv_heads, t_active, position, n_sg, q_off, gate_off, k_off, v_off,
                        in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, gate_stride, nominal_sg)
+
+
+def specialize_params(source: str, kind: str, params: bytes, variable: str = "p") -> Tuple[str, Dict[str, str]]:
+    """Expose an emitted kernel's immutable geometry to the Metal compiler.
+
+    The values come from the exact packed parameter record, including FP32
+    rounding. Active lengths, cache positions and StepState remain runtime data.
+    Constants are macros so they participate in the emitter's pipeline key.
+    Standalone kernel harnesses can keep using the ordinary parameterized source.
+    """
+    if kind == "gqa":
+        fmt = "<12I2f6I"
+        names = ("heads kv_heads t_active position n_sg q_off gate_off k_off v_off in_stride out_stride ctx_max "
+                 "eps scaling has_gate n_chunks_max rows_max pad0 pad1 nominal_sg").split()
+        dynamic = {"t_active", "position"}
+    elif kind == "gdn":
+        fmt = "<16I4f"
+        names = ("hv hk t_active q_off k_off v_off z_off a_off b_off in_stride ab_stride ab_separate "
+                 "out_stride n_sg key_dim pad0 eps pad1 pad2 pad3").split()
+        dynamic = {"t_active", "pad0", "pad1", "pad2", "pad3"}
+    elif kind == "gemv":
+        fmt = "<4I2f2I"
+        names = "n_rows n_blocks n_sg t_active out_scale eps stat_parts block0".split()
+        dynamic = {"t_active"}
+    elif kind == "gemm":
+        fmt = "<4If3I"
+        names = "n_rows n_tiles n_sg t_active out_scale tile0 n_blocks pad".split()
+        dynamic = {"t_active", "pad"}
+    else:
+        raise ValueError(f"unknown kernel parameter schema: {kind}")
+    if variable not in ("p", "np"):
+        raise ValueError(f"unsupported parameter variable: {variable}")
+    constants = {}
+    for name, value in zip(names, struct.unpack(fmt, params)):
+        if name in dynamic:
+            continue
+        macro = f"STATIC_{kind.upper()}_{variable.upper()}_{name.upper()}"
+        pattern = rf"\b{variable}\.{name}\b"
+        source, count = re.subn(pattern, macro, source)
+        if count:
+            constants[macro] = repr(value) + ("f" if isinstance(value, float) else "u")
+    return source, constants
 
 
 def steal_reset_params(n: int) -> bytes:
