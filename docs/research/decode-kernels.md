@@ -1298,3 +1298,52 @@ The remaining work for [#113](https://github.com/jiazhihao/mpk-apple/issues/113)
 single-token projection/dispatch latency, the short-context T=4 path, and the
 hybrid GDN layer's projection and recurrence cost. These results do not meet the
 strict all-configurations gate, so that issue must stay open.
+
+
+### Follow-up: GDN preparation and output permutation (2026-09-28 UTC)
+
+The prepared path now reads just the convolution window ending at each token,
+keeping the original FMA and BF16 rounding order. Three SIMD-groups per
+(token, value head) prepare q, k and v independently. The gated output norm
+writes the consumer's permuted input directly when the existing compiler fusion
+rule allows it, removing one dispatch. The recurrent state layout and commit
+path remain unchanged.
+
+Ten warmed AB/BA repetitions of 48 steps over all 18 GDN layers compare these
+changes with the PR's initial implementation (19a5be4):
+
+| T | Initial µs/layer | Direct windows + fused permutation | + Parallel q/k/v |
+|---|---:|---:|---:|
+| 4 | 210.63 | 208.44 | 204.24 |
+| 8 | 223.07 | 213.82 | 211.06 |
+
+A separate seven-pair, 48-step comparison against MLX uses the same fixed-token
+method and checkpoints as the main matrix.
+Source: [`apple-m5-pro-20c_fixed_gdn_followup_20260928.jsonl`](../../tools/bench/results/apple-m5-pro-20c_fixed_gdn_followup_20260928.jsonl).
+
+| T | Context | Monolith µs/layer | MLX µs/layer | Ratio |
+|---|---:|---:|---:|---:|
+| 1 | 128 | 191.76 | 173.84 | 1.103 |
+| 1 | 1024 | 191.85 | 173.84 | 1.104 |
+| 4 | 128 | 203.47 | 183.85 | 1.107 |
+| 4 | 1024 | 204.51 | 184.11 | 1.111 |
+| 6 | 128 | 207.38 | 184.49 | 1.124 |
+| 6 | 1024 | 206.49 | 183.93 | 1.123 |
+| 8 | 128 | 211.17 | 188.94 | 1.118 |
+| 8 | 1024 | 209.36 | 197.86 | 1.058 |
+
+All GDN points still miss the strict latency gate. The T=8/context 1024 MLX
+sample was slower than its context-128 sample; GDN has no attention-context work,
+so the smaller ratio there is not evidence of a context-specific improvement.
+No claim that every individual layer wins follows from these stack means.
+
+Metal validation passed 321 kernel/contract tests (3 skipped), including exact
+permutation-output checks at multiple layouts. The hybrid checkpoint passed its
+per-layer oracle checks, 48 golden greedy tokens on two runs, and the 32-token
+long-prompt golden with chunked prefill. Seven runtime and integrated rollback
+tests also passed under Metal validation.
+
+Smaller v3 attention crews lost at both contexts on the INT4 and BF16 models.
+BF16 projection tiles of 16×32 did not improve T=4 (205.64 versus 203.76 µs/layer)
+and only tied T=8; 32×32 was slower. These dispatch/tile alternatives are not
+retained.

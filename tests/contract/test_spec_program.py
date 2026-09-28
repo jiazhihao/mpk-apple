@@ -290,7 +290,7 @@ def test_fused_permutes(pair):
     out3 = lambda o: [b for b in o.bindings if b[0] == 3][0][1]
     target_tiles = [t for t in tiles if t.name.startswith("gemv:layers.")]
     fused_target = [o for o in prog.ops if o.meta.get("perm_out") and any(xin(t) == out3(o) for t in target_tiles)]
-    assert len(fused_target) == 3                                                          # o_proj of layer 1, down of layers 0 and 1
+    assert len(fused_target) == 4                                                          # attention/GDN out projections and both down projections
     plain = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="threshold", verify_threshold=0.5)
     # the target keeps its T = 1 shader variants there, so its inputs go through permutes again; the drafter's block GEMVs
     # (static rows: the tile alone under any rule) stay fused
