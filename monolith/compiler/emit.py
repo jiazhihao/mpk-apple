@@ -84,6 +84,12 @@ class _Ctx:
                 return pk.slab_info(name)
         raise KeyError(f"emit: no pack holds the slab {name!r}")
 
+    def slab_row_scale_bits(self, name: str) -> Optional[int]:
+        for pk in self.packs:
+            if name in pk.slabs:
+                return pk.uniform_row_scale_bits(name)
+        raise KeyError(f"emit: no pack holds the slab {name!r}")
+
     def kernel(self, key: str, source: str, function: str, macros: Dict[str, str], language_version: int = 0,
                *, static_params: Sequence[Tuple[str, str, str]] = ()) -> str:
         macros = dict(macros)
@@ -91,7 +97,8 @@ class _Ctx:
             record = self.program.buffers[name]
             if record.role != "params" or record.init is None:
                 raise ValueError("kernel specialization requires an initialized parameter record")
-            source, constants = kernels.specialize_params(source, kind, record.init, variable)
+            source, constants = kernels.specialize_params(source, kind, record.init, variable,
+                fixed_active=not self.dynamic_t and kind in ("gemm", "gemv"))
             macros.update(constants)
         if self.dynamic_t:
             macros["STEP_STATE"] = "1"
@@ -568,8 +575,12 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     y = op.outputs[0]
     epilogue = op.attrs.get("epilogue")
     stat_out = op.attrs.get("stat_value")
+    # Fixed one-token programs can use smaller row crews without making the
+    # statistic layout disagree with a dynamic program's multi-token variants.
+    nv_row1 = _nvfp4_rows(info) and info.rows == 16 and t_range[1] == 1 and not ctx.dynamic_t
+    nv_groups = (info.rows if epilogue == "silu_mul" else 8) if nv_row1 else info.rows // 2
     if stat_out is not None:
-        ctx.stat_parts[stat_out] = n_blocks
+        ctx.stat_parts[stat_out] = n_blocks * info.rows // nv_groups if nv_row1 else n_blocks
         _size_stat(ctx, stat_out)
     lo, hi = t_range
     tm = gemm_tm(hi)
@@ -586,9 +597,12 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     direct_norm = (bf16_rows or small_bf16) and stat is not None
     conv_macros, conv_bindings = _projection_convolution(ctx, op, info, hi, t_src)
     tmac = dict(ctx.t_macros(hi, t_src), **conv_macros)
+    if nv_row1:
+        tmac.update(NV_ROWS="1u", NV_SG=f"{nv_groups}u", NV_UNROLL="4")
     if predicated:
         tmac["T_LO"], tmac["T_HI"] = str(lo), str(hi)
     kdim = ctx.shape(x)[1]
+    perm_groups = 4 if info.format == "nvfp4" and info.k >= 4096 and hi <= 4 else 1
     # the permuted (and normalized) input, shared by the siblings reading the same input at the same T range
     xb = ctx.buf(x)
     key = (xb, stat.name if stat is not None else None, tm, wpw, tk, lo, hi, t_src)
@@ -600,7 +614,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         xp = ctx.scratch(f"{y.name}.xp", tm * kdim * 2)
         ctx.perm_scratch[key] = xp
         pk = ctx.kernel(f"x_permute|{info.format}", kernels.gemm_source(info.format), "x_permute",
-                        dict(macros, **kernels.x_permute_macros(stat is not None), **tmac), language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
+                        dict(macros, **kernels.x_permute_macros(stat is not None, groups=perm_groups), **tmac), language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
         eps = float(op.attrs.get("eps", 1e-6))
         parts = ctx.stat_parts.get(stat.name, 1) if stat is not None else 1
         prm = ctx.params("x_permute", kernels.x_permute_params(kdim, hi, tm, wpw, tk, parts, eps))
@@ -609,7 +623,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
             bindings += [(1, *ctx.buf(stat)), (2, *ctx.windows[nw.name])]
         # not a member of the variant group: the barrier pass joins a group's members without a check (they are
         # alternatives), and the tile must wait for this permute — its own identity gives the tile the barrier
-        ctx.add(pk, bindings, *kernels.x_permute_grid(tm), f"x_permute:{y.name}", writes=[3], kind="x_permute", t_variant=hi,
+        ctx.add(pk, bindings, *kernels.x_permute_grid(tm, groups=perm_groups), f"x_permute:{y.name}", writes=[3], kind="x_permute", t_variant=hi,
                 t_range=[lo, hi] if predicated else None, normed=stat is not None)
     choice = ctx.tuner.tune_gemm(info, tm, epilogue) if ctx.tuner is not None else None
     mode = choice.grid_mode if choice else "crew"
@@ -630,14 +644,25 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         tmac = dict(tmac, **fused[1])
     function = ("gemv_nvfp4_rows" if nvfp4_rows else "gemv_bf16_rows" if bf16_rows else
                 "gemv_bf16_small" if small_bf16 else "gemm_tile")
+    if nvfp4_rows or (function == "gemm_tile" and info.format in ("nvfp4", "bf16")):
+        scale_bits = ctx.slab_row_scale_bits(w.name)
+        if scale_bits is not None:
+            tmac["ROW_SCALE_BITS"] = f"{scale_bits}u"
+            # With constant row scales, compact scratch wins in the measured
+            # small NVFP4 matrix family. Keep the tuner's leaf geometry.
+            if function == "gemm_tile" and info.format == "nvfp4" and tm == 8 and tn == 16 and tk == 128:
+                tmac["COMPACT_PARTIALS"] = "1"
     n_tiles = -(-n_rows // tn)
     n_sg, grid, tg = ctx.geometry(mode, n_tiles)
     if small_bf16:
         n_sg, grid, tg = n_blocks * info.rows // 2, (n_blocks, 1, 1), (16 * info.rows, 1, 1)
         mode = "bf16_simd16"
     elif nvfp4_rows or bf16_rows:
-        n_sg, grid, tg = n_blocks * info.rows // 2, (n_blocks, 1, 1), (16 * info.rows, 1, 1)
-        mode = f"{info.format}_rows2"
+        if nv_row1:
+            n_sg, grid, tg = n_blocks * info.rows, (n_blocks * info.rows // nv_groups, 1, 1), (32 * nv_groups, 1, 1)
+        else:
+            n_sg, grid, tg = n_blocks * info.rows // 2, (n_blocks, 1, 1), (16 * info.rows, 1, 1)
+        mode = f"{info.format}_rows{1 if nv_row1 else 2}"
     prm = ctx.params("gemm", kernels.gemm_params(n_rows, n_tiles, n_sg, hi, tile0=block0 * info.rows // tn, n_blocks=n_blocks))
     k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), function, dict(macros, **tmac),
                    language_version=kernels.MSL_TENSOR_OPS,

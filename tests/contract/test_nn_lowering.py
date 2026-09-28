@@ -283,6 +283,7 @@ def test_dynamic_t_program(tmp_path):
     prof = Profile.from_dict("p", {"gpu_cores": 20, "nominal_gbps": 307.0, "engine": {"family": "Apple10", "lane_order": "interleaved16"}})
     prog = compile_program(m, PackFile(tmp_path / "pack"), prof, dynamic_t=True)
     assert all(k.macros.get("STEP_STATE") == "1" for k in prog.kernels.values())
+    assert not any(name.endswith("_T_ACTIVE") for k in prog.kernels.values() for name in k.macros)
     assert all(any(b[0] == 15 and b[1] == "step_state" for b in o.bindings) for o in prog.ops if o.name != "advance")
     assert all("struct StepState" in k.source for k in prog.kernels.values())
     gemv = next(k for key, k in prog.kernels.items() if key.startswith("gemv_T"))
@@ -290,6 +291,9 @@ def test_dynamic_t_program(tmp_path):
     assert prog.layout.offset("prefill_left") == 152 and prog.buffers["logits"].nbytes == prog.layout.t_max * 50 * 2
     static = compile_program(m, PackFile(tmp_path / "pack"), prof, t=1)
     assert not any(k.macros.get("STEP_STATE") == "1" for key, k in static.kernels.items() if key.startswith("gemv_T"))
+    projections = [k for k in static.kernels.values() if k.function == "gemv_T"]
+    assert projections
+    assert all(k.macros.get("STATIC_GEMV_P_T_ACTIVE") == "1u" for k in projections)
 
 
 def test_stochastic_sampler_lowers_and_compiles(tmp_path):

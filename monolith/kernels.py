@@ -340,13 +340,17 @@ def x_permute_params(k: int, t_active: int, tm: int, wpw: int, tk: int = GEMM_TK
     return struct.pack("<IIIIIIfI", k, t_active, tm, wpw, tk, stat_parts, eps, 0)
 
 
-def x_permute_macros(norm: bool = False) -> Dict[str, str]:
-    return {"PERM_NORM": "1" if norm else "0", "PERM_SG": f"{GEMM_PERM_SG}u"}
+def x_permute_macros(norm: bool = False, *, groups: int = 1) -> Dict[str, str]:
+    if groups not in (1, 2, 4, 8, 16):
+        raise ValueError("x_permute groups must divide the 16 SIMD-groups per row")
+    return {"PERM_NORM": "1" if norm else "0", "PERM_SG": f"{GEMM_PERM_SG}u", "PERM_GROUPS": f"{groups}u"}
 
 
-def x_permute_grid(tm: int) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
-    """(grid, threadgroup) of x_permute for ``tm`` output rows: GEMM_PERM_SG SIMD-groups per row, 32 threads each."""
-    return (tm * GEMM_PERM_SG, 1, 1), (32, 1, 1)
+def x_permute_grid(tm: int, *, groups: int = 1) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+    """Pack ``groups`` SIMD-groups of the same token row into each threadgroup."""
+    if groups not in (1, 2, 4, 8, 16):
+        raise ValueError("x_permute groups must divide the 16 SIMD-groups per row")
+    return (tm * GEMM_PERM_SG // groups, 1, 1), (32 * groups, 1, 1)
 
 
 def x_permute_columns(k: int, wpw: int, tk: int = GEMM_TK) -> "np.ndarray":
@@ -532,11 +536,13 @@ def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg:
                        in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, gate_stride, nominal_sg)
 
 
-def specialize_params(source: str, kind: str, params: bytes, variable: str = "p") -> Tuple[str, Dict[str, str]]:
+def specialize_params(source: str, kind: str, params: bytes, variable: str = "p", *,
+                      fixed_active: bool = False) -> Tuple[str, Dict[str, str]]:
     """Expose an emitted kernel's immutable geometry to the Metal compiler.
 
     The values come from the exact packed parameter record, including FP32
-    rounding. Active lengths, cache positions and StepState remain runtime data.
+    rounding. Active lengths remain runtime data unless the caller guarantees a
+    fixed-length program; cache positions and StepState are always runtime data.
     Constants are macros so they participate in the emitter's pipeline key.
     Standalone kernel harnesses can keep using the ordinary parameterized source.
     """
@@ -562,6 +568,8 @@ def specialize_params(source: str, kind: str, params: bytes, variable: str = "p"
         raise ValueError(f"unknown kernel parameter schema: {kind}")
     if variable not in ("p", "np"):
         raise ValueError(f"unsupported parameter variable: {variable}")
+    if fixed_active:
+        dynamic.discard("t_active")
     constants = {}
     for name, value in zip(names, struct.unpack(fmt, params)):
         if name in dynamic:

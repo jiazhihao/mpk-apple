@@ -1147,3 +1147,119 @@ scale decoder under Metal validation: prefill layer oracles, greedy goldens,
 sampling reproducibility and speculative rollback. The known #123 exclusion
 remains unchanged. The routing override is confined to interleaved16 weights;
 other layouts retain the tuner selection.
+
+## Immutable scale tables and fixed active lengths
+
+The compiler now inspects each projection's actual FP32 row-scale table. A table
+whose representations are all identical and finite can become a bit-preserving
+Metal constant. Mixed signed zeros, varying scales and nonfinite values retain
+the ordinary loads. This is data-driven constant propagation, not an assumption
+about a checkpoint or quantization format. It is selected for NVFP4 row/matrix
+projections and BF16 matrix projections; the small BF16 SIMD kernel showed no
+benefit. Paired captures are byte-identical. NVFP4 T=4 improves 444.57→437.95 µs
+with this change alone (`uniform_row_scale_ab` raw results).
+
+Fixed-length programs additionally propagate the active row count into projection
+kernels. Dynamic programs keep their runtime lengths and StepState sources. The
+standalone specialization helper defaults to retaining runtime lengths. Against
+the uniform-scale baseline, seven alternating pairs measure NVFP4 T=1/4 at
+399.66/437.18→399.33/433.41 µs and GDN T=4/6 at
+187.16/183.55→182.37/182.29 µs. Every captured layer output is byte-identical.
+Specializing the separate input permutation offered no further gain and is not
+selected.
+
+A fresh independent MLX gate on the selected scale/length changes measures:
+
+| GDN T | Context | Monolith µs/layer | MLX µs/layer | Wins every pair |
+|---|---|---:|---:|---|
+| 1 | 128 | 171.46 | 173.97 | no |
+| 1 | 1024 | 171.64 | 173.57 | yes |
+| 4 | 128 | 181.78 | 183.59 | yes |
+| 4 | 1024 | 181.99 | 183.39 | yes |
+| 6 | 128 | 181.56 | 183.79 | yes |
+| 6 | 1024 | 181.64 | 183.93 | no |
+| 8 | 128 | 182.99 | 189.01 | yes |
+| 8 | 1024 | 183.12 | 189.44 | yes |
+
+All eight numerical gates pass unchanged. All GDN minima now win; timing noise
+prevents an all-pairs claim. The mixed 24-layer BF16 stack wins seven of eight
+minima; T=1/context 1024 measures 168.50 versus 168.46 µs and remains unresolved.
+All eight mixed-stack numerical gates pass. These stack results are distinct
+from the earlier 704-case individual-layer sweep.
+
+The NVFP4 refresh before enabling compact scratch still loses T=1 and
+short-context T=4. The original refresh mistakenly restricted compact scratch
+to TK=256, while this family uses TK=128; its raw results are retained as
+`fixed_active_nvfp4_mlx`, and must not be labeled a compact-scratch measurement.
+A paired candidate at the correct geometry improves T=4/8 from
+433.00/438.61→431.84/436.65 µs. Sharing normalization across four SIMD-groups
+only saves another ~0.17 µs at T=4 and regresses T=8, so it remains unselected.
+The corrected compiler condition needs its own fresh MLX gate.
+
+Validation before that condition correction: 369 kernel/compiler checks pass
+under Metal validation, three existing skips. These include exact loaded versus
+constant scale/length outputs with positive, negative and non-unit scales,
+partial row ranges, inactive rows, residual/gated epilogues and statistics;
+persistent compact reductions, dynamic program isolation and row sources are
+also covered. Four repository hygiene checks pass.
+
+Rejected T=1 NVFP4 candidates: four rows per SIMD-group regress 12–19 µs; one
+row with unroll-4 saves ~1.2 µs, while unroll-6/8/12 regress 8–12 µs. A tensor
+matrix T=1 path remains 22–54 µs slower despite constant active lengths. All
+raw samples are retained; these candidates do not change production routing.
+
+### One-row crews and shared normalization
+
+The single-token NVFP4 path now uses one row per SIMD-group with an unroll factor
+of four, eight SIMD-groups per threadgroup on plain/residual projections, and a
+whole slab block for gate/up so paired values still share a barrier. Its statistic
+partial count follows the actual threadgroup count. This geometry is selected
+only for fixed one-token, R=16 programs; dynamic variants retain their common
+statistic layout. Four neighboring input-permutation SIMD-groups share one norm
+fold, preserving the exact reduction order. All four groups belong to the same
+token, including inactive/done steps.
+
+Seven paired runs measure 400.13→395.68 µs/layer for the smaller crews; an
+additional combination run measures 399.15→394.95→394.34 µs for the original,
+one-row, and one-row plus shared-fold versions. All captured trajectory cosines
+are 1.0. The dedicated GPU checks compare exact output bits across both scale
+placements, partial row ranges, residual/gated outputs and the new statistic
+layout; shared folds match the original exactly at 0/1/3/4/7 active rows, done
+steps and 1/65/517 input statistic parts.
+
+The integration checks caught a scratch-key mismatch that disconnected fused
+permutation producers from their consumers. Keeping the existing key fixes it:
+threadgroup geometry changes no output bytes or layout. All 14 barrier contracts
+pass after the fix. All 30 new row-group/shared-fold GPU cases and all 27 combined
+scale/length/compact-reduction cases pass under shader validation.
+
+The native archives compare the routing/scale-decoder baseline with constant
+scales, fixed active counts, compact NVFP4 scratch and one-row crews:
+
+| Projection | Registers before → after | Code bytes before → after | Shared bytes before → after |
+|---|---:|---:|---:|
+| BF16 T=4 input | 79 → 74 | 3,974 → 3,540 | 8,192 → 8,192 |
+| BF16 T=4 gate/up | 83 → 78 | 6,088 → 5,472 | 8,448 → 8,448 |
+| BF16 T=6 gate/up | 66 → 66 | 6,080 → 3,520 | 1,536 → 1,536 |
+| NVFP4 T=1 input | 54 → 66 | 4,192 → 4,166 | 0 → 0 |
+| NVFP4 T=1 gate/up | 54 → 66 | 5,458 → 4,778 | 64 → 64 |
+| NVFP4 T=4 input | 83 → 82 | 5,100 → 4,454 | 7,168 → 1,792 |
+| NVFP4 T=4 gate/up | 83 → 82 | 9,388 → 6,704 | 7,168 → 1,792 |
+
+Every sampled kernel reports zero scratch. The faster NVFP4 one-row schedule
+uses **more** registers, showing why register count alone cannot explain latency.
+These remain native code/resource reports, not decoded M5 instruction listings.
+
+Further rejected experiments: specializing mixer active lengths is neutral or
+slower; byte loads for NVFP4 scales, later scale decoding, and leader-only output
+epilogues all preserve captured bytes but regress ~0.3–0.7 µs. Smaller attention
+crews save ~0.8 µs at short context but lose ~5 µs at long context. Four-key
+softmax batches save ~1.4 µs at long context and remain a numerical-validation
+candidate. None of these candidates changes the production attention policy.
+
+All five selected real-model checks pass again with the scale/length constants,
+corrected compact-scratch selection, one-row NVFP4 crews and shared input norms,
+under Metal shader validation. This includes per-layer oracles, greedy goldens,
+sampling reproducibility and rollback. The existing #123 long-prompt exclusion
+is unchanged. The combined row-group suite passes 263 checks after the scratch-key
+fix, with three existing skips; the ten scale/compiler contracts also pass.

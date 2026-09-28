@@ -249,6 +249,18 @@ class PackFile:
         s = self.slabs[name]
         return np.frombuffer(self._mm[s["row_scales_offset"]: s["row_scales_offset"] + 4 * s["n"]], dtype=np.float32)
 
+    def uniform_row_scale_bits(self, name: str) -> Optional[int]:
+        """An immutable slab's common finite scale, or None when loads are needed.
+
+        Compare representations so mixed signed zeros cannot become one constant.
+        Read the actual scale table; no checkpoint- or format-specific assumption.
+        """
+        bits = self.row_scales(name).view(np.uint32)
+        if not bits.size:
+            return None
+        first = int(bits[0])
+        return first if first & 0x7F800000 != 0x7F800000 and np.all(bits == first) else None
+
     def aux_array(self, name: str) -> np.ndarray:
         a = self.aux[name]
         raw = self._mm[a["offset"]: a["offset"] + a["nbytes"]]

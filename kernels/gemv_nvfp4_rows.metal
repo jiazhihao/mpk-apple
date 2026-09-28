@@ -4,8 +4,20 @@
 // Quantization-group dot products reuse four activation vectors across two rows.
 // MPK's physical pack addressing, input permutation, fused epilogues and guards
 // are implemented here. Include after gemm_tile.metal for shared helpers.
-// One threadgroup owns R rows; each SIMD-group reduces two output rows.
+// SIMD-groups reduce NV_ROWS rows each. A threadgroup owns NV_SG groups;
+// gated epilogues keep the two slab halves in the same threadgroup.
+#ifndef NV_ROWS
 #define NV_ROWS 2u
+#endif
+#ifndef NV_SG
+#define NV_SG (R / NV_ROWS)
+#endif
+#ifndef NV_UNROLL
+#define NV_UNROLL 2
+#endif
+#if R % (NV_SG * NV_ROWS) != 0 || (EPILOGUE == 2 && NV_SG * NV_ROWS != R)
+#error "NVFP4 row groups must divide a slab block and keep gate/up partners together"
+#endif
 // The physical weight-column order maps directly to the matrix input tile.
 // Avoid a round trip through the pack's logical (lane, word, element) columns.
 static inline uint nvfp4_slot4(uint p) {
@@ -45,7 +57,7 @@ kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const fl
  const uint xslot=nvfp4_slot4(lane*16u);
  float acc[NV_ROWS]={0};
  device const uint4* wb=w+(ulong)(p.tile0*TN/R+block)*BLOCK_WORDS;
-#pragma clang loop unroll_count(2)
+#pragma clang loop unroll_count(NV_UNROLL)
  for(uint base=0;base<K;base+=32u*16u) {
   const uint phys=base+lane*16u,ln=(phys%(32u*WPW))/WPW,j=phys/(32u*WPW),sub=(phys%WPW)/16u;
   const uint local_g=j*2u+sub;
@@ -75,11 +87,11 @@ kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const fl
  threadgroup float vals[R];
 #endif
 #if STAT_OUT
- threadgroup float stats[R];
+ threadgroup float stats[NV_SG * NV_ROWS];
 #endif
 #pragma clang loop unroll(full)
  for(uint r=0;r<NV_ROWS;r++){
-  acc[r]=simd_sum(acc[r])*row_scale[min(row0+r,p.tile0*TN+p.n_rows-1u)]*p.out_scale;
+  acc[r]=simd_sum(acc[r])*GEMM_ROW_SCALE(min(row0+r,p.tile0*TN+p.n_rows-1u))*p.out_scale;
 #if EPILOGUE == 2
   if(lane==0) vals[r0+r]=acc[r];
 #endif
@@ -123,11 +135,11 @@ kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const fl
 #endif
   }
 #if STAT_OUT
-  if(lane==0)stats[rr]=writer&&o<nout?vr*vr:0.f;
+  if(lane==0)stats[(sg%NV_SG)*NV_ROWS+r]=writer&&o<nout?vr*vr:0.f;
 #endif
  }
 #if STAT_OUT
  threadgroup_barrier(mem_flags::mem_threadgroup);
- if(sg%(R/NV_ROWS)==0){float s=simd_sum(lane<R?stats[lane]:0.f);if(lane==0)stat_out[block]=s;}
+ if(sg%NV_SG==0){float s=simd_sum(lane<NV_SG*NV_ROWS?stats[lane]:0.f);if(lane==0)stat_out[sg/NV_SG]=s;}
 #endif
 }

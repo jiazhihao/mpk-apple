@@ -61,6 +61,11 @@ using namespace mpp::tensor_ops;
 #ifndef STAT_OUT
 #define STAT_OUT 0                   // 1: per-block partial sums of squares of the BF16-rounded outputs, stat_out[t * n_blocks + block]
 #endif
+#ifdef ROW_SCALE_BITS
+#define GEMM_ROW_SCALE(i) as_type<float>(uint(ROW_SCALE_BITS))
+#else
+#define GEMM_ROW_SCALE(i) row_scale[(i)]
+#endif
 #if R != 16 && R != 8
 #error "gemm_tile: the epilogues index pack blocks of 8 or 16 rows"
 #endif
@@ -412,7 +417,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
       const uint bb = (tile - p.tile0) * (TN / R) + (n / R);             // the range-relative pack block
       float rs[4];
 #pragma clang loop unroll(full)
-      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? row_scale[min(row + qq, p.tile0 * TN + p.n_rows - 1u)] * p.out_scale : 0.0f;   // in bounds even when hoisted
+      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? GEMM_ROW_SCALE(min(row + qq, p.tile0 * TN + p.n_rows - 1u)) * p.out_scale : 0.0f;   // in bounds even when hoisted
 #pragma clang loop unroll(full)
       for (uint blk = 0; blk < NB_C; blk++)
 #pragma clang loop unroll(full)
@@ -503,6 +508,9 @@ static inline uint perm_source(uint i) {                                  // the
   return l * KL + j * WPW + e;
 }
 
+#ifndef PERM_GROUPS
+#define PERM_GROUPS 1u
+#endif
 kernel void x_permute(device const ushort* x [[buffer(0)]],
 #if PERM_NORM
                       device const float* stat [[buffer(1)]], device const float* norm_w [[buffer(2)]],
@@ -532,6 +540,10 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
     return;
   }
 #if PERM_NORM
+#if PERM_GROUPS > 1
+  threadgroup float shared_r;
+  if (slice % PERM_GROUPS == 0u) {
+#endif
   // the statistic's partials folded FOLD_LOADS loads per round (as gemv_T's fold: a row-split producer leaves up to 2048
   // per token, one load latency per 32 of them was the dispatch's critical path), four accumulators in a fixed order
   float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
@@ -543,6 +555,12 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
   }
   const float ssq = simd_sum((s0 + s1) + (s2 + s3));
   const float r = rsqrt(ssq / float(K) + p.eps);
+#if PERM_GROUPS > 1
+  if (lane == 0u) shared_r = r;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const float r = shared_r;
+#endif
 #endif
   device const ushort* row = x + (ulong)t * K;
   for (uint i = k0 + lane; i < k1; i += 32u * PERM_UNROLL) {

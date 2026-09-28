@@ -157,7 +157,8 @@ class Gemm:
         self.wbuf, self.rsbuf = nt.Buffer(dev, self.data), nt.Buffer(dev, self.row_scales.tobytes())
 
     def run(self, x_bf16, *, t_active=None, norm=None, epilogue=None, residual=None, stat_out=False, out_bf16=None,
-            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None, ksplit=1, conv=None):
+            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None, ksplit=1, conv=None,
+            fixed_active=False, perm_groups=1):
         """``norm`` = (stat [T, parts] float32, parts, norm_w [K]); ``row_range`` = (start, count) in slab rows;
         ``step_state`` = (layout, values) with ``t_range`` = (lo, hi) for a predicated variant."""
         t_act = self.tm if t_active is None else t_active
@@ -165,7 +166,7 @@ class Gemm:
             out_bf16 = epilogue is not None
         macros = kernels.gemm_macros(self.info, tm=self.tm, out_bf16=out_bf16, epilogue=epilogue, stat_out=stat_out, round_before_residual=round_residual, ksplit=ksplit)
         tk = int(macros["TK"].rstrip("u"))
-        pmacros = dict(kernels.x_permute_macros(norm is not None))
+        pmacros = dict(kernels.x_permute_macros(norm is not None, groups=perm_groups))
         src = kernels.gemm_source(self.fmt)
         if step_state is not None:
             layout, values = step_state
@@ -188,15 +189,28 @@ class Gemm:
         n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", n_tiles, self.dev.info().gpu_cores,
                                                min(384, pso.max_threads_per_threadgroup))
         n_blocks = -(-n_rows // self.info.rows)
+        n_parts = n_blocks
         if self.function in ("gemv_bf16_small", "gemv_nvfp4_rows", "gemv_bf16_rows"):
             rm = int(str(macros.get("BF_ROWS", "2")).rstrip("u")) if self.function == "gemv_bf16_rows" else 2
             n_sg, n_tg, tg = n_blocks * self.info.rows // rm, n_blocks, 32 * self.info.rows // rm
+            if self.function == "gemv_nvfp4_rows":
+                rm = int(str(macros.get("NV_ROWS", "2")).rstrip("u"))
+                groups = int(str(macros.get("NV_SG", self.info.rows // rm)).rstrip("u"))
+                n_sg, n_tg, tg = n_blocks * self.info.rows // rm, n_blocks * self.info.rows // (rm * groups), 32 * groups
+                n_parts = n_tg
+        if fixed_active:
+            assert step_state is None
+            specialized, constants = kernels.specialize_params(src, "gemm",
+                kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks), fixed_active=True)
+            pso = nt.Pipeline(nt.Library(self.dev, specialized, dict(macros, **constants),
+                language_version=kernels.MSL_TENSOR_OPS), self.function)
         n_out = n_rows // 2 if epilogue == "silu_mul" else n_rows
         xp = nt.Buffer(self.dev, self.tm * self.k * 2)
         y = nt.Buffer(self.dev, self.tm * n_out * 4); y.fill(0)
         parts = norm[1] if norm else 1
         d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(self.dev, x_bf16.tobytes())).buffer(3, xp)
-              .bytes(4, kernels.x_permute_params(self.k, t_act, self.tm, self.wpw, tk, parts, EPS)).grid(self.tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
+              .bytes(4, kernels.x_permute_params(self.k, t_act, self.tm, self.wpw, tk, parts, EPS))
+              .grid(self.tm * kernels.GEMM_PERM_SG // perm_groups).threadgroup(32 * perm_groups).barrier())
         if norm:
             d0.buffer(1, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes())).buffer(2, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
         d1 = (nt.Dispatch().pipeline(pso).buffer(0, self.wbuf).buffer(1, self.rsbuf).buffer(2, xp).buffer(3, y)
@@ -212,7 +226,7 @@ class Gemm:
             d1.buffer(7, nt.Buffer(self.dev, residual.tobytes()))
         so = None
         if stat_out:
-            so = nt.Buffer(self.dev, self.tm * n_blocks * 4); so.fill(0)
+            so = nt.Buffer(self.dev, self.tm * n_parts * 4); so.fill(0)
             d1.buffer(8, so)
         if step_state is not None:
             d0.buffer(15, st); d1.buffer(15, st)
@@ -220,7 +234,7 @@ class Gemm:
         assert not r.error, r.error
         raw = y.read(0, self.tm * n_out * (2 if out_bf16 else 4))
         out = bf16_to_f32(np.frombuffer(raw, dtype=np.uint16)).reshape(self.tm, n_out) if out_bf16 else np.frombuffer(raw, dtype=np.float32).reshape(self.tm, n_out)
-        so_arr = np.frombuffer(so.read(0, self.tm * n_blocks * 4), dtype=np.float32).reshape(self.tm, n_blocks) if stat_out else None
+        so_arr = np.frombuffer(so.read(0, self.tm * n_parts * 4), dtype=np.float32).reshape(self.tm, n_parts) if stat_out else None
         return out, so_arr
 
 
