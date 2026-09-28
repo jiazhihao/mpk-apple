@@ -26,7 +26,7 @@ def kv_prefix(layer, ctx, heads, dim):
                  for scale in (.5, .1))
 
 
-def our_stack(sess, indices, t, ctx, x, random_prefix=False, *, buffers=None):
+def our_stack(sess, indices, t, ctx, x, random_prefix=False):
     from monolith.core.ir import Graph
     from monolith.core.dtypes import DType
     from monolith.core.shapes import T
@@ -51,7 +51,7 @@ def our_stack(sess, indices, t, ctx, x, random_prefix=False, *, buffers=None):
     for p in DEFAULT_PASSES:
         p(g)
     prog = emit_program(g, pack=sess.pack, profile=sess.profile, t=t, tuner=sess.tuner, tail=None, attention=sess.attention)
-    eng = Engine(prog, sess.dev, buffers=buffers)
+    eng = Engine(prog, sess.dev)
     if random_prefix:
         from monolith.packs.transforms import rope_head_perm
         for i in indices:
@@ -137,7 +137,6 @@ def main():
     ap.add_argument('--limit', type=int)
     ap.add_argument('--layers', help='comma-separated checkpoint layer indices, within the selected kind')
     ap.add_argument('--individual', action='store_true', help='benchmark each selected layer separately; retain stack runs to check streaming latency')
-    ap.add_argument('--export-kernels', type=Path, help='save compiled MSL specializations and dispatch metadata (no weights)')
     ap.add_argument('--kv-prefix', choices=['random', 'zero'], default='random')
     ap.add_argument('--attention', choices=['auto','v1','v2','v3','mma'], default='auto')
     ap.add_argument('--reps', type=int, default=5)
@@ -172,14 +171,6 @@ def main():
     for indices, t, ctx in itertools.product(selections, ts, ctxs):
         x = bf16_to_f32(f32_to_bf16(np.random.default_rng(17).normal(0, .1, (t, sess.model.config.hidden_size)).astype(np.float32)))
         eng, outputs = our_stack(sess, indices, t, ctx, x, a.kv_prefix == 'random')
-        if a.export_kernels:
-            from dataclasses import asdict
-            directory = a.export_kernels / f'layers-{"-".join(map(str, indices))}_t{t}_ctx{ctx}'
-            directory.mkdir(parents=True, exist_ok=True)
-            for n, (key, kernel) in enumerate(eng.program.kernels.items()):
-                spec = dict(asdict(kernel), fast_math=eng.fast_math, support_icb=True,
-                            ops=[asdict(op) for op in eng.program.ops if op.kernel == key])
-                (directory / f'{n:03d}_{kernel.function}.json').write_text(json.dumps(spec, indent=2))
         if sess.tuner is not None:
             sess.tuner.save(sess.dev.info().name)
         step, check = mlx_stack(model, indices, t, ctx, x, a.kv_prefix == 'random')
