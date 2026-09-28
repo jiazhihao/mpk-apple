@@ -50,7 +50,8 @@ def our_stack(sess, indices, t, ctx, x, random_prefix=False):
     g.check()
     for p in DEFAULT_PASSES:
         p(g)
-    prog = emit_program(g, pack=sess.pack, profile=sess.profile, t=t, tuner=sess.tuner, tail=None, attention=sess.attention)
+    prog = emit_program(g, pack=sess.pack, profile=sess.profile, t=t, tuner=sess.tuner, tail=None, attention=sess.attention,
+                        commute_norm=sess.commute_norm)
     eng = Engine(prog, sess.dev)
     if random_prefix:
         from monolith.packs.transforms import rope_head_perm
@@ -144,7 +145,13 @@ def main():
     ap.add_argument('--out', type=Path)
     ap.add_argument('--continue-on-oracle-failure', action='store_true', help='record failed numerical checks and finish the sweep; still exit nonzero')
     ap.add_argument('--fail-on-regression', action='store_true', help='exit nonzero if any measured MPK/MLX ratio is >= 1')
+    ap.add_argument('--norm-ab', action='store_true', help='pair the fused and original paths with MLX in each repetition')
+    ap.add_argument('--min-cosine', type=float, default=.999, help='record a relaxed numerical gate explicitly (0: finite outputs only)')
+    ap.add_argument('--commute-norm', action='store_true', help='use relaxed-rounding normalization fusion')
     a = ap.parse_args()
+    if not 0 <= a.min_cosine <= 1:
+        ap.error('--min-cosine must be between 0 and 1')
+    a.commute_norm |= a.norm_ab
     import mlx.core as mx
     from mlx_lm import load
     from monolith.generate import Session
@@ -152,7 +159,7 @@ def main():
     from monolith.formats.fp import bf16_to_f32, f32_to_bf16
 
     ts, ctxs = list(map(int, a.ts.split(','))), list(map(int, a.ctx.split(',')))
-    sess = Session(our_model(a.model, None, max(ctxs) + max(ts) + 256), a.pack, eos=-1, attention=a.attention)
+    sess = Session(our_model(a.model, None, max(ctxs) + max(ts) + 256), a.pack, eos=-1, attention=a.attention, commute_norm=a.commute_norm)
     model, _ = load(a.model)
     indices = [i for i, l in enumerate(model.layers) if a.kind == 'all' or
                (a.kind == 'gdn') == bool(getattr(l, 'is_linear', False))]
@@ -174,8 +181,13 @@ def main():
         if sess.tuner is not None:
             sess.tuner.save(sess.dev.info().name)
         step, check = mlx_stack(model, indices, t, ctx, x, a.kv_prefix == 'random')
-        def ours():
-            r = eng.run(a.steps, steps_per_cb=1, in_flight=2)
+        baseline = None
+        if a.norm_ab:
+            sess.commute_norm = False
+            baseline, _ = our_stack(sess, indices, t, ctx, x, a.kv_prefix == 'random')
+            sess.commute_norm = True
+        def ours(engine=eng):
+            r = engine.run(a.steps, steps_per_cb=1, in_flight=2)
             return r.wall_ms / a.steps, r.gpu_ms / a.steps
         def mlx():
             pending = []
@@ -189,17 +201,27 @@ def main():
             mx.eval(*pending)
             return (time.perf_counter() - start) * 1e3 / a.steps
         ours()
+        if baseline is not None:
+            ours(baseline)
         mlx()
         # Untimed output check: the two references differ in intermediate
-        # rounding, but must meet the composite-layer cosine contract.
+        # rounding. Keep the default contract unless explicitly relaxed.
         got = [bf16_to_f32(np.frombuffer(eng.read(output, x.size * 2), dtype=np.uint16)).reshape(x.shape) for output in outputs]
         cosine = check(got)
-        oracle_pass = bool(np.isfinite(cosine) and cosine >= .999)
+        oracle_pass = bool(np.isfinite(cosine) and cosine >= a.min_cosine)
         oracle_failed |= not oracle_pass
         if not oracle_pass and not a.continue_on_oracle_failure:
-            raise AssertionError(f'output cosine {cosine} < .999')
+            raise AssertionError(f'output cosine {cosine} < {a.min_cosine}')
         samples = []
         for rep in range(a.reps):
+            if baseline is not None:
+                runners = {'ours': ours, 'baseline': lambda: ours(baseline), 'mlx': mlx}
+                order = list(itertools.permutations(runners))[rep % 6]
+                result = {name: runners[name]() for name in order}
+                w, g = result['ours']; m = result['mlx']
+                samples.append({'ours_wall_ms': w, 'ours_gpu_ms': g, 'mlx_wall_ms': m,
+                                'baseline_wall_ms': result['baseline'][0]})
+                continue
             if rep % 2:
                 m = mlx(); w, g = ours()
             else:
@@ -208,18 +230,25 @@ def main():
         w, m = min(s['ours_wall_ms'] for s in samples), min(s['mlx_wall_ms'] for s in samples)
         row = dict(model=Path(a.model).name, chip=sess.dev.info().name, date=time.strftime('%Y-%m-%d %H:%M'),
                    metric='fixed_individual_layer' if a.individual else 'fixed_layer_stack', kind=a.kind, layer_indices=indices, T=t, ctx=ctx, steps=a.steps,
-                   attention=a.attention, pack=str(Path(a.pack).resolve()), checkpoint=str(Path(a.model).resolve()),
+                   attention=a.attention, commute_norm=a.commute_norm, pack=str(Path(a.pack).resolve()), checkpoint=str(Path(a.model).resolve()),
                    mlx_version=importlib.metadata.version('mlx'), mlx_lm_version=importlib.metadata.version('mlx-lm'),
                    os=platform.platform(), repetitions=a.reps, prefix=f'{a.kv_prefix} KV; zero recurrent input slot',
-                   dtype='bfloat16', cosine=cosine, oracle_pass=oracle_pass, oracle_threshold=.999, ours_us=w * 1000 / len(indices), mlx_us=m * 1000 / len(indices),
+                   dtype='bfloat16', cosine=cosine, oracle_pass=oracle_pass, oracle_threshold=a.min_cosine, ours_us=w * 1000 / len(indices), mlx_us=m * 1000 / len(indices),
                    ratio=w / m, faster_in_every_pair=all(s["ours_wall_ms"] < s["mlx_wall_ms"] for s in samples), samples=samples)
+        if baseline is not None:
+            b = min(s['baseline_wall_ms'] for s in samples)
+            row.update(baseline_us=b * 1000 / len(indices), fusion_ratio=w / b,
+                       fusion_faster_in_every_pair=all(s['ours_wall_ms'] < s['baseline_wall_ms'] for s in samples),
+                       fused_norms=sum(eng.program.kernels[o.kernel].macros.get('POST_NORM') == '1' for o in eng.program.ops))
         failed |= row["ratio"] >= 1
         print(json.dumps(row), flush=True)
         if a.out:
             a.out.parent.mkdir(parents=True, exist_ok=True)
             with a.out.open('a') as f:
                 f.write(json.dumps(row) + '\n')
-        del eng, step, check
+        del eng, baseline, step, check, ours
+        if a.norm_ab:
+            del runners
         gc.collect()
     return int(oracle_failed or (a.fail_on_regression and failed))
 

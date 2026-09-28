@@ -33,6 +33,9 @@ static inline uint perm_dest(uint n) {                       // the inverse of x
 #endif
 """
 
+# A residual producer can also write gamma-scaled input for the next projection.
+NORM_OUT_MSL = PERM_OUT_MSL.replace("PERM_", "NORM_").replace("perm_dest", "norm_dest")
+
 
 def perm_out_macros(k: int, wpw: int, tk: int) -> Dict[str, str]:
     """The producer-side macros of a fused permute: the consumer tile's K, its format's weights per word and its TK."""
@@ -218,7 +221,7 @@ THREADGROUP_MEMORY_LIMIT = 32768  # bytes of threadgroup memory a dispatch may d
 def gemm_source(fmt: str) -> str:
     """The gemm_tile kernel (the M5 accelerator path for T > 1, #50) for storage format ``fmt``; compile it with
     ``language_version=MSL_TENSOR_OPS``."""
-    src = PRELUDE + template("activation_math.metal") + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+    src = PRELUDE + template("activation_math.metal") + PERM_OUT_MSL + NORM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
     if fmt == "bf16":
         src += "\n" + template("gemv_bf16_small.metal")
         src += "\n" + template("gemv_bf16_rows.metal")

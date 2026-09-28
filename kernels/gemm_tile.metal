@@ -61,6 +61,9 @@ using namespace mpp::tensor_ops;
 #ifndef STAT_OUT
 #define STAT_OUT 0                   // 1: per-block partial sums of squares of the BF16-rounded outputs, stat_out[t * n_blocks + block]
 #endif
+#ifndef POST_NORM
+#define POST_NORM 0                  // x already contains gamma*h; apply the RMS scalar after the product
+#endif
 #ifdef ROW_SCALE_BITS
 #define GEMM_ROW_SCALE(i) as_type<float>(uint(ROW_SCALE_BITS))
 #else
@@ -214,6 +217,12 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
                       device float* y [[buffer(3)]],
 #endif
                       constant GemmParams& p [[buffer(4)]],
+#if POST_NORM
+                      device const float* norm_stat [[buffer(5)]],
+#endif
+#if NORM_OUT
+                      device const float* norm_weight [[buffer(13)]], device ushort* norm_x [[buffer(14)]],
+#endif
 #if EPILOGUE == 1
                       device const ushort* residual [[buffer(7)]],
 #endif
@@ -432,6 +441,25 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
     if (slice != 0u) continue;
 #endif
+#if POST_NORM
+#if TM > 8
+#error POST_NORM requires a short tile
+#endif
+    // Adjacent quads load one token's partials; shuffle its reciprocal RMS
+    // into the accumulator's token layout. Keep this after MMA to shorten
+    // register lifetimes and skip the non-writing K slices.
+    const uint norm_row = token0 + min(lane / 4u, T_act - 1u), q = lane % 4u;
+    float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+    for (uint b = q; b < POST_NORM_PARTS; b += 64u) {
+      float v[16];
+      for (uint u = 0; u < 16; u++) v[u] = b + 4u * u < POST_NORM_PARTS ? norm_stat[norm_row * POST_NORM_PARTS + b + 4u * u] : 0.f;
+      for (uint u = 0; u < 16; u += 4) { s0 += v[u]; s1 += v[u+1]; s2 += v[u+2]; s3 += v[u+3]; }
+    }
+    float ssq = (s0 + s1) + (s2 + s3);
+    ssq += simd_shuffle_xor(ssq, ushort(1));
+    ssq += simd_shuffle_xor(ssq, ushort(2));
+    const float norm_r = simd_shuffle(rsqrt(ssq / float(K) + POST_NORM_EPS), ushort(4u * c1b));
+#endif
     // epilogue over the destination: element ((blk*(TN/16) + jump)*2 + s2) << 2 | q holds row n = c0b + 16*jump + q
     // and token m = 16*blk + c1b + 8*s2; a lane's 4 rows lie in one pack block, the block's other rows in the lanes
     // differing in bit 0 (and bit 3 when R = 16); rows beyond t_active and the range are not written
@@ -452,6 +480,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
           float v[4];
 #pragma clang loop unroll(full)
           for (uint qq = 0; qq < 4u; qq++) v[qq] = cT[uint16_t((((blk * (TN / 16u) + jump) * 2u + s2) << 2) | qq)] * rs[qq];
+#if POST_NORM
+          for (uint qq = 0; qq < 4u; qq++) v[qq] *= norm_r;
+#endif
 #if EPILOGUE == 2
           float pv[4];                                                   // the partner rows: up for a gate lane, gate for an up lane
 #pragma clang loop unroll(full)
@@ -483,6 +514,10 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
             const float vr = round_bf16(vv);
             ssq = fma(vr, vr, ssq);
+#if NORM_OUT
+            norm_x[(ulong)(token0 + m) * NORM_K + norm_dest(orow0 + qq)] =
+                ushort(as_type<uint>(round_bf16(vr * norm_weight[orow0 + qq])) >> 16);
+#endif
 #if PERM_OUT
             y[(ulong)m * PERM_K + perm_dest(orow0 + qq)] = ushort(as_type<uint>(vr) >> 16);   // the consumer tile's x' (its K = n_out)
 #elif OUT_BF16
