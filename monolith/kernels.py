@@ -432,6 +432,14 @@ def gqa_source(v2: bool = False, steal: bool = False, v3: bool = False, mma: boo
 GQA_V3_SIMDGROUPS = 32                  # v3's SIMD-groups per threadgroup at most (1024 threads; the fold gives each one D / (4·NSG3) dims)
 
 
+def gqa_mma_simdgroups(head_dim: int, heads_per_kv: int) -> int:
+    """Measured matrix-attention crew: four groups for D=128 with two queries per KV head.
+
+    Wider heads and higher query replication keep eight groups (decode-kernels.md §12).
+    """
+    return 4 if head_dim == 128 and heads_per_kv == 2 else 8
+
+
 def gqa_v3_simdgroups(head_dim: int) -> int:
     """v3's SIMD-groups per threadgroup for a head dim: 32 (1024 threads) where D / 4 slices and the fold buffer of
     nsg · (D + 4) floats allow it (D = 128), halved otherwise (D = 32 → 8, D = 64 → 16, D = 256 → 16)."""

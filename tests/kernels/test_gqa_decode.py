@@ -51,7 +51,7 @@ class Harness:
     def __init__(self, dev, cfg, qn, kn):
         self.dev, self.cfg = dev, cfg
         if cfg.mma:
-            macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG="8")
+            macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(cfg.d, cfg.rep)))
             source = kernels.gqa_source(mma=True)
             if cfg.step_state:
                 from monolith.core import StepStateLayout
@@ -120,7 +120,7 @@ class Harness:
               .buffer(3, self.bufs["cos"]).buffer(4, self.bufs["sin"]).buffer(5, self.bufs["qn"]).buffer(6, self.bufs["kn"])
               .buffer(7, self.part_o).buffer(8, self.part_md).bytes(9, params).grid(-(-(n_disp * 32) // 384)).threadgroup(384).barrier())
         if c.mma:
-            d1.grid(dispatch_sg or self.dev.info().gpu_cores * 4).threadgroup(256)
+            d1.grid(dispatch_sg or self.dev.info().gpu_cores * 4).threadgroup(32 * kernels.gqa_mma_simdgroups(c.d, c.rep))
         d2 = (nt.Dispatch().pipeline(self.p_merge).buffer(0, self.part_o).buffer(1, self.part_md).buffer(2, pb).buffer(3, out)
               .bytes(4, params).grid(t * c.heads).threadgroup(32))
         if c.step_state:
@@ -446,10 +446,11 @@ def test_v3_matches_kernel_contract(dev, cfg):
 
 
 @pytest.mark.parametrize("mma", [False, True])
-def test_v3_is_bit_stable_and_t_active(dev, mma):
+@pytest.mark.parametrize("heads", [4, 8])
+def test_v3_is_bit_stable_and_t_active(dev, mma, heads):
     """Repeats are bit-identical; t_active limits the rows and the append; the same inputs through v1 agree within the
     composite bar (the two contracts round p̃ against different maxima)."""
-    heads, kv, d, ctx_max = 8, 2, 128, 2048
+    kv, d, ctx_max = 2, 128, 2048
     rng = np.random.default_rng(78)
     qn, kn = _norms(rng, d)
     h1 = Harness(dev, Cfg(heads, kv, d, 64, ctx_max, 8), qn, kn)
@@ -508,13 +509,14 @@ def test_mma_matches_kernel_contract(dev, heads, kv, rot, ctx_max, gate):
 
 
 @pytest.mark.parametrize("mode", [0, 1, 2, 3])
-def test_mma_step_state_and_strided_grid(dev, mode):
+@pytest.mark.parametrize("heads", [4, 12])
+def test_mma_step_state_and_strided_grid(dev, mode, heads):
     """A short crew must visit every chunk; LM row sources and done/empty steps are predicated on GPU."""
     rng = np.random.default_rng(190)
-    cfg = Cfg(12, 2, 128, 64, 256, 8, mma=True)
+    cfg = Cfg(heads, 2, 128, 64, 256, 8, mma=True)
     qn, kn = _norms(rng, 128)
     ref = Harness(dev, cfg, qn, kn)
-    dyn = Harness(dev, Cfg(12, 2, 128, 64, 256, 8, mma=True, step_state=True, lm_mode=mode), qn, kn)
+    dyn = Harness(dev, Cfg(heads, 2, 128, 64, 256, 8, mma=True, step_state=True, lm_mode=mode), qn, kn)
     pos, t = 123, 5
     proj = _random_proj(rng, cfg, t)
     state = dict(position=pos, t_this_step=t, n_inject=t, n_chain=t)
