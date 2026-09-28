@@ -1347,3 +1347,54 @@ Smaller v3 attention crews lost at both contexts on the INT4 and BF16 models.
 BF16 projection tiles of 16×32 did not improve T=4 (205.64 versus 203.76 µs/layer)
 and only tied T=8; 32×32 was slower. These dispatch/tile alternatives are not
 retained.
+
+
+### Follow-up: smaller matrix-attention crew (2026-09-28 UTC)
+
+D=128 attention with two query heads per KV head uses four SIMD-groups per
+threadgroup instead of eight, keeping the 16-query tile and the same chunk and
+merge rules. Wider heads and greater query replication retain eight groups.
+Paired samples are preserved in
+[`apple-m5-pro-20c_layer_followup_ab_20260928.jsonl`](../../tools/bench/results/apple-m5-pro-20c_layer_followup_ab_20260928.jsonl)
+(including the preceding GDN preparation comparison). Eight-pair AB/BA comparisons over the 0.6B's 28 layers measured 82.75→80.52
+µs/layer at T=4/context 128, 102.59→99.26 at T=4/context 1024, 82.45→80.35
+at T=6/context 128, and 104.99→102.34 at T=8/context 1024. The eight-group
+variant remains on the 8B because its measurements were mixed.
+
+The separate seven-pair comparison with MLX below had different system load;
+its absolute timings must not be compared with the preceding A/B timings.
+Source: [`apple-m5-pro-20c_fixed_int4_followup_20260928.jsonl`](../../tools/bench/results/apple-m5-pro-20c_fixed_int4_followup_20260928.jsonl).
+
+| T | Context | Monolith µs/layer | MLX µs/layer | Ratio | Wins every pair |
+|---|---:|---:|---:|---:|---|
+| 4 | 128 | 86.52 | 71.50 | 1.210 | no |
+| 4 | 1024 | 108.55 | 94.95 | 1.143 | no |
+| 6 | 128 | 91.75 | 87.65 | 1.047 | no |
+| 6 | 1024 | 112.73 | 120.86 | 0.933 | no |
+| 8 | 128 | 89.24 | 104.06 | 0.858 | yes |
+| 8 | 1024 | 113.76 | 146.64 | 0.776 | yes |
+
+T=8 wins every pair at both contexts. The T=6/context 128 win from the initial
+matrix did not persist; T=6/context 1024 has a lower minimum but does not win
+every pair. T=4 still loses. These results reinforce that the strict latency
+gate is unmet and that close initial wins are not a robust hardware-wide claim.
+
+The 178 attention/compiler tests pass under Metal validation, with both crew
+sizes covering deterministic repetitions, runtime row counts, cache writes,
+strided grids, done/empty steps and all LM row sources.
+
+Additional rejected experiments: loading BF16 operands as native bit patterns
+produced identical outputs but increased full GDN-layer latency. NVFP4 projection
+tiles of 16×128 and 16×64 were slower than 16×256. A prototype combining GDN
+preparation and recurrence in shared threadgroup memory failed its output
+comparison and was discarded before integration.
+
+Wider BF16 output tiles also lost: 32×64 cost 209.35/214.62 µs per GDN layer
+at T=4/8 against 203.81/210.04 for 16×64; 64×64 was slower still. Applying
+the prepared GDN path at T=1 tied the existing path (191.86 versus 192.01 µs);
+its extra dispatch is not justified. Wider recurrent-state column slices gave
+no repeatable kernel-level improvement. Constructing NVFP4 sign bits directly
+was bit-identical but slower in both the T=1 and T=4 paths. None is retained.
+
+Final combined Metal-validation run: 327 kernel/compiler tests passed, 3 skipped.
+Repository hygiene, Python compilation and `git diff --check` also passed.

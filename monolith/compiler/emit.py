@@ -632,7 +632,7 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     macros, n_sg, chunk = _gqa_geometry(ctx, a, ctx_max, v2)
     if kind == "mma":
         n_sg, chunk = ctx.cores * 4, _gqa_mma_chunk(d)
-        macros = dict(macros, FIXED_CHUNK="1", MMA_SG="8", CH=str(chunk))
+        macros = dict(macros, FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(d, heads // kv)), CH=str(chunk))
     kd = ctx.kernel("gqa", _gqa_src(ctx, v2, mma=kind == "mma"), "gqa_decode_mma" if kind == "mma" else "gqa_decode_v2" if v2 else "gqa_decode", macros,
                     kernels.MSL_TENSOR_OPS if kind == "mma" else 0)
     rep = heads // kv
@@ -646,7 +646,7 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     st = ctx.program.step_state
     grid, tg = ((n_sg, 1, 1), (ctx.tg, 1, 1)) if v2 else ctx.crew_grid()          # v2: one threadgroup per block, n_sg of them
     if kind == "mma":
-        grid, tg = (n_sg, 1, 1), (256, 1, 1)
+        grid, tg = (n_sg, 1, 1), (32 * int(macros["MMA_SG"]), 1, 1)
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *ctx.buf(part_o)), (8, *ctx.buf(part_md)), (9, prm, 0), (15, st, 0)],
             grid, tg, op.kind, writes=[1, 2, 7, 8], attention=kind)
