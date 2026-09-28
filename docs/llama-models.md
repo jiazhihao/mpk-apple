@@ -76,4 +76,4 @@ MLX is claimed for the newly added checkpoints.
 
 A [plain/speculative comparison against MLX](research/llama-mlx-comparison.md)
 records decode and whole-request latency, draft settings, token agreement and all
-288 timed samples for these checkpoints.
+504 timed samples for these checkpoints, including a paired N=5/N=7 follow-up.
