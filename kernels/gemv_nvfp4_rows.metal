@@ -109,7 +109,7 @@ kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const fl
 #if EPILOGUE == 2
   const uint o=block*(R/2u)+rr,nout=p.n_rows/2u;
   bool writer=rr<R/2u;
-  float v=silu_f(acc[r])*vals[(rr+R/2u)%R];
+  float v=silu_mul(acc[r], vals[(rr+R/2u)%R]);
 #else
   const uint o=block*R+rr,nout=p.n_rows;
   bool writer=true;

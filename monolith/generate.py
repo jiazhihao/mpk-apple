@@ -19,7 +19,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .compiler import compile_program
 from .core.profile import Profile
@@ -71,7 +71,7 @@ class Session:
     sampling mode of its own."""
 
     def __init__(self, model: Model, pack_dir: str, profile: Optional[Profile] = None, *, layout: Optional[StepStateLayout] = None,
-                 eos: int = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
+                 eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
                  min_p: float = 0.0, seed: int = 0, autotune: bool = True, drafter: Any = None, drafter_pack: Optional[str] = None,
                  verify: str = "cost", verify_threshold: Optional[float] = None, verify_length: Optional[int] = None,
                  barriers: str = "minimal", attention: Optional[str] = None, fast_math: bool = False, accelerator: Optional[str] = None) -> None:
@@ -262,7 +262,7 @@ class Session:
         return line
 
 
-def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos: Optional[int] = None, drafter_dir: Optional[str] = None,
+def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos: Optional[Union[int, Sequence[int]]] = None, drafter_dir: Optional[str] = None,
                  drafter_pack: Optional[str] = None, drafter_kind: str = "dspark", sts_path: Optional[str] = None,
                  drafter_options: Optional[Dict[str, Any]] = None, **options: Any) -> Session:
     """The session for a checkpoint directory (+ optionally a drafter's: its kind names the ``Drafter`` plugin;
@@ -276,7 +276,7 @@ def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos:
     model = cls.from_checkpoint(model_dir, max_context=max_context)
     if eos is None:
         e = getattr(model.config, "eos_token_id", None)
-        eos = e[0] if isinstance(e, list) and e else (e if isinstance(e, int) else -1)
+        eos = e if isinstance(e, (int, list)) else -1
     drafter = None
     if drafter_dir is not None:
         from .spec import DRAFTERS

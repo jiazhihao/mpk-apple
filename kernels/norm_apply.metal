@@ -42,10 +42,10 @@ kernel void norm_apply(device const ushort* h [[buffer(0)]], device const float*
   for (uint j = lane; j < p.k / 8u; j += 32u) {
     uint4 q = row[j];
     float4 n0 = *(device const float4*)(norm_w + 8u * j), n1 = *(device const float4*)(norm_w + 8u * j + 4u);
-    q.x = pack_bf16x2(bf16lo(q.x) * r * n0.x, bf16hi(q.x) * r * n0.y);
-    q.y = pack_bf16x2(bf16lo(q.y) * r * n0.z, bf16hi(q.y) * r * n0.w);
-    q.z = pack_bf16x2(bf16lo(q.z) * r * n1.x, bf16hi(q.z) * r * n1.y);
-    q.w = pack_bf16x2(bf16lo(q.w) * r * n1.z, bf16hi(q.w) * r * n1.w);
+    q.x = pack_bf16x2(norm_scale(bf16lo(q.x), r, n0.x), norm_scale(bf16hi(q.x), r, n0.y));
+    q.y = pack_bf16x2(norm_scale(bf16lo(q.y), r, n0.z), norm_scale(bf16hi(q.y), r, n0.w));
+    q.z = pack_bf16x2(norm_scale(bf16lo(q.z), r, n1.x), norm_scale(bf16hi(q.z), r, n1.y));
+    q.w = pack_bf16x2(norm_scale(bf16lo(q.w), r, n1.z), norm_scale(bf16hi(q.w), r, n1.w));
     out[j] = q;
   }
 }

@@ -440,7 +440,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
           for (uint qq = 0; qq < 4u; qq++) pv[qq] = simd_shuffle_xor(v[qq], ushort(PAIR_XOR));
           const bool gate_lane = (lane & PAIR_XOR) == 0u;               // rows [0, CHUNK) of the block
 #pragma clang loop unroll(full)
-          for (uint qq = 0; qq < 4u; qq++) v[qq] = silu_f(v[qq]) * pv[qq];
+          for (uint qq = 0; qq < 4u; qq++) v[qq] = silu_mul(v[qq], pv[qq]);
           const uint orow0 = bb * CHUNK + (n % R), n_out = p.n_rows / 2u;
           const bool writer = gate_lane && m < T_act;
 #else
@@ -585,7 +585,7 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
     for (uint u = 0; u < PERM_UNROLL; u++) {
       if (i + 32u * u >= k1) continue;
 #if PERM_NORM
-      const float f = round_bf16(as_type<float>(uint(v[u]) << 16) * r * norm_w[src[u]]);
+      const float f = round_bf16(norm_scale(as_type<float>(uint(v[u]) << 16), r, norm_w[src[u]]));
       v[u] = ushort(as_type<uint>(f) >> 16);
 #endif
       out[i + 32u * u] = v[u];

@@ -22,8 +22,10 @@ class NormInput:
 
 
 class RMSNorm(Module):
-    def __init__(self, dim: int, eps: float, hf_name: str, *, prefix: str = "", one_plus: bool = True) -> None:
+    def __init__(self, dim: int, eps: float, hf_name: str, *, prefix: str = "", one_plus: bool = True, round_before_scale: bool = False) -> None:
+        """``round_before_scale`` preserves separate BF16 normalization and weight-multiply operations."""
         super().__init__(prefix=prefix)
+        self.round_before_scale = round_before_scale
         self.dim, self.eps, self.hf_name, self.one_plus = dim, eps, hf_name, one_plus
 
     def weight_map(self) -> Dict[str, WeightSpec]:
@@ -32,10 +34,11 @@ class RMSNorm(Module):
     def forward(self, x: Any) -> Any:
         from . import oracle
 
-        return oracle.rms_norm(x, self.param("weight"), self.eps, one_plus=self.one_plus)
+        return oracle.rms_norm(x, self.param("weight"), self.eps, one_plus=self.one_plus, round_before_scale=self.round_before_scale)
 
     def lower(self, g: Graph, h: Value) -> NormInput:
         stat = g.value(f"{self.prefix}stat", (h.shape[0],), DType.F32)
-        g.op("rmsnorm_stat", [h], [stat], domain=BlockDomain("span", self.dim), klass=OpClass.REDUCE, eps=self.eps)
+        g.op("rmsnorm_stat", [h], [stat], domain=BlockDomain("span", self.dim), klass=OpClass.REDUCE, eps=self.eps,
+             round_before_scale=self.round_before_scale)
         w = self.const_value(g, f"{self.prefix}weight", (self.dim,), DType.F32)
         return NormInput(stat, w, self.eps)

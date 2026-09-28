@@ -1,3 +1,6 @@
+#ifndef EOS_TEST
+#define EOS_TEST (p.eos >= 0 && tok == p.eos)
+#endif
 // advance: the per-step SERIAL op that closes a step (design §5.4): publishes the last position's sampled token to
 // the ring as (sequence << 32) | token, makes it the next step's pending token, advances position and step, and
 // sets `done` at EOS. The program's StepState struct is prepended by the compiler (StepStateLayout.to_msl()).
@@ -29,6 +32,6 @@ kernel void advance(device const int* token [[buffer(0)]], device StepState* st 
   st->position = st->position + t;
   st->step = st->step + 1u;
   st->t_this_step = 1u;
-  if (p.eos >= 0 && tok == p.eos) st->done = 1;
+  if (EOS_TEST) st->done = 1;
   if (p.ctx_cap && st->position >= p.ctx_cap) { st->error = 2u; st->done = 1u; }     // the context is full
 }

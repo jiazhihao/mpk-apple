@@ -221,7 +221,6 @@ static inline uint pack_bf16x2(float lo, float hi) {
   uint b = as_type<uint>(hi); b += 0x7FFFu + ((b >> 16) & 1u);
   return (a >> 16) | (b & 0xFFFF0000u);
 }
-static inline float silu_f(float g) { return g / (1.0f + exp(-g)); }
 
 kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_scale [[buffer(1)]],
                    device const ushort* x [[buffer(2)]],
@@ -309,7 +308,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
               xh[j][t][8 * v] = bf16lo(q.x); xh[j][t][8 * v + 1] = bf16hi(q.x); xh[j][t][8 * v + 2] = bf16lo(q.y); xh[j][t][8 * v + 3] = bf16hi(q.y);
               xh[j][t][8 * v + 4] = bf16lo(q.z); xh[j][t][8 * v + 5] = bf16hi(q.z); xh[j][t][8 * v + 6] = bf16lo(q.w); xh[j][t][8 * v + 7] = bf16hi(q.w); }
 #if NORM
-            for (uint e = 0; e < WPW; e++) xh[j][t][e] = round_bf16(xh[j][t][e] * rn[t] * nwv[e]);
+            for (uint e = 0; e < WPW; e++) xh[j][t][e] = round_bf16(norm_scale(xh[j][t][e], rn[t], nwv[e]));
 #endif
           } else { for (uint e = 0; e < WPW; e++) xh[j][t][e] = 0.0f; }
         }
@@ -407,7 +406,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
               xf[t][8 * v] = bf16lo(q.x); xf[t][8 * v + 1] = bf16hi(q.x); xf[t][8 * v + 2] = bf16lo(q.y); xf[t][8 * v + 3] = bf16hi(q.y);
               xf[t][8 * v + 4] = bf16lo(q.z); xf[t][8 * v + 5] = bf16hi(q.z); xf[t][8 * v + 6] = bf16lo(q.w); xf[t][8 * v + 7] = bf16hi(q.w); }
 #if NORM
-            for (uint e = 0; e < WPW; e++) xf[t][e] = round_bf16(xf[t][e] * rn[t] * nwv[e]);
+            for (uint e = 0; e < WPW; e++) xf[t][e] = round_bf16(norm_scale(xf[t][e], rn[t], nwv[e]));
 #endif
           } else { for (uint e = 0; e < WPW; e++) xf[t][e] = 0.0f; }
         }
@@ -429,10 +428,10 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
           for (uint t = 0; t < T; t++) {
             if (t >= T_act) continue;
             uint4 q = xq[t][v];
-            q.x = pack_bf16x2(bf16lo(q.x) * rn[t] * n0.x, bf16hi(q.x) * rn[t] * n0.y);
-            q.y = pack_bf16x2(bf16lo(q.y) * rn[t] * n0.z, bf16hi(q.y) * rn[t] * n0.w);
-            q.z = pack_bf16x2(bf16lo(q.z) * rn[t] * n1.x, bf16hi(q.z) * rn[t] * n1.y);
-            q.w = pack_bf16x2(bf16lo(q.w) * rn[t] * n1.z, bf16hi(q.w) * rn[t] * n1.w);
+            q.x = pack_bf16x2(norm_scale(bf16lo(q.x), rn[t], n0.x), norm_scale(bf16hi(q.x), rn[t], n0.y));
+            q.y = pack_bf16x2(norm_scale(bf16lo(q.y), rn[t], n0.z), norm_scale(bf16hi(q.y), rn[t], n0.w));
+            q.z = pack_bf16x2(norm_scale(bf16lo(q.z), rn[t], n1.x), norm_scale(bf16hi(q.z), rn[t], n1.y));
+            q.w = pack_bf16x2(norm_scale(bf16lo(q.w), rn[t], n1.z), norm_scale(bf16hi(q.w), rn[t], n1.w));
             xq[t][v] = q;
           }
         }
@@ -498,9 +497,9 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
           }
           const uint orow = bb * CHUNK + (r - CHUNK), n_out = p.n_rows / 2u;
 #if LOCAL_GATE_CACHE
-          v = silu_f(gate_v[GATE_SLOT][t]) * v;
+          v = silu_mul(gate_v[GATE_SLOT][t], v);
 #else
-          v = silu_f(gate_v[r - CHUNK][t]) * v;
+          v = silu_mul(gate_v[r - CHUNK][t], v);
 #endif
 #else
           const uint orow = rrow, n_out = p.n_rows;

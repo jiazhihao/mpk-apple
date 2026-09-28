@@ -22,10 +22,12 @@ def linear(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     return (x.to(F32) @ w.to(F32).t()).to(BF16)
 
 
-def rms_norm(x: torch.Tensor, w: torch.Tensor, eps: float, *, one_plus: bool = True) -> torch.Tensor:
-    """Gemma-style RMSNorm: ``x · rsqrt(mean(x²) + eps) · (1 + w)`` in FP32, rounded to the input dtype."""
+def rms_norm(x: torch.Tensor, w: torch.Tensor, eps: float, *, one_plus: bool = True, round_before_scale: bool = False) -> torch.Tensor:
+    """RMSNorm with optional zero-centered weights and an intermediate input-dtype rounding."""
     xf = x.to(F32)
     y = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps)
+    if round_before_scale:
+        y = y.to(x.dtype).to(F32)
     scale = (1.0 + w.to(F32)) if one_plus else w.to(F32)
     return (y * scale).to(x.dtype)
 

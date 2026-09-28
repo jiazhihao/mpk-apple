@@ -66,7 +66,7 @@ class _Ctx:
                                                                           # per-T variants whose whole range lies below it are not emitted
     tuner: Any = None                                                     # compiler.autotune.Autotuner or None
     shared: Dict[str, str] = field(default_factory=dict)                  # shared scratch name -> buffer (sized to the largest request)
-    eos: int = -1
+    eos: Union[int, Sequence[int]] = -1
     ring_capacity: int = 4096
     ctx_cap_target: int = 0                                               # the target's KV rows (0 = no attention: unbounded)
     ctx_cap: int = 0                                                      # positions a sequence may occupy: the target's rows, and the drafter's less its block
@@ -271,9 +271,14 @@ def _rmsnorm_stat(ctx: _Ctx, op: Op) -> None:
     ctx.add(k, [(0, *ctx.buf(h)), (1, *ctx.buf(stat)), (2, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind, writes=[1])
 
 
+def _norm_precision(stat: Optional[Value]) -> Dict[str, str]:
+    return {"NORM_ROUND": "1"} if (stat is not None and stat.producer is not None
+        and stat.producer.attrs.get("round_before_scale")) else {}
+
+
 def _norm_apply(ctx: _Ctx, h: Value, stat: Value, nw: Value, eps: float, out: Tuple[str, int], t_c: int, t_src: int,
                 name: str = "norm_apply") -> None:
-    k = ctx.kernel("norm_apply", kernels.norm_apply_source(), "norm_apply", ctx.t_macros(t_c, t_src))
+    k = ctx.kernel("norm_apply", kernels.norm_apply_source(), "norm_apply", dict(ctx.t_macros(t_c, t_src), **_norm_precision(stat)))
     kdim = ctx.shape(h)[1]
     prm = ctx.params("norm_apply", kernels.norm_apply_params(kdim, t_c, ctx.stat_parts.get(stat.name, 1), eps))
     ctx.add(k, [(0, *ctx.buf(h)), (1, *ctx.buf(stat)), (2, *ctx.windows[nw.name]), (3, *out), (4, prm, 0)], (t_c, 1, 1), (32, 1, 1), name, writes=[3])
@@ -374,6 +379,9 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
         rg = int(choice.macros["RG"]) if choice else None
         macros = dict(kernels.gemv_macros(info, t=tv, rg=rg, epilogue=epilogue, out_bf16=True, stat_out=stat_out is not None, rsplit=rsplit,
                                           norm=fuse_norm, round_before_residual=bool(op.attrs.get("round_residual"))), **ctx.t_macros(tv, t_src))
+        macros.update(_norm_precision(stat))
+        if op.attrs.get("round_silu"):
+            macros["SILU_ROUND"] = "1"
         if len(variants) > 1 or tile_range is not None:
             macros["T_LO"], macros["T_HI"] = str(lo), str(tv)
         n_sg, grid, tg = ctx.geometry(choice.grid_mode if choice else "crew", n_blocks)
@@ -596,7 +604,9 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     bf16_rows = _bf16_rows(info) and hi == 1
     direct_norm = (bf16_rows or small_bf16) and stat is not None
     conv_macros, conv_bindings = _projection_convolution(ctx, op, info, hi, t_src)
-    tmac = dict(ctx.t_macros(hi, t_src), **conv_macros)
+    tmac = dict(ctx.t_macros(hi, t_src), **conv_macros, **_norm_precision(stat))
+    if op.attrs.get("round_silu"):
+        tmac["SILU_ROUND"] = "1"
     if nv_row1:
         tmac.update(NV_ROWS="1u", NV_SG=f"{nv_groups}u", NV_UNROLL="4")
     if predicated:
@@ -1122,7 +1132,7 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
 
 def _accept_scan(ctx: _Ctx, op: Op) -> None:
     token, = op.inputs
-    k = ctx.kernel("spec_ops", _spec_ops(ctx), "accept_scan", {})
+    k = ctx.kernel("spec_ops", _spec_ops(ctx), "accept_scan", kernels.eos_macros(ctx.eos))
     prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP, ctx_cap=ctx.ctx_cap,
                                                           lm=bool(op.attrs.get("lm"))))
     ctx.program.buffers.setdefault(ACCEPT_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * 4, None, "arena"))
@@ -1204,7 +1214,7 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_
 
 
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
-                 layout: Optional[StepStateLayout] = None, eos: int = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
+                 layout: Optional[StepStateLayout] = None, eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
                  tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal",
                  attention: Optional[str] = None, accelerator: Optional[str] = None, t_min: int = 1) -> Program:
     """Check coverage on ``profile`` and emit the step program for a lowered (and passed) graph: for a static
@@ -1267,7 +1277,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     if tail == "advance":
         if token is None:
             raise ValueError("emit_program: the advance needs the sampled token value")
-        adv = ctx.kernel("advance", kernels.advance_source(layout.to_msl()), "advance", {})
+        adv = ctx.kernel("advance", kernels.advance_source(layout.to_msl()), "advance", kernels.eos_macros(eos))
         prm = ctx.params("advance", kernels.advance_params(t, ring_capacity, eos, ctx_cap=ctx.ctx_cap))
         ctx.add(adv, [(0, *ctx.buf(token)), (1, program.step_state, 0), (2, program.ring, 0), (3, prm, 0)], (1, 1, 1), (32, 1, 1), "advance",
                 writes=[1, 2])
@@ -1361,7 +1371,7 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
     return drafter.lower_select(g, block, profile, cost=cost, threshold=threshold, fixed=fixed)
 
 
-def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: int = -1, ring_capacity: int = 4096,
+def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096,
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
                     verify_threshold: Optional[float] = None, verify_length: Optional[int] = None, barriers: str = "minimal",

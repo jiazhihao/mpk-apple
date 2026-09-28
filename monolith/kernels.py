@@ -7,7 +7,7 @@ import math
 import re
 import struct
 from pathlib import Path
-from typing import List, Dict, Mapping, Optional, Sequence, Tuple
+from typing import List, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from .formats import FORMATS
 from .formats.blm import PackInfo
@@ -47,7 +47,7 @@ def template(name: str) -> str:
 
 def gemv_source(fmt: str) -> str:
     """The gemv_T kernel for storage format ``fmt`` (macros still to be supplied at compile time)."""
-    return PRELUDE + FORMATS.get(fmt).msl_decode + "\n" + template("gemv_T.metal")
+    return PRELUDE + template("activation_math.metal") + FORMATS.get(fmt).msl_decode + "\n" + template("gemv_T.metal")
 
 
 EPILOGUES = {None: "0", "residual": "1", "silu_mul": "2"}
@@ -218,7 +218,7 @@ THREADGROUP_MEMORY_LIMIT = 32768  # bytes of threadgroup memory a dispatch may d
 def gemm_source(fmt: str) -> str:
     """The gemm_tile kernel (the M5 accelerator path for T > 1, #50) for storage format ``fmt``; compile it with
     ``language_version=MSL_TENSOR_OPS``."""
-    src = PRELUDE + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+    src = PRELUDE + template("activation_math.metal") + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
     if fmt == "bf16":
         src += "\n" + template("gemv_bf16_small.metal")
         src += "\n" + template("gemv_bf16_rows.metal")
@@ -426,7 +426,7 @@ def stat_params(k: int, t_active: int) -> bytes:
 
 
 def norm_apply_source() -> str:
-    return PRELUDE + template("norm_apply.metal")
+    return PRELUDE + template("activation_math.metal") + template("norm_apply.metal")
 
 
 def norm_apply_params(k: int, t_active: int, stat_parts: int, eps: float) -> bytes:
@@ -654,14 +654,27 @@ def gdn_params(*, hv: int, hk: int, t_active: int, q_off: int, k_off: int, v_off
 
 # ---- the step's advance --------------------------------------------------------------------------------------------
 
+def eos_macros(eos: Union[int, Sequence[int]]) -> Dict[str, str]:
+    """Compile a finite stop-token set into the advance/accept kernels' token predicate.
+
+    Scalar EOS keeps the existing parameter ABI and runtime comparison. Lists
+    use constants; an empty list disables EOS. ``tok`` is the current sample.
+    """
+    if isinstance(eos, int):
+        return {}
+    if not isinstance(eos, (list, tuple)) or any(type(t) is not int or not 0 <= t < 2**31 for t in eos):
+        raise ValueError("EOS must be an integer or a sequence of nonnegative int32 token IDs")
+    return {"EOS_TEST": "(" + "||".join(f"tok=={t}" for t in sorted(set(eos))) + ")" if eos else "false"}
+
+
 def advance_source(step_state_msl: str) -> str:
     return PRELUDE + step_state_msl + "\n" + template("advance.metal")
 
 
-def advance_params(t_active: int, ring_cap: int, eos: int, ctx_cap: int = 0) -> bytes:
+def advance_params(t_active: int, ring_cap: int, eos: Union[int, Sequence[int]], ctx_cap: int = 0) -> bytes:
     """``ctx_cap`` > 0: the context capacity (KV rows) — the advance stops the program (error 2) at a step whose first
     position would reach it."""
-    return struct.pack("<IIiI", t_active, ring_cap, eos, ctx_cap)
+    return struct.pack("<IIiI", t_active, ring_cap, eos if isinstance(eos, int) else -1, ctx_cap)
 
 
 # ---- stochastic sampling ---------------------------------------------------------------------------------------
@@ -738,11 +751,11 @@ def select_params(gamma: int, threshold: float, t_max: int, mode: int = 0, cost:
 ACCEPT_LOG_CAP = 65536
 
 
-def accept_params(ring_cap: int, eos: int, log_cap: int = 0, ctx_cap: int = 0, lm: bool = False) -> bytes:
+def accept_params(ring_cap: int, eos: Union[int, Sequence[int]], log_cap: int = 0, ctx_cap: int = 0, lm: bool = False) -> bytes:
     """``ctx_cap`` > 0: the program's context capacity — the scan stops the program (error 2) at a step whose first
     position would reach it (see kernels/spec_ops.metal). ``lm``: an LM drafter — ``n_inject`` becomes the committed
     rows the drafter has not ingested (``position − drafter_ctx_len``) and ``n_chain`` says whether the step drafts."""
-    return struct.pack("<IiIIIIII", ring_cap, eos, log_cap, ctx_cap, 1 if lm else 0, 0, 0, 0)
+    return struct.pack("<IiIIIIII", ring_cap, eos if isinstance(eos, int) else -1, log_cap, ctx_cap, 1 if lm else 0, 0, 0, 0)
 
 
 def draft_attn_params(*, heads: int, kv_heads: int, gamma: int, ctx_len: int, n_new: int, n_sg: int, q_off: int, k_off: int, v_off: int,

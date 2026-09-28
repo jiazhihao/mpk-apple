@@ -82,7 +82,7 @@ kernel void gemv_bf16_small(device const uint4* w [[buffer(0)]], device const fl
       const float4 raw = float4(((device const bfloat4*)xp)[col / 4u + active_v * (K / 4u)]);
       const float4 nw = *(device const float4*)(norm_w + col);
       bfloat4 val;
-      for (uint e = 0; e < 4; e++) val[e] = bfloat(round_bf16(raw[e] * rn * nw[e]));
+      for (uint e = 0; e < 4; e++) val[e] = bfloat(round_bf16(norm_scale(raw[e], rn, nw[e])));
       local_x[nv * (K / 4u) + packed_slot4(i)] = val;
     }
   }
@@ -120,7 +120,7 @@ kernel void gemv_bf16_small(device const uint4* w [[buffer(0)]], device const fl
     for (uint v = 0; v < VECTORS; v++) {
       float value=result[v];
 #if EPILOGUE == 2
-      value=silu_f(value)*scratch[(rr+R/2u)%R][v];
+      value=silu_mul(value, scratch[(rr+R/2u)%R][v]);
       const uint orow=block*(R/2u)+rr, nout=p.n_rows/2u;
       const bool writer=rr<R/2u;
 #else

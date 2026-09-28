@@ -62,14 +62,18 @@ class Projection:
 
 class Linear(Module):
     def __init__(self, in_features: int, parts: Sequence[Part], *, prefix: str = "", row_perm: Optional[np.ndarray] = None,
-                 epilogue: Optional[str] = None, chunk: Optional[int] = None, round_residual: bool = False) -> None:
+                 epilogue: Optional[str] = None, chunk: Optional[int] = None, round_residual: bool = False, round_silu: bool = False) -> None:
         """``round_residual``: with the residual epilogue, round the product to BF16 before the add (the reference's
-        separate linear + BF16 add, two roundings) instead of the fused single rounding."""
+        separate linear + BF16 add, two roundings) instead of the fused single rounding.
+        ``round_silu`` rounds both projections and SiLU before the gate/up multiply."""
         super().__init__(prefix=prefix)
         if epilogue not in EPILOGUES:
             raise ValueError(f"Linear: epilogue must be one of {EPILOGUES}, got {epilogue!r}")
         if round_residual and epilogue != "residual":
             raise ValueError("Linear: round_residual needs the residual epilogue")
+        if round_silu and epilogue != "silu_mul":
+            raise ValueError("Linear: round_silu needs the silu_mul epilogue")
+        self.round_silu = bool(round_silu)
         self.round_residual = bool(round_residual)
         self.k = in_features
         self.parts = tuple(parts)
@@ -122,7 +126,12 @@ class Linear(Module):
             acc = acc + residual.to(torch.float32)
         elif self.epilogue == "silu_mul":
             half = self.n // 2
-            acc = torch.nn.functional.silu(acc[:, :half]) * acc[:, half:]
+            if self.round_silu:
+                acc = acc.to(x.dtype).to(torch.float32)
+            activated = torch.nn.functional.silu(acc[:, :half])
+            if self.round_silu:
+                activated = activated.to(x.dtype).to(torch.float32)
+            acc = activated * acc[:, half:]
         return acc.to(x.dtype)
 
     # ---- IR -----------------------------------------------------------------------------------------------------
@@ -155,6 +164,8 @@ class Linear(Module):
             out_name = name if (name and len(which) == 1) else f"{grp.name}.y" + (f".r{start}" if ranged else "")
             y = g.value(out_name, (t, n_out), DType.BF16)
             attrs: Dict[str, Any] = dict(norm=norm is not None, epilogue=self.epilogue, format=grp.format)
+            if self.round_silu:
+                attrs["round_silu"] = True
             if self.round_residual:
                 attrs["round_residual"] = True
             if norm is not None:
