@@ -902,8 +902,11 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros, static_params=[("gqa", "p", prm)])
     st = ctx.program.step_state
     gb = ctx.buf(gate) if gate is not None else ctx.buf(part_o)
+    # The short, wide commuted-norm stack benefits from packing independent
+    # merge SIMD-groups; retain the arithmetic and one SIMD-group per head.
+    merge_sg = 4 if ctx.commute_norm and kind == "mma" and (d, heads, kv, t_c) == (128, 32, 8, 8) else 1
     ctx.add(km, [(0, *ctx.buf(part_o)), (1, *ctx.buf(part_md)), (2, *gb), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
-            (t_c * heads, 1, 1), (32, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
+            (t_c * heads // merge_sg, 1, 1), (32 * merge_sg, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
 
 
 def _gqa_v3(ctx: _Ctx, op: Op) -> None:

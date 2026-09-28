@@ -177,3 +177,59 @@ including unequal tile counts, padded T=6 scratch and changing active rows.
 [Raw grid sweeps, all paired samples and profiles](../../tools/bench/results/apple-m5-pro-20c_commute-norm-grid.jsonl).
 The existing `--norm-ab --ts 6,8 --ctx 128` command above reproduces the current
 persistent/unfused/MLX comparison; use revision `ff69a7c` for the prior fusion.
+
+## Grid search across the remaining Qwen 8B operations
+
+[M] On revision `f3105e0`, the same legacy pack was used to screen **388 launch
+configurations** across nine roles at T=6/8, followed by 130 amortized rechecks
+of the single-operation roles and 56 full-stack comparisons (including unchanged
+controls). The full 36-layer stack remained the acceptance test. Grid counts
+covered 20/40/80/160 groups and one group per output tile; GEMM K splits covered
+2/4/8/16 plus unsplit 8/12/16-SIMD-group crews. Attention compute additionally
+covered 48 groups and 2/4/8/16 SIMD-groups. Merge/statistic packing and permutation
+slices/unrolling were also swept.
+
+| Role | Result |
+|---|---|
+| Interior QKV and gate/up | Retain 40 groups and K split 8. |
+| Initial QKV | Retain the existing tile grid; cached leaf timings did not establish a stack win. |
+| Attention output projection | Smaller grids gave about 1% leaf gains, but no robust general stack gain. |
+| Down projection | 20 groups/K split 16 and 40 groups/K split 8 gave 1–3% leaf gains; full-stack/context checks rejected a general change. |
+| Attention compute, including Q/K norm and RoPE | 16 SIMD-groups helped short context, but the tested attention combination regressed about 2.3% at context 1024. Retain 8. |
+| Attention merge | **Pack four independent SIMD-groups per threadgroup at T=8** for the tested 32-head/8-KV-head, D=128 commuted-norm schedule. |
+| Initial normalization statistic | Retain one SIMD-group per token. |
+| Initial normalization/permutation | Wider slices/unrolling choices helped the isolated dispatch, but it executes only once per stack; no additional robust stack gain. |
+
+Only merge packing is added to the production schedule. It keeps all 256 logical
+SIMD-groups at T=8, but launches 64 threadgroups of 128 threads instead of 256
+threadgroups of 32. The arithmetic and buffer addressing are unchanged. T=6 and
+the default non-commuted path keep their prior geometry.
+
+Final N=7 comparisons, eight paired repetitions × 48 replays, minimum wall
+µs/layer (paired median ratios are also shown):
+
+| Context | Previous | Packed merge | Median new/previous | Unchanged-control ratio |
+|---|---:|---:|---:|---:|
+| 128 | 438.89 | 437.30 | 0.99637 | 0.99892 |
+| 1024 | 480.76 | 479.54 | 0.99745 | 0.99831 |
+
+The candidate wins all eight pairs at each context, but the unchanged control
+also shows a timing bias. After that control, the supported improvement is small,
+roughly **0.1–0.3%**. The earlier larger combination's N=5 gain did not repeat;
+it is not enabled. Bootstrap intervals in the raw data are exploratory and do
+not correct for searching many configurations.
+
+All 518 leaf measurements remained finite (minimum cosine 0.999999952); changing
+K splits can alter rounding. The retained merge configuration preserves every
+checkpoint layer bit-for-bit. Fourteen attention checks pass with Metal API
+validation, including new changing-row/cache cases at contexts 0/128/1024.
+Three standalone merge tests pass full shader validation, including permuted
+output and empty/partial rows. Full shader instrumentation of the unchanged MMA
+core exceeds the device's threadgroup-memory budget (45,056 > 32,768 bytes), so
+the merge's buffer checks are exercised separately. The search harness also
+passes a real-model T=6/8 merge sweep with API validation; 248 contract checks pass.
+
+[All configurations, discarded noisy samples, paired controls and context checks](../../tools/bench/results/apple-m5-pro-20c_qwen8b_grid_search.jsonl).
+Reproduce the screen with `tools/bench/layer_grid_search.py` as described in
+[the benchmark README](../../tools/bench/README.md). Leaf timings alone are not
+used to claim a decoder-layer or generation speedup.

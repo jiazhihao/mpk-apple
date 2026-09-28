@@ -60,3 +60,16 @@ to narrow the checkpoint indices. These isolated replays have different weight
 cache residency and host-overhead amortization; keep streaming stack runs as a
 companion check. See [the M5 performance report](../../docs/research/m5-native-code.md)
 for the final result summary and archived native-code investigation tools.
+
+`layer_grid_search.py` screens launch geometries for the 20-core M5 Pro's short
+Qwen 8B tiles. It compares each operation role across all checkpoint layers,
+checks outputs, and records every paired sample. Single-operation roles amortize
+submission over a batch; their weights may be cache-resident. A leaf winner must
+be confirmed in the full dependency chain, with an unchanged-program control and
+relevant context lengths, before changing the compiler. `variant(program, role,
+config)` can apply a recorded configuration to a complete program for that check.
+
+```bash
+python tools/bench/layer_grid_search.py --model CHECKPOINT --pack PACK \
+  --ts 6,8 --ctx 128 --out grid-search.jsonl
+```

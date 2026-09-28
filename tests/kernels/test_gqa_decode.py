@@ -151,8 +151,9 @@ class Harness:
               .buffer(7, self.part_o).buffer(8, self.part_md).bytes(9, params).grid(-(-(n_disp * 32) // 384)).threadgroup(384).barrier())
         if c.mma:
             d1.grid(dispatch_sg or self.dev.info().gpu_cores * 4).threadgroup(32 * kernels.gqa_mma_simdgroups(c.d, c.rep))
+        merge_sg = getattr(c, "merge_sg", 1)
         d2 = (nt.Dispatch().pipeline(self.p_merge).buffer(0, self.part_o).buffer(1, self.part_md).buffer(2, pb).buffer(3, out)
-              .bytes(4, params).grid(t * c.heads).threadgroup(32))
+              .bytes(4, params).grid(-(-(t * c.heads) // merge_sg)).threadgroup(32 * merge_sg))
         if c.step_state:
             sb = nt.Buffer(self.dev, self.layout.pack(state or {'position': position, 't_this_step': t_act}))
             d1.buffer(15, sb)
@@ -572,6 +573,28 @@ def test_mma_wide_heads(dev, ctx):
     test_v3_matches_kernel_contract(dev, Cfg(8, 2, 256, 64, ctx, 8, gate=True, mma=True))
 
 
+@pytest.mark.parametrize("position", [0, 128, 1024])
+def test_packed_mma_merge_preserves_partial_rows_and_caches(dev, position):
+    rng = np.random.default_rng(1907)
+    cfg = Cfg(32, 8, 128, 128, 1152, 8, gate=False, mma=True, step_state=True)
+    qn, kn = _norms(rng, 128)
+    original = Harness(dev, cfg, qn, kn)
+    packed_cfg = Cfg(32, 8, 128, 128, 1152, 8, gate=False, mma=True, step_state=True)
+    packed_cfg.merge_sg = 4
+    packed = Harness(dev, packed_cfg, qn, kn)
+    caches = [rbf(rng.normal(0, .1, (cfg.ctx_max, cfg.kv, cfg.d))) for _ in range(2)]
+    proj = _random_proj(rng, cfg, 8)
+    for active in (8, 3, 0, 1, 7):
+        for h in (original, packed):
+            h.set_caches(*caches)
+        expected = original.step(proj, position, t_active=active)
+        actual = packed.step(proj, position, t_active=active)
+        np.testing.assert_array_equal(actual, expected)
+        assert np.all(actual[active:] == 0)
+        for a, b in zip(original.caches(), packed.caches()):
+            np.testing.assert_array_equal(a, b)
+
+
 @pytest.mark.parametrize("position", [0, 60, 128, 248, 249, 256, 1024])
 @pytest.mark.parametrize("t", [1, 4, 8])
 def test_adaptive_mma_matches_fixed_chunk_and_cache(dev, position, t):
@@ -664,3 +687,36 @@ def test_attention_without_query_key_norm(dev, kind, position):
     for actual_cache, expected_cache in zip(harness.caches(), caches):
         np.testing.assert_array_equal(actual_cache, expected_cache)
     np.testing.assert_array_equal(harness.step(proj, position), actual)
+
+
+@pytest.mark.parametrize("position", [0, 128, 1024])
+def test_packed_merge_buffer_bounds(dev, position):
+    """Validate the changed merge alone: instrumenting the unchanged MMA core
+    exceeds this device's threadgroup-memory budget in Shader Validation."""
+    from monolith.core import StepStateLayout
+    rng = np.random.default_rng(71)
+    chunks = -(-(position + 8) // 64)
+    layout = StepStateLayout(t_max=8, gamma_max=7)
+    source = kernels.gqa_source().replace(kernels.PRELUDE, kernels.PRELUDE + layout.to_msl())
+    macros = dict(kernels.gqa_macros(128, chunk=64), STEP_STATE="1", FIXED_CHUNK="1",
+                  **kernels.perm_out_macros(4096, 32, 128))
+    pso = nt.Pipeline(nt.Library(dev, source, macros), "gqa_merge")
+    partials = rng.normal(0, .2, (8, chunks, 32, 128)).astype(np.float32)
+    md = rng.uniform(.5, 1.5, (8, chunks, 32, 2)).astype(np.float32)
+    po, pm = nt.Buffer(dev, partials.tobytes()), nt.Buffer(dev, md.tobytes())
+    params = kernels.gqa_params(heads=32, kv_heads=8, t_active=8, position=position, n_sg=80,
+        q_off=0, gate_off=0, k_off=0, v_off=0, in_stride=4096, out_stride=4096,
+        ctx_max=position + 8, eps=1e-6, scaling=1, has_gate=False, n_chunks_max=chunks, rows_max=32)
+    for active in (8, 3, 0, 1, 7):
+        st = nt.Buffer(dev, layout.pack(dict(position=position, t_this_step=active)))
+        results = []
+        for groups in (1, 4):
+            out = nt.Buffer(dev, 8 * 4096 * 2); out.fill(0)
+            dispatch = (nt.Dispatch().pipeline(pso).buffer(0, po).buffer(1, pm).buffer(2, po)
+                        .buffer(3, out).bytes(4, params).buffer(15, st)
+                        .grid(256 // groups).threadgroup(32 * groups))
+            result = nt.Queue(dev).run([dispatch])
+            assert not result.error, result.error
+            results.append(np.frombuffer(out.read(0, out.nbytes), np.uint16).reshape(8, 4096))
+        np.testing.assert_array_equal(*results)
+        assert not results[1][active:].any()
