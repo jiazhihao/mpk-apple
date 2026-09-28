@@ -1371,3 +1371,34 @@ BF16 constant scales shrink gate/up from 2,778→2,714 bytes and 41→39 registe
 The fused convolution projection shrinks 2,718→2,664 bytes while registers rise
 37→39: again, resource counts alone do not determine speed. Every sampled
 specialization reports zero local scratch. Raw evidence: `native_normalization`.
+
+
+### Final exhaustive fixed-token gate (`40a78fd`)
+
+[M] Seven alternating pairs of 64 fixed verification steps cover every layer
+at T=1/4/6/8 and contexts 128/1024. All **704/704 individual minimum-latency
+comparisons beat MLX**, and **700/704 win every pair**:
+
+| Format | Individual minimum wins | Every-pair wins | Worst Monolith/MLX minimum ratio |
+|---|---:|---:|---:|
+| BF16 | 192/192 | 192/192 | 0.909986 |
+| NVFP4 | 288/288 | 287/288 | 0.956222 |
+| INT4 | 224/224 | 221/224 | 0.977543 |
+
+Fresh complete-stack comparisons also pass **24/24 minimum-latency gates** and
+all 24 numerical checks. These means are distinct from the individual-layer
+measurements. NVFP4 T=1 margins are narrow and timing ranges overlap; the result
+is the predefined minimum-of-paired-runs gate on this machine, not an every-run
+or universal hardware claim.
+
+The individual direct-MLX numerical check passes 703/704. INT4 layer 24,
+T=1/context 1024 still records cosine 0.998958383 (#124); its benchmark exits
+nonzero as before. The independent CPU audit already shows Monolith passing
+both BF16- and FP32-dequantized contract references (0.999966/0.999978), while
+MLX does not (0.998928/0.998935). No threshold or arithmetic workaround was added.
+
+Evidence: `final_layer_summary` and `final_{individual,stack}_{bf16,nvfp4,int4}`
+under `tools/bench/results/apple-m5-pro-20c_*_20260928.*`. The implementation
+commit is `40a78fd`; subsequent evidence-only commits change no kernel behavior.
+The fixed-token latency target is met for the measured suite. Issue #113's
+separate speculative-round throughput follow-up is outside this task's scope.

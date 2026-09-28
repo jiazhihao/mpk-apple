@@ -1398,3 +1398,22 @@ was bit-identical but slower in both the T=1 and T=4 paths. None is retained.
 
 Final combined Metal-validation run: 327 kernel/compiler tests passed, 3 skipped.
 Repository hygiene, Python compilation and `git diff --check` also passed.
+
+
+### Fixed-token gate after the native-code follow-up (2026-09-28)
+
+The final implementation at `40a78fd` passes 704/704 individual minimum-latency
+comparisons against MLX across all 24 BF16, 36 NVFP4 and 28 INT4 checkpoint layers,
+T=1/4/6/8 and contexts 128/1024. It wins every pair in 700 cases. Worst individual
+ratios are 0.909986 / 0.956222 / 0.977543 respectively. The companion streaming
+stacks pass all 24 minimum-latency and numerical gates. NVFP4 T=1 remains a narrow
+minimum-time win; these results do not claim non-overlapping timing ranges.
+
+The remaining direct-MLX numerical mismatch is the independently audited INT4
+case #124; its original failure and the unchanged 0.999 threshold remain recorded.
+All six selected real-model checks, including the new layout, pass under Metal
+validation. Native code/resource evidence, complete tables, rejected experiments,
+validation details and raw-result paths are in [m5-native-code.md](m5-native-code.md).
+NVFP4 uses a normal v3 pack built with `--scale-placement block --scale-order payload`;
+weights and scale values are unchanged. Speculative acceptance throughput was not
+used in this gate.
