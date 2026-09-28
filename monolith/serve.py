@@ -65,13 +65,14 @@ class APIError(Exception):
 class Backend:
     """One cached session; sampling changes rebuild its compiled programs, never duplicate model residency."""
 
-    def __init__(self, model_dir, pack_dir, max_context=4096):
+    def __init__(self, model_dir, pack_dir, max_context=4096, prefill_chunk_size=128):
         from transformers import AutoTokenizer
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=False)
         if not self.tokenizer.chat_template:
             raise ValueError("The checkpoint must provide a chat template")
         self.model_dir, self.pack_dir, self.max_context = model_dir, pack_dir, max_context
+        self.prefill_chunk_size = prefill_chunk_size
         self.session, self.sampling = None, None
 
     def complete(self, request):
@@ -95,7 +96,7 @@ class Backend:
             self.session = None
             self.session = load_session(self.model_dir, self.pack_dir, max_context=self.max_context,
                                        temperature=request.temperature, top_p=request.top_p, seed=request.seed,
-                                       autotune=False)
+                                       autotune=False, prefill_chunk_size=self.prefill_chunk_size)
             self.sampling = sampling
         try:
             tokens = self.session.generate(ids, limit).tokens
@@ -176,13 +177,16 @@ def main():
     parser.add_argument("--pack", required=True, help="Packed weights directory")
     parser.add_argument("--served-model-name", default=None)
     parser.add_argument("--max-context", type=int, default=4096)
+    parser.add_argument("--prefill-chunk-size", type=int, default=128, help="Prompt tokens per prefill pass (default: 128)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
     if args.max_context < 1:
         parser.error("--max-context must be positive")
+    if args.prefill_chunk_size < 1:
+        parser.error("--prefill-chunk-size must be positive")
     api_key = os.environ.get("MONOLITH_API_KEY")
-    backend = Backend(args.model, args.pack, args.max_context)
+    backend = Backend(args.model, args.pack, args.max_context, args.prefill_chunk_size)
     app = create_app(backend, args.served_model_name or Path(args.model).name, api_key)
     uvicorn.run(app, host=args.host, port=args.port, workers=1)
 

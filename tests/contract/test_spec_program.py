@@ -306,3 +306,22 @@ def test_fused_permutes(pair):
     assert all(xin(t) in plain_permuted for t in plain_tiles if t.name.startswith("gemv:layers."))
     assert not any(o.meta.get("perm_out") for o in plain_tiles if o.name.startswith("gemv:layers."))
     assert sum(1 for o in plain.ops if o.meta.get("kind") == "x_permute") == len(perms) + len(fused_target)   # one permute dispatch per fused target producer
+
+
+def test_prefill_and_verification_have_independent_row_bounds(pair):
+    model, drafter, tp, dp = pair
+    layout = StepStateLayout(t_max=128, gamma_max=7)
+    pre = compile_program(model, tp, PROF, t=128, dynamic_t=True, layout=layout,
+                          drafter=drafter, drafter_pack=dp, prefill=True, verify='fixed', verify_length=2)
+    dec = compile_program(model, tp, PROF, t=8, dynamic_t=True, layout=layout,
+                          drafter=drafter, drafter_pack=dp)
+    assert pre.buffers['step_state'].nbytes == dec.buffers['step_state'].nbytes
+    assert pre.buffers['logits'].nbytes == 16 * dec.buffers['logits'].nbytes
+    for name, spec in dec.buffers.items():
+        if spec.role in ('state', 'weights', 'ring'):
+            assert pre.buffers[name].nbytes == spec.nbytes
+    select = next(op for op in dec.ops if op.name == 'verify_select')
+    params = next(name for slot, name, _ in select.bindings if slot == 3)
+    assert struct.unpack_from('<I', dec.buffers[params].init, 8)[0] == 8
+    assert 1 in [op.meta.get('t_variant') for op in pre.ops
+                 if op.name == 'gemv:layers.1.mlp.gate_up.gate_proj+up_proj']

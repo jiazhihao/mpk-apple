@@ -55,6 +55,9 @@ at a time, with overlapping requests receiving HTTP 429. Run one server worker p
 Invalid or unsupported fields return an OpenAI-shaped HTTP 400 error instead of being silently ignored.
 Streaming, tool calls, images, JSON-schema output and the Responses API are not implemented.
 The default context capacity is 4096; adjust with `--max-context` to fit the checkpoint and available memory.
+Prompt processing uses 128-token chunks by default (`--prefill-chunk-size`), with a separate compiled graph
+from single-token decode. Short prompts use smaller prefill buckets. Increasing the chunk size increases
+temporary GPU memory; it does not change the context capacity or the decode graph's token bound.
 
 By default the server listens only on localhost. For access through an SSH tunnel, forward port 8000.
 Set `MONOLITH_API_KEY` before launch to require `Authorization: Bearer <key>` on `/v1/*`;

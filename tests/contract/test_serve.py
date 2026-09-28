@@ -89,6 +89,7 @@ def test_template_sampling_context_and_stop(monkeypatch):
     monkeypatch.setattr(generate, "load_session", load)
     backend = Backend.__new__(Backend)
     backend.model_dir, backend.pack_dir, backend.max_context = "model", "pack", 8
+    backend.prefill_chunk_size = 256
     backend.session, backend.sampling = None, None
     backend.tokenizer = SimpleNamespace(apply_chat_template=template,
                                        decode=lambda ids, **kwargs: "Hello END more" if 11 in ids else "Hello")
@@ -101,6 +102,7 @@ def test_template_sampling_context_and_stop(monkeypatch):
     assert prompts[0][1]["enable_thinking"] is False
     client.post("/v1/chat/completions", json=payload(max_completion_tokens=2))
     assert len(calls) == 1
+    assert calls[0]["prefill_chunk_size"] == 256
     response = client.post("/v1/chat/completions", json=payload(max_tokens=2, temperature=0.7, top_p=0.9, seed=42))
     assert response.json()["choices"][0]["finish_reason"] == "length"
     assert calls[-1]["temperature"] == 0.7 and calls[-1]["top_p"] == 0.9 and calls[-1]["seed"] == 42
