@@ -8,8 +8,8 @@ loop used by the Qwen packages. No external inference engine runs the model.
 
 | Checkpoint | Tested storage | Context capacity | Pack / Metal buffers [M] |
 | --- | --- | --- | --- |
-| [Llama 3.2 1B Instruct](https://huggingface.co/mlx-community/Llama-3.2-1B-Instruct-4bit) | MLX affine INT4 | 4,096 | 1.87 / 2.70 GB | 0.70 / 0.84 GB |
-| [Llama 3.2 3B Instruct](https://huggingface.co/mlx-community/Llama-3.2-3B-Instruct-4bit) | MLX affine INT4 | 4,096 |
+| [Llama 3.2 1B Instruct](https://huggingface.co/mlx-community/Llama-3.2-1B-Instruct-4bit) | MLX affine INT4 | 4,096 | 0.70 / 0.84 GB |
+| [Llama 3.2 3B Instruct](https://huggingface.co/mlx-community/Llama-3.2-3B-Instruct-4bit) | MLX affine INT4 | 4,096 | 1.87 / 2.70 GB |
 | [SmolLM2 1.7B Instruct](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct) | BF16 | 4,096 | 3.43 / 4.25 GB |
 
 These are individual-model runs. The allocation measurement counts unique Metal
@@ -73,3 +73,7 @@ free-running text across inference implementations.
 
 These checks establish correctness and memory fit. No per-layer speedup over
 MLX is claimed for the newly added checkpoints.
+
+A [plain/speculative comparison against MLX](research/llama-mlx-comparison.md)
+records decode and whole-request latency, draft settings, token agreement and all
+288 timed samples for these checkpoints.
