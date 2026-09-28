@@ -129,6 +129,10 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
     # floats of registers: K ≤ 1024 at T = 1 for a 4-bit format — the 0.6B's projections (§11.1); at 64 floats the
     # occupancy collapsed (a 1024 × 2048 slab 2.7× slower)
     hoist = preconvert and int(geometry["PAYLOAD_WORDS"]) * t * f.weights_per_word <= 32 and pairs is None
+    # At one token the unnormalized and gated BF16 projections benefit from
+    # keeping activations packed until the dot product (M5 paired layer runs).
+    if info.format == "bf16" and info.k <= 4096 and t == 1 and pairs is None and (not norm or epilogue == "silu_mul"):
+        preconvert = hoist = False
     if epilogue not in EPILOGUES:
         raise ValueError(f"gemv_T: unknown epilogue {epilogue!r}")
     macros = {"K": str(info.k), "R": str(info.rows), "T": str(t), "RG": str(rg),
@@ -140,6 +144,8 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
         if info.rows % 2 or (info.rows // 2) % rg:
             raise ValueError(f"gemv_T silu_mul: R={info.rows} must be even and RG={rg} must divide R/2")
         macros["CHUNK"] = str(info.rows // 2)
+        if info.format == "nvfp4" and t == 1:
+            macros["LOCAL_GATE_CACHE"] = "1"
     if round_before_residual:
         if epilogue != "residual":
             raise ValueError("gemv_T: round_before_residual needs the residual epilogue")
@@ -237,7 +243,12 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
     wpw = int(f.weights_per_word)
     if tn is None or tk is None:
         # Small INT4 and BF16 projections benefit from fewer live operand registers (#113).
-        tn, tk = (16, 64) if ((info.format == "int4_affine" and info.k <= 3072) or (info.format == "bf16" and info.k <= 4096)) and tm <= 16 else gemm_tile_shape(tm)
+        if info.format == "nvfp4" and info.k >= 4096 and tm == 8:
+            tn, tk = 16, 128
+            if scale_cache is None:
+                scale_cache = False
+        else:
+            tn, tk = (16, 64) if ((info.format == "int4_affine" and info.k <= 3072) or (info.format == "bf16" and info.k <= 4096)) and tm <= 16 else gemm_tile_shape(tm)
     if info.rows not in (8, 16):
         raise ValueError(f"gemm_tile: R={info.rows} must be 8 or 16 (the epilogues index pack blocks)")
     if info.lanes_per_word > 1:

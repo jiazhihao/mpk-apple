@@ -249,3 +249,14 @@ def test_row_range_equals_the_slice_of_the_whole(dev):
     parts = np.frombuffer(so.read(0, t * nb * 4), dtype=np.float32).reshape(t, nb)
     assert np.array_equal(parts, full_stat[:, b0: b0 + nb])
 
+@pytest.mark.parametrize("rows,rg,rsplit", [(4, 1, 2), (8, 1, 4), (16, 1, 8), (16, 2, 4), (16, 4, 2)])
+def test_nvfp4_single_token_gate_slice(dev, rows, rg, rsplit):
+    """A split item's gate cache must cover exactly its rows, including the final block."""
+    g = Gemv(dev, "nvfp4", 5 * rows, rows, 1)
+    rng = np.random.default_rng(97)
+    x = f32_to_bf16(rng.normal(0, .2, (1, K)).astype(np.float32))
+    whole, _ = g.run(x, epilogue="silu_mul", rg=rg)
+    split, _ = g.run(x, epilogue="silu_mul", rg=rg, rsplit=rsplit)
+    np.testing.assert_array_equal(whole, split)
+    inactive, _ = g.run(x, epilogue="silu_mul", rg=rg, rsplit=rsplit, t_active=0)
+    assert not inactive.any()

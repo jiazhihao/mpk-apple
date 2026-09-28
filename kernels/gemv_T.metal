@@ -35,6 +35,9 @@
 #ifndef EPILOGUE_ROUND
 #define EPILOGUE_ROUND 0             // with EPILOGUE=1: round the product to BF16 before the residual add (two roundings, the
 #endif                               // reference's separate linear + add; the fused layers keep the single rounding)
+#ifndef LOCAL_GATE_CACHE
+#define LOCAL_GATE_CACHE 0
+#endif
 #ifndef EPILOGUE
 #define EPILOGUE 0
 #endif
@@ -314,11 +317,23 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
     for (uint t = 0; t < T; t++) ssq_out[t] = 0.0f;
 #endif
 #if EPILOGUE == 2
-    float gate_v[CHUNK][T];
-    // the item's gate rows [part·CR, (part+1)·CR) then their up partners CHUNK + the same range (the pairs stay in one item)
 #define CR (CHUNK / RSPLIT)
+#if LOCAL_GATE_CACHE
+    // A row-split item only consumes its own gate rows. Relative indices let
+    // the compiler keep a single row group's values in registers.
+    float gate_v[CR][T];
+#define GATE_SLOT (ri + i)
+#else
+    float gate_v[CHUNK][T];
+#endif
+    // the item's gate rows [part·CR, (part+1)·CR) then their up partners CHUNK + the same range (the pairs stay in one item)
     for (uint side = 0; side < 2u; side++)
+#if LOCAL_GATE_CACHE
+    for (uint ri = 0; ri < CR; ri += RG) {
+      const uint r0 = side * CHUNK + part * CR + ri;
+#else
     for (uint r0 = side * CHUNK + part * CR; r0 < side * CHUNK + (part + 1u) * CR; r0 += RG) {
+#endif
 #elif PAIRS
     for (uint r0 = 0; r0 < R; r0 += RG) {
 #else
@@ -450,9 +465,20 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
         for (uint t = 0; t < T; t++) {
           float v = simd_sum(acc[i][t]) * rs;
 #if EPILOGUE == 2
-          if (r < CHUNK) { gate_v[r][t] = v; continue; }
+          if (r < CHUNK) {
+#if LOCAL_GATE_CACHE
+            gate_v[GATE_SLOT][t] = v;
+#else
+            gate_v[r][t] = v;
+#endif
+            continue;
+          }
           const uint orow = bb * CHUNK + (r - CHUNK), n_out = p.n_rows / 2u;
+#if LOCAL_GATE_CACHE
+          v = silu_f(gate_v[GATE_SLOT][t]) * v;
+#else
           v = silu_f(gate_v[r - CHUNK][t]) * v;
+#endif
 #else
           const uint orow = rrow, n_out = p.n_rows;
 #if EPILOGUE == 1

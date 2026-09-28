@@ -659,3 +659,105 @@ A subsequent isolated T=1 NVFP4 A/B rejected fully unrolling the payload loop
 (434.84→492.29 µs). Unrolling only the two-group loop gives a small mixed change
 (433.92 µs minimum) and is not retained. All outputs match. One earlier run
 overlapped validation and was discarded; these are the isolated rerun values.
+
+
+## Smaller NVFP4 live operands
+
+The scalar fused gate/up projection now indexes its gate temporary relative to
+its row-split slice. The matrix path uses a 16×128 tile for NVFP4 K≥4096 at TM=8,
+with uncached scales, rather than 16×256. These choices preserve the pack layout;
+the matrix change alters summation order. Explicit tile choices remain available.
+
+Native metadata directly supports the operand-lifetime hypothesis:
+
+| Specialization | Registers before → after | Scratch bytes before → after | Native bytes before → after |
+|---|---:|---:|---:|
+| T=1 gate/up | 105 → 93 | 48 → 48 | 13,152 → 8,180 |
+| T=4 QKV | 126 → 82 | 96 → 0 | 8,666 → 5,278 |
+| T=4 output projection | 126 → 82 | 96 → 0 | 9,266 → 6,002 |
+| T=4 gate/up | 126 → 83 | 80 → 0 | 13,104 → 9,564 |
+| T=4 down projection | 126 → 90 | 80 → 0 | 10,104 → 6,146 |
+
+These are experimental native metadata fields, not decoded ISA or direct proof
+of spilling. MLX's captured scalar NVFP4 kernels still use fewer registers and
+zero scratch. The remaining scalar gap therefore warrants further experiments.
+
+Seven alternating shared-buffer pairs of 32 steps against f6ffbf2 measure
+433.27→426.62 / 470.80→447.95 / 473.11→451.66 / 475.83→452.97 µs/layer at
+T=1/4/6/8, respectively. Every pair improves. T=1 outputs are exact. Matrix
+outputs change with accumulation order; the same-input per-layer MLX checks
+pass at every configuration (minimum cosine 0.999964).
+
+The separate MLX refresh still leaves the strict target open:
+
+| T | Context | Monolith / MLX µs/layer | Wins every pair |
+|---:|---:|---:|---|
+| 1 | 128 | 426.95 / 391.19 | no |
+| 1 | 1024 | 450.64 / 408.97 | no |
+| 4 | 128 | 450.94 / 433.52 | no |
+| 4 | 1024 | 473.32 / 492.76 | no (4 of 7) |
+| 6 | 128 | 452.44 / 648.69 | yes |
+| 6 | 1024 | 489.87 / 719.91 | yes |
+| 8 | 128 | 455.11 / 824.58 | yes |
+| 8 | 1024 | 495.93 / 921.16 | yes |
+
+T=4/context 1024 has a strong ordering effect: Monolith samples are 473–474 µs
+when measured first and 502–505 µs when measured second, while MLX stays at
+492–494 µs. No cause has been established; a lower minimum is not a robust win.
+Raw paired samples and native reports are in `tools/bench/results` under
+`nvfp4_operand_ab`, `nvfp4_operand_native`, and `fixed_nvfp4_operands`.
+
+The runtime now declares residency only for buffers bound by the program's
+ICB. It continues owning all buffers needed for session reuse. An individual
+INT4 layer-0 T=8/context-128 A/B reduces resource declarations from 80 to 25
+and latency from 77.01 to 72.77 µs; all pairs improve with exact outputs. Other
+individual-layer samples remain noisy, and full-stack gains are small. This
+does not establish the individual-layer latency target.
+
+The first individual INT4 sweep stopped after 193 of 224 cases on layer 24,
+T=1/context 1024, with cosine 0.998958 against MLX. Two completed cases also
+missed latency by less than 2 µs. Numerical investigation is tracked in #124:
+MPK's QKV is closer to an independent FP64 affine projection than MLX's BF16
+projection, and MLX with FP32 activations/scales matches the independently
+rounded reference exactly. This does not establish full-layer correctness.
+The benchmark's optional `--continue-on-oracle-failure` records the failure,
+finishes the sweep and still exits nonzero; the default still stops immediately.
+No threshold has been relaxed.
+
+Validation for the smaller-operand change: 220 projection/barrier cases pass
+(3 skipped), and all seven runtime plus real NVFP4 model tests pass under Metal
+shader validation. The model check includes every prefill layer and all 48
+golden greedy tokens. The five new scalar cases cover independent row-split
+slices and empty steps.
+
+
+## Keep BF16 activations packed until use
+
+For T=1, K≤4096 BF16 projections without input normalization, or with a fused
+SiLU/multiply epilogue, keeping activation words packed until the dot product
+reduces native live operands. Norm-fed plain projections retain their hoisted
+FP32 activations. The fused gate/up allocation falls from 91 to 46 registers
+and from 5,932 to 3,508 native bytes; the 2048-column output projection falls
+41→38 registers and the 3584-column down projection 51→49. Scratch remains zero.
+
+Seven alternating pairs of 48 steps with shared buffers measure GDN
+180.23→177.65 µs/layer and attention 157.19→154.04 µs/layer. All output bytes
+match and every pair improves. This is an incremental gain; both short-context
+T=1 targets remain unresolved until the MLX gate is refreshed. Applying the
+same policy to NVFP4 was slower (429.16→435.18 µs); it is not enabled there.
+
+Other rejected NVFP4 T=1 experiments: computing paired gate/up row groups
+together (427.81→428.24 µs), and decoding each weight at its dot-product use
+(426.92→485.47 µs). Both were byte-exact. The smaller register lifetime of an
+expression is not sufficient reason to retain it without faster measurements.
+
+BF16 validation: 182 projection and selected real-model cases pass under Metal
+shader validation, including prefill-layer oracles, all golden greedy tokens,
+sampling reproducibility and rollback. The known long-prompt issue #123 remains
+excluded and unresolved.
+
+The continuation sweep completes all 32 configurations for layers 24–27. Every
+latency pair wins. Layer 24 at T=1/context 1024 reproduces cosine 0.9989583394;
+all other numerical checks pass. The command exits 1 as intended. Combined with
+the initial sweep, all 224 unique configurations have now been measured, but
+the original two latency misses and issue #124 are still unresolved.

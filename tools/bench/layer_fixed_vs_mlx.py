@@ -143,6 +143,7 @@ def main():
     ap.add_argument('--reps', type=int, default=5)
     ap.add_argument('--steps', type=int, default=24)
     ap.add_argument('--out', type=Path)
+    ap.add_argument('--continue-on-oracle-failure', action='store_true', help='record failed numerical checks and finish the sweep; still exit nonzero')
     ap.add_argument('--fail-on-regression', action='store_true', help='exit nonzero if any measured MPK/MLX ratio is >= 1')
     a = ap.parse_args()
     import mlx.core as mx
@@ -166,6 +167,7 @@ def main():
     if not indices:
         raise ValueError('no layers selected')
     failed = False
+    oracle_failed = False
     selections = [[i] for i in indices] if a.individual else [indices]
     for indices, t, ctx in itertools.product(selections, ts, ctxs):
         x = bf16_to_f32(f32_to_bf16(np.random.default_rng(17).normal(0, .1, (t, sess.model.config.hidden_size)).astype(np.float32)))
@@ -201,7 +203,9 @@ def main():
         # rounding, but must meet the composite-layer cosine contract.
         got = [bf16_to_f32(np.frombuffer(eng.read(output, x.size * 2), dtype=np.uint16)).reshape(x.shape) for output in outputs]
         cosine = check(got)
-        if not np.isfinite(cosine) or cosine < .999:
+        oracle_pass = bool(np.isfinite(cosine) and cosine >= .999)
+        oracle_failed |= not oracle_pass
+        if not oracle_pass and not a.continue_on_oracle_failure:
             raise AssertionError(f'output cosine {cosine} < .999')
         samples = []
         for rep in range(a.reps):
@@ -216,7 +220,7 @@ def main():
                    attention=a.attention, pack=str(Path(a.pack).resolve()), checkpoint=str(Path(a.model).resolve()),
                    mlx_version=importlib.metadata.version('mlx'), mlx_lm_version=importlib.metadata.version('mlx-lm'),
                    os=platform.platform(), repetitions=a.reps, prefix=f'{a.kv_prefix} KV; zero recurrent input slot',
-                   dtype='bfloat16', cosine=cosine, ours_us=w * 1000 / len(indices), mlx_us=m * 1000 / len(indices),
+                   dtype='bfloat16', cosine=cosine, oracle_pass=oracle_pass, oracle_threshold=.999, ours_us=w * 1000 / len(indices), mlx_us=m * 1000 / len(indices),
                    ratio=w / m, faster_in_every_pair=all(s["ours_wall_ms"] < s["mlx_wall_ms"] for s in samples), samples=samples)
         failed |= row["ratio"] >= 1
         print(json.dumps(row), flush=True)
@@ -226,7 +230,7 @@ def main():
                 f.write(json.dumps(row) + '\n')
         del eng, step, check
         gc.collect()
-    return int(a.fail_on_regression and failed)
+    return int(oracle_failed or (a.fail_on_regression and failed))
 
 
 if __name__ == '__main__':
