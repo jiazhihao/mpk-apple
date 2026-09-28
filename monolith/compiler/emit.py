@@ -722,15 +722,16 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     """(macros, n_sg field, chunk for the workspace)."""
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     rep = heads // kv
+    norm = {} if a.get("qk_norm", True) else {"QK_NORM": "0"}
     if v2:
         # v2's threadgroups: attention_v2_threadgroups per core — from the core count, not the crew (n_sg already carries the
         # profile's threadgroups_per_core: dividing it by 12 doubled v2's grid on a two-threadgroup profile)
-        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=min(4, rep * ctx.t)), STEP_STATE="1"), ctx.cores * ctx.attn_v2_tg, kernels.GQA_V2_CHUNK_MIN
+        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=min(4, rep * ctx.t)), STEP_STATE="1", **norm), ctx.cores * ctx.attn_v2_tg, kernels.GQA_V2_CHUNK_MIN
     chunk = int(a.get("chunk", 64))
     lm_mode, chain_i = int(a.get("lm_mode", 0)), int(a.get("chain_i", 0))
     if v2 and lm_mode:
         raise ValueError("gqa_decode: an LM drafter's attention runs on the v1 core (the v2 core has no LM modes)")
-    return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows, lm_mode=lm_mode, chain_i=chain_i), STEP_STATE="1"), ctx.n_sg, chunk
+    return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows, lm_mode=lm_mode, chain_i=chain_i), STEP_STATE="1", **norm), ctx.n_sg, chunk
 
 
 def _gqa_mma_chunk(d: int) -> int:
@@ -855,6 +856,8 @@ def _gqa_v3(ctx: _Ctx, op: Op) -> None:
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
     macros = dict(kernels.gqa_v3_macros(d, lm_mode=int(a.get("lm_mode", 0)), chain_i=int(a.get("chain_i", 0))), STEP_STATE="1", SINGLE_BLOCK="1")
+    if not a.get("qk_norm", True):
+        macros["QK_NORM"] = "0"
     fused = _fused_permute(ctx, out)                              # o_proj's tile reads the output: written in its order
     if fused:
         macros = dict(macros, **fused[1])

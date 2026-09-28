@@ -21,6 +21,9 @@
 #ifndef NSG
 #define NSG 12u                      // SIMD-groups per threadgroup (the crew geometry)
 #endif
+#ifndef QK_NORM
+#define QK_NORM 1                  // disable for attention without per-head query/key RMSNorm
+#endif
 #define DL (D / 32u)
 
 #ifndef LM_MODE
@@ -134,11 +137,13 @@ static inline void store_part(device float* p, const thread float* f) {
 // per-head RMSNorm (1 + w) and RoPE of one D-vector held DL-per-lane; the reference's rounding order
 static inline void norm_rope(thread float* f, device const float* nw, device const ushort* cos_row, device const ushort* sin_row,
                              float eps, uint lane) {
+#if QK_NORM
   float ss = 0.0f;
   for (uint e = 0; e < DL; e++) ss = fma(f[e], f[e], ss);
   ss = simd_sum(ss);
   const float rstd = rsqrt(ss / float(D) + eps);
   for (uint e = 0; e < DL; e++) f[e] = round_bf16(f[e] * rstd * nw[lane * DL + e]);
+#endif
   const bool lo = lane < 16u;
   float r[DL];
   for (uint e = 0; e < DL; e++) {

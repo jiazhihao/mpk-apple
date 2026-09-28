@@ -27,7 +27,7 @@ from .module import LowerContext, Module, StateEntry, WeightSpec
 class GQAAttention(Module):
     def __init__(self, hidden: int, heads: int, kv_heads: int, head_dim: int, rotary_dim: int, rope_theta: float,
                  eps: float, *, hf_prefix: str, prefix: str = "", max_context: int, gate: bool = True,
-                 norm_one_plus: bool = True) -> None:
+                 norm_one_plus: bool = True, qk_norm: bool = True) -> None:
         """``gate``: the ``[q | gate]`` projection and the ``σ(gate)`` output gate (the Qwen3.5 hybrid); ``norm_one_plus``:
         the per-head q/k RMSNorm scales by ``1 + w`` (Gemma-style) or by ``w`` (the standard RMSNorm of Qwen3)."""
         super().__init__(prefix=prefix)
@@ -36,6 +36,7 @@ class GQAAttention(Module):
         self.hidden, self.heads, self.kv_heads, self.head_dim = hidden, heads, kv_heads, head_dim
         self.rotary_dim, self.rope_theta, self.eps, self.gate = rotary_dim, rope_theta, eps, gate
         self.norm_one_plus = norm_one_plus
+        self.qk_norm = qk_norm
         self.max_context = max_context
         self.hf_prefix = hf_prefix
         hd, kd = heads * head_dim, kv_heads * head_dim
@@ -76,6 +77,8 @@ class GQAAttention(Module):
         return (self.heads + 2 * self.kv_heads) * self.head_dim
 
     def weight_map(self) -> Dict[str, WeightSpec]:
+        if not self.qk_norm:
+            return {}
         perm = rope_head_perm(self.head_dim, self.rotary_dim)
         tf = "one_plus" if self.norm_one_plus else "bf16_f32"          # the kernel multiplies by the stored scale as is
         return {"q_norm": WeightSpec(f"{self.hf_prefix}q_norm.weight", (self.head_dim,), "f32", transform=tf, aux=True, perm=perm),
@@ -106,9 +109,10 @@ class GQAAttention(Module):
             q, gate = proj[:, :q_rows].reshape(t, self.heads, d), None
         k = proj[:, q_rows: q_rows + kd].reshape(t, self.kv_heads, d)
         v = proj[:, q_rows + kd:].reshape(t, self.kv_heads, d)
-        q = oracle.rms_norm(q, self.param("q_norm"), self.eps, one_plus=self.norm_one_plus)
-        k = oracle.rms_norm(k, self.param("k_norm"), self.eps, one_plus=self.norm_one_plus)
-        cos, sin = oracle.rope_tables(self.rope_theta, self.rotary_dim, torch.arange(pos, pos + t))
+        if self.qk_norm:
+            q = oracle.rms_norm(q, self.param("q_norm"), self.eps, one_plus=self.norm_one_plus)
+            k = oracle.rms_norm(k, self.param("k_norm"), self.eps, one_plus=self.norm_one_plus)
+        cos, sin = self.rotary_tables(torch.arange(pos, pos + t))
         cos, sin = cos.to(proj.dtype), sin.to(proj.dtype)
         q = oracle.apply_partial_rope(q, cos, sin)
         k = oracle.apply_partial_rope(k, cos, sin)
@@ -118,6 +122,11 @@ class GQAAttention(Module):
             o = o * torch.sigmoid(gate)                                     # BF16 · bf16(σ(gate)) → BF16, as the reference
         return o.reshape(t, hd)
 
+    def rotary_tables(self, positions):
+        """Oracle tables; packages may override positional scaling to match their packed tables."""
+        from . import oracle
+        return oracle.rope_tables(self.rope_theta, self.rotary_dim, positions)
+
     # ---- IR ---------------------------------------------------------------------------------------------------
     def lower(self, g: Graph, h: Value, norm, ctx: LowerContext) -> Value:
         """q|k|v rows → the attention core (partials per KV chunk) ‖ the gate rows as an un-barriered sibling → the
@@ -126,8 +135,9 @@ class GQAAttention(Module):
         proj = self.qkv.lower(g, h, norm=norm, rows=(0, self.core_rows)).value
         kc, vc = ctx.states[f"{self.prefix}k_cache"], ctx.states[f"{self.prefix}v_cache"]
         cos, sin = ctx.consts["rope_cos"], ctx.consts["rope_sin"]
-        qn = self.const_value(g, f"{self.prefix}q_norm", (self.head_dim,), DType.F32)
-        kn = self.const_value(g, f"{self.prefix}k_norm", (self.head_dim,), DType.F32)
+        # Keep the binding ABI; disabled norm pointers are never read by the kernel.
+        qn = self.const_value(g, f"{self.prefix}q_norm", (self.head_dim,), DType.F32) if self.qk_norm else cos
+        kn = self.const_value(g, f"{self.prefix}k_norm", (self.head_dim,), DType.F32) if self.qk_norm else cos
         rep, n_chunks_max = self.heads // self.kv_heads, gqa_chunks_max(self.max_context, self.kv_heads, chunk)
         t = h.shape[0]
         part_o = g.value(f"{self.prefix}part_o", (t, self.kv_heads * n_chunks_max * rep * self.head_dim), DType.F32)
@@ -135,11 +145,11 @@ class GQAAttention(Module):
         g.op("gqa_decode", [proj, kc, vc, cos, sin, qn, kn], [part_o, part_md], domain=BlockDomain("heads", self.heads),
              klass=OpClass.MAP, updates=[kc.name, vc.name], heads=self.heads, kv_heads=self.kv_heads,
              head_dim=self.head_dim, rotary_dim=self.rotary_dim, eps=self.eps, scaling=self.head_dim ** -0.5,
-             segments=[s for s in self.kernel_segments() if s[0] != "gate"], rope="permuted", chunk=chunk, **ctx.mixer_attrs)
+             qk_norm=self.qk_norm, segments=[s for s in self.kernel_segments() if s[0] != "gate"], rope="permuted", chunk=chunk, **ctx.mixer_attrs)
         ins = [part_o, part_md]
         if self.gate:
             ins.append(self.qkv.lower(g, h, norm=norm, rows=(self.core_rows, hd), sibling=True).value)
         o = g.value(f"{self.prefix}attn", (t, hd), DType.BF16)
         g.op("gqa_merge", ins, [o], domain=BlockDomain("heads", self.heads), klass=OpClass.MAP, heads=self.heads,
-             kv_heads=self.kv_heads, head_dim=self.head_dim, gate=self.gate, chunk=chunk, **ctx.mixer_attrs)
+             kv_heads=self.kv_heads, head_dim=self.head_dim, gate=self.gate, qk_norm=self.qk_norm, chunk=chunk, **ctx.mixer_attrs)
         return self.o_proj.lower(g, o, residual=h, name=f"{self.prefix}h").value
