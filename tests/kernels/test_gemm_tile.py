@@ -377,6 +377,35 @@ def test_gemm_ksplit_epilogues_and_predication(dev, fmt, ksplit):
     assert np.all(out4 == 0)
 
 
+@pytest.mark.parametrize("fmt", ["bf16", "int4_affine", "nvfp4"])
+@pytest.mark.parametrize("tokens", [2, 4, 6, 8])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_ksplit_live_token_partials(dev, monkeypatch, fmt, tokens, persistent):
+    """Compact scratch preserves residual/stat results and the reuse barrier.
+
+    A single persistent threadgroup deliberately reuses scratch across row tiles;
+    the production geometry normally launches one threadgroup per tile.
+    """
+    from monolith.core import StepStateLayout
+    if persistent:
+        geometry = kernels.gemm_geometry
+        monkeypatch.setattr(kernels, "gemm_geometry", lambda mode, n, *a:
+                            (4, 1, 128) if mode == "ksplit4" else geometry(mode, n, *a))
+    rng = np.random.default_rng(29)
+    g = Gemm(dev, fmt, 288, 2048, 8)
+    x = f32_to_bf16(rng.normal(0, .2, (8, 2048)).astype(np.float32))
+    residual = f32_to_bf16(rng.normal(0, .2, (8, 288)).astype(np.float32))
+    layout = StepStateLayout(t_max=8, gamma_max=7)
+    out, stat = g.run(x, epilogue="residual", residual=residual, stat_out=True, ksplit=4,
+                      step_state=(layout, {"t_this_step": tokens}), t_range=(1, tokens),
+                      extra_macros={"COMPACT_PARTIALS": "1"})
+    ref = _rbf(bf16_to_f32(x[:tokens]).astype(np.float64) @ g.w.T + bf16_to_f32(residual[:tokens]))
+    assert check_against_oracle(out[:tokens], ref).max_ulp_elementwise <= 1
+    assert np.all(out[tokens:] == 0) and np.all(stat[tokens:] == 0)
+    expected = (ref.reshape(tokens, -1, g.info.rows).astype(np.float64) ** 2).sum(-1)
+    assert np.allclose(stat[:tokens], expected, rtol=1e-4, atol=1e-3)
+
+
 @pytest.mark.parametrize("fmt,k", [("nvfp4", 4096), ("nvfp4", 5120), ("int8", 4096), ("int4_affine", 4096), ("nvfp4", 2048)])
 @pytest.mark.parametrize("ksplit", [1, 2])
 def test_gemm_tile_block_scale_placement(dev, fmt, k, ksplit):

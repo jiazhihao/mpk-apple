@@ -261,6 +261,8 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
               "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
     if round_before_residual:
         macros["EPILOGUE_ROUND"] = "1"
+    if info.format in ("int4_affine", "bf16"):
+        macros["COMPACT_PARTIALS"] = "1"
     lpt = tk // wpw                                            # lanes per tile: LPT * 16 bytes of each row's 128-byte line
     if lpt * 16 >= 64:
         macros["Q_OUTER"] = "1"                                # lane group outer (half a line or more per row piece) …

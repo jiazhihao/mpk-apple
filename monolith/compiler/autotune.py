@@ -176,6 +176,8 @@ class Autotuner:
         key = f"gemm3|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|TM{tm}|{epilogue or 'plain'}"
         tile = kernels.gemm_macros(info, tm=tm)
         key += f"|tile{tile['TN']}x{tile['TK']}"
+        if tile.get("COMPACT_PARTIALS") == "1":
+            key += "|compact-partials"
         if permute:
             key += "|perm" + (f"|norm|P{int(stat_parts)}" if norm_fed else "")
         if key in self.choices and not force:

@@ -111,6 +111,28 @@ using namespace mpp::tensor_ops;
 #define NB_C ((TM > 16u) ? (TM / 16u) : 1u)               // 16-row blocks of the destination (its element order is
                                                           // q, slot (2), jump (TN/16), block — the right operand's is q, slot (8), jump)
 #define C_CAP (NB_C * TN / 2u)                            // destination elements per thread (16 · NB_C rows × TN over 32 lanes)
+// Opt-in after whole-layer measurement: compacting scratch can also change
+// register allocation. The hardware accumulator covers at least 16 token rows.
+#ifndef COMPACT_PARTIALS
+#define COMPACT_PARTIALS 0
+#endif
+#ifdef T_HI
+#define PART_TOKENS T_HI
+#else
+#define PART_TOKENS TM
+#endif
+#if COMPACT_PARTIALS && PART_TOKENS <= 8 && TM <= 16
+#define PART_CAP (C_CAP / 2u)
+#define PART_INDEX(i) (((i) / 4u) * 8u + (i) % 4u)
+#else
+#define PART_CAP C_CAP
+#define PART_INDEX(i) (i)
+#endif
+#if COMPACT_PARTIALS && PART_TOKENS <= 4
+#define PART_LANES 16u
+#else
+#define PART_LANES 32u
+#endif
 #define KT_S (KT / KSPLIT)                                // K tiles per slice
 #if (KT % KSPLIT) != 0
 #error "gemm_tile: KSPLIT must divide the K tiles"
@@ -184,7 +206,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
   const uint sg = gid / sw;
 #if KSPLIT > 1
   const uint slice = sg % KSPLIT, sg_tile = sg / KSPLIT, n_tg = p.n_sg / KSPLIT;   // a threadgroup is the KSPLIT SIMD-groups of one tile
-  threadgroup float part[KSPLIT - 1][32][C_CAP];                            // the partial tiles of slices 1 … KSPLIT-1
+  threadgroup float part[KSPLIT - 1][PART_LANES][PART_CAP];                            // the partial tiles of slices 1 … KSPLIT-1
 #else
   const uint sg_tile = sg, n_tg = p.n_sg;
 #endif
@@ -328,20 +350,25 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
     }
 #if KSPLIT > 1
     // the slices' partial tiles meet in threadgroup memory: slices 1 … KSPLIT-1 write theirs, slice 0 adds them into
-    // its own (the same element order in every SIMD-group) and runs the epilogue alone; the second barrier keeps the
-    // next tile's writes behind this tile's reads. Every thread of the threadgroup reaches both barriers.
-    if (slice != 0u) {
+    // its own and runs the epilogue alone. Compact scratch omits padded token rows;
+    // PART_INDEX maps its slots back to the hardware accumulator. Only a subsequent
+    // tile needs the second barrier to keep its writes behind this tile's reads.
+    if (slice != 0u && lane < PART_LANES) {
 #pragma clang loop unroll(full)
-      for (uint16_t i = 0; i < C_CAP; i++) part[slice - 1u][lane][i] = cT[i];
+      for (uint16_t i = 0; i < PART_CAP; i++) part[slice - 1u][lane][i] = cT[PART_INDEX(i)];
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (slice == 0u) {
+    if (slice == 0u && lane < PART_LANES) {
 #pragma clang loop unroll(full)
       for (uint s2 = 1; s2 < KSPLIT; s2++)
 #pragma clang loop unroll(full)
-        for (uint16_t i = 0; i < C_CAP; i++) cT[i] += part[s2 - 1u][lane][i];
+        for (uint16_t i = 0; i < PART_CAP; i++) cT[PART_INDEX(i)] += part[s2 - 1u][lane][i];
     }
+#if COMPACT_PARTIALS
+    if (tile + n_tg < p.tile0 + p.n_tiles) threadgroup_barrier(mem_flags::mem_threadgroup);
+#else
     threadgroup_barrier(mem_flags::mem_threadgroup);
+#endif
     if (slice != 0u) continue;
 #endif
     // epilogue over the destination: element ((blk*(TN/16) + jump)*2 + s2) << 2 | q holds row n = c0b + 16*jump + q

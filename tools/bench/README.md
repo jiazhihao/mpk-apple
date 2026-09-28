@@ -49,3 +49,12 @@ aborts. `--fail-on-regression` exits nonzero if any minimum-time ratio is at lea
 one; `faster_in_every_pair` separately reports consistency across repetitions.
 A faster stack mean does not establish that every individual layer is faster.
 Run without Metal shader validation for timing, and use validation for correctness.
+
+Use `--individual` to measure every selected layer separately, or `--layers 0,13,27`
+to narrow the checkpoint indices. These isolated replays have different weight
+cache residency and host-overhead amortization; keep streaming stack runs as a
+companion check. `--export-kernels /tmp/layer-kernels` saves the exact MSL,
+compile macros and dispatch metadata for native-code investigation. It exports
+no weights. See [M5 native-code investigation](../../docs/research/m5-native-code.md)
+for the archive compiler and inspector commands, measured findings, and decoder
+limitations.
