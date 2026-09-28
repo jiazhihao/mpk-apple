@@ -103,8 +103,10 @@ class Backend:
         except ValueError as exc:
             raise APIError(str(exc)) from exc
         eos = self.session.eos
-        finish = "stop" if eos in tokens else "length"
-        visible = tokens[:tokens.index(eos)] if eos in tokens else tokens
+        eos_ids = {eos} if isinstance(eos, int) else set(eos)
+        end = next((i for i, token in enumerate(tokens) if token in eos_ids), None)
+        finish = "stop" if end is not None else "length"
+        visible = tokens[:end] if end is not None else tokens
         content = self.tokenizer.decode(visible, skip_special_tokens=True)
         stops = [request.stop] if isinstance(request.stop, str) else request.stop or []
         positions = [content.index(s) for s in stops if s in content]

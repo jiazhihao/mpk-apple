@@ -72,15 +72,20 @@ def test_busy_and_failed_requests_release_lock():
     assert client.post("/v1/chat/completions", json=payload()).status_code == 200
 
 
-def test_template_sampling_context_and_stop(monkeypatch):
+@pytest.mark.parametrize("eos", [99, [98, 99], (98, 99)])
+def test_template_sampling_context_and_stop(monkeypatch, eos):
     from monolith import generate
 
-    calls, prompts = [], []
+    calls, prompts, decoded = [], [], []
     tokens = [10, 11, 99]
 
     def load(*args, **kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(eos=99, generate=lambda ids, n: SimpleNamespace(tokens=tokens[:n]))
+        return SimpleNamespace(eos=eos, generate=lambda ids, n: SimpleNamespace(tokens=tokens[:n]))
+
+    def decode(ids, **kwargs):
+        decoded.append(ids)
+        return "Hello END more" if 11 in ids else "Hello"
 
     def template(messages, **kwargs):
         prompts.append((messages, kwargs))
@@ -91,13 +96,15 @@ def test_template_sampling_context_and_stop(monkeypatch):
     backend.model_dir, backend.pack_dir, backend.max_context = "model", "pack", 8
     backend.prefill_chunk_size = 256
     backend.session, backend.sampling = None, None
-    backend.tokenizer = SimpleNamespace(apply_chat_template=template,
-                                       decode=lambda ids, **kwargs: "Hello END more" if 11 in ids else "Hello")
+    backend.tokenizer = SimpleNamespace(apply_chat_template=template, decode=decode)
     client = TestClient(create_app(backend, "test-model"))
     response = client.post("/v1/chat/completions", json=payload(max_tokens=3, stop=" END")).json()
     assert response["choices"][0]["message"]["content"] == "Hello"
     assert response["choices"][0]["finish_reason"] == "stop"
     assert response["usage"]["completion_tokens"] == 3
+    assert decoded[-1] == [10, 11]
+    response = client.post("/v1/chat/completions", json=payload(max_tokens=3)).json()
+    assert response["choices"][0]["finish_reason"] == "stop"
     assert prompts[0][1]["add_generation_prompt"] is True
     assert prompts[0][1]["enable_thinking"] is False
     client.post("/v1/chat/completions", json=payload(max_completion_tokens=2))
