@@ -23,7 +23,7 @@ from ..formats.safetensors_reader import SafetensorsDir
 from . import transforms
 
 ALIGN = 16384
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 3  # payload-ordered NVFP4 scales; versions 1 and 2 remain readable
 _NP_OF = {"F32": np.float32, "F16": np.float16, "BF16": np.uint16, "I32": np.int32, "I64": np.int64, "U8": np.uint8}
 
 
@@ -158,6 +158,7 @@ class Packer:
             "rows": r, "unit_bytes": info.unit_bytes, "payload_bytes": info.payload_bytes, "scale_bytes": info.scale_bytes,
             "lane_order": info.lane_order, "scale_group": info.scale_group, "n_blocks": info.n_blocks, "scale_placement": info.scale_placement,
             "scale_unit_bytes": info.scale_unit_bytes, "scale_dtype": info.scale_dtype,
+            "scale_lane_divisor": info.scale_lane_divisor, "scale_order": info.scale_order,
             "row_scales_offset": rs_off, "row_perm": req.row_perm is not None,
             "segments": [dict(s.describe(), rows=int(nr), tensor_scale=float(sc)) for s, nr, sc in zip(req.segments, seg_rows, scale_of_seg)],
         }
@@ -206,7 +207,8 @@ class Packer:
     def write(self, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         self._align()
         self._fh.close()
-        manifest = {"version": MANIFEST_VERSION, "alignment": ALIGN, "pack": "weights.pack", "nbytes": self._pos,
+        version = MANIFEST_VERSION if any(s.get("scale_order") == "payload" for s in self._slabs) else 2
+        manifest = {"version": version, "alignment": ALIGN, "pack": "weights.pack", "nbytes": self._pos,
                     "slabs": self._slabs, "aux": self._aux, **(extra or {})}
         with open(self.out / "manifest.json", "w") as f:
             json.dump(manifest, f, indent=1)
@@ -224,8 +226,12 @@ class PackFile:
         self.dir = Path(directory)
         with open(self.dir / "manifest.json") as f:
             self.manifest = json.load(f)
-        if self.manifest.get("version") != MANIFEST_VERSION:
+        if self.manifest.get("version") not in (1, 2, MANIFEST_VERSION):
             raise ValueError(f"unsupported manifest version {self.manifest.get('version')}")
+        if self.manifest["version"] == 1 and any(s.get("scale_lane_divisor", 1) != 1 for s in self.manifest["slabs"]):
+            raise ValueError("shared scale runs require manifest version 2")
+        if self.manifest["version"] < 3 and any(s.get("scale_order", "lane") != "lane" for s in self.manifest["slabs"]):
+            raise ValueError("payload scale order requires manifest version 3")
         self._mm = np.memmap(self.dir / self.manifest["pack"], dtype=np.uint8, mode="r")
         self.slabs = {s["name"]: s for s in self.manifest["slabs"]}
         self.aux = {a["name"]: a for a in self.manifest["aux"]}
@@ -235,7 +241,8 @@ class PackFile:
         return PackInfo(s["format"], s["n"], s["k"], s["rows"], s["unit_bytes"], s["payload_bytes"], s["scale_bytes"],
                         s["lane_order"], s["n_blocks"], 1.0, s["scale_group"], s.get("scale_placement", "inline"),
                         int(s.get("scale_unit_bytes", 8 if (s["format"] == "int4_affine" and s["scale_bytes"]) else 0)),   # older INT4 packs: FP32 pairs
-                        s.get("scale_dtype", "bf16" if (s["format"] == "int4_affine" and s["scale_bytes"] and int(s.get("scale_unit_bytes", 8)) == 4) else ""))   # 4-byte pairs before scale_dtype: BF16
+                        s.get("scale_dtype", "bf16" if (s["format"] == "int4_affine" and s["scale_bytes"] and int(s.get("scale_unit_bytes", 8)) == 4) else ""),   # 4-byte pairs before scale_dtype: BF16
+                        int(s.get("scale_lane_divisor", 1)), s.get("scale_order", "lane"))
 
     def slab_bytes(self, name: str) -> np.ndarray:
         s = self.slabs[name]
@@ -244,6 +251,18 @@ class PackFile:
     def row_scales(self, name: str) -> np.ndarray:
         s = self.slabs[name]
         return np.frombuffer(self._mm[s["row_scales_offset"]: s["row_scales_offset"] + 4 * s["n"]], dtype=np.float32)
+
+    def uniform_row_scale_bits(self, name: str) -> Optional[int]:
+        """An immutable slab's common finite scale, or None when loads are needed.
+
+        Compare representations so mixed signed zeros cannot become one constant.
+        Read the actual scale table; no checkpoint- or format-specific assumption.
+        """
+        bits = self.row_scales(name).view(np.uint32)
+        if not bits.size:
+            return None
+        first = int(bits[0])
+        return first if first & 0x7F800000 != 0x7F800000 and np.all(bits == first) else None
 
     def aux_array(self, name: str) -> np.ndarray:
         a = self.aux[name]

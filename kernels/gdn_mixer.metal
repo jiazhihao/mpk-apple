@@ -35,6 +35,18 @@
 // (hv > hk), the v-head blocks sharing a key head's conv window race on it — a block that finishes first overwrites
 // the window a slower sibling is still reading (seen as a flaky oracle test under GPU contention). SLOTS=1 is a
 // bench-only mode for hv == hk.
+#ifndef FUSED_NORM
+#define FUSED_NORM 0
+#endif
+#if FUSED_NORM && (!PREPARED || SPB != 1 || COMMIT)
+#error "fused GDN normalization needs one prepared state slice per SIMD group"
+#endif
+#ifndef LOCAL_PREPARE
+#define LOCAL_PREPARE 0
+#endif
+#if LOCAL_PREPARE && (!PREPARED || COMMIT || SPB != 1)
+#error "local preparation needs one prepared state slice per SIMD group"
+#endif
 #ifndef PREPARED
 #define PREPARED 0
 #endif
@@ -44,6 +56,18 @@
 #else
 #define TREG TP
 #define TI t
+#endif
+#ifndef PRECONVOLVED
+#define PRECONVOLVED 0
+#endif
+#if PRECONVOLVED && (!PREPARED || COMMIT)
+#error "preconvolved rows require a prepared forward recurrence"
+#endif
+#ifndef SINGLE_PASS
+#define SINGLE_PASS 0
+#endif
+#if SINGLE_PASS && (!LOCAL_PREPARE || COMMIT)
+#error "single-pass recurrence requires local preparation and one state slice per SIMD group"
 #endif
 #define PREP_STRIDE (2u * DK + DV + 2u)
 #ifndef SL
@@ -71,6 +95,15 @@
 #define VR (DV / 32u)
 #define NSL (DV / SL)
 #define NSG (NSL / SPB)
+#ifndef LOCAL_GROUPS
+#define LOCAL_GROUPS NSG
+#endif
+#if LOCAL_PREPARE && (NSG % LOCAL_GROUPS != 0 || LOCAL_GROUPS > 32)
+#error "local preparation groups must divide one head and fit a threadgroup"
+#endif
+#if LOCAL_PREPARE && FUSED_NORM && LOCAL_GROUPS != NSG
+#error "fused normalization requires a whole head in one threadgroup"
+#endif
 
 struct GdnParams {
   uint hv; uint hk; uint t_active; uint q_off;
@@ -106,6 +139,9 @@ static inline void conv_channel(device const ushort* proj, uint in_stride, devic
 }
 
 static inline void conv_state_update(device const ushort* proj, uint in_stride, device const ushort* src, device ushort* dst, uint c, uint T) {
+#if PRECONVOLVED
+  return;
+#endif
   // Only the final CW-1 inputs survive; copy them directly, including any
   // retained prefix when the step is shorter than the convolution window.
   for (uint j = 0; j < CW - 1u; j++) {
@@ -121,10 +157,90 @@ static inline float pick(thread const float* arr, uint i) {         // arr[i] wi
   return r;
 }
 
+// A prepared token only needs the convolution window ending at that token.
+static inline float conv_at(device const ushort* proj, uint stride, device const ushort* state,
+                            device const ushort* weight, uint channel, uint token) {
+#if PRECONVOLVED
+  return bf16f(proj[token * stride + channel]);
+#endif
+  float acc = 0.0f;
+#pragma clang loop unroll(full)
+  for (uint tap = 0; tap < CW; tap++) {
+    const uint pos = token + tap;
+    const float x = pos < CW - 1u ? bf16f(state[channel * (CW - 1u) + pos])
+                                        : bf16f(proj[(pos - (CW - 1u)) * stride + channel]);
+    acc = fma(bf16f(weight[channel * CW + tap]), x, acc);
+  }
+  return round_bf16(silu_f(round_bf16(acc)));
+}
+
+// The same arithmetic feeds either a device workspace or the whole head's
+// threadgroup workspace. Only the last token writes the opposite state slot.
+template<typename Output>
+static inline void prepare_token(device const ushort* proj, device const ushort* proj_ab,
+                                 device const ushort* conv_state, device ushort* conv_dst,
+                                 device const ushort* conv_w, device const float* neg_exp_a_log,
+                                 device const float* dt_bias, constant GdnParams& p,
+                                 uint t, uint T, uint h, uint kh, uint kind, uint lane, Output dst) {
+  device const ushort* pq = proj + p.q_off;
+#if DK == DV
+  // Equal head dimensions share the convolution body; only q/k need L2 normalization.
+  float vec[KR];
+  const uint base = kind < 2u ? kind * p.key_dim + kh * DK : 2u * p.key_dim + h * DV;
+  for (uint i = 0; i < KR; i++)
+    vec[i] = conv_at(pq, p.in_stride, conv_state, conv_w, base + lane + 32u * i, t);
+  if (kind < 2u) {
+    float ss = 0.f;
+    for (uint i = 0; i < KR; i++) ss = fma(vec[i], vec[i], ss);
+    const float inv = rsqrt(simd_sum(ss) + 1e-6f);
+    for (uint i = 0; i < KR; i++) {
+      vec[i] *= inv;
+      if (kind == 0u) vec[i] /= sqrt(float(DK));
+    }
+  }
+  for (uint i = 0; i < KR; i++) dst[kind * DK + lane + 32u * i] = vec[i];
+#else
+  if (kind < 2u) {
+    float vec[KR], ss = 0.0f;
+    const uint base = kind * p.key_dim + kh * DK;
+    for (uint i = 0; i < KR; i++) {
+      vec[i] = conv_at(pq, p.in_stride, conv_state, conv_w, base + lane + 32u * i, t);
+      ss = fma(vec[i], vec[i], ss);
+    }
+    const float inv = rsqrt(simd_sum(ss) + 1e-6f);
+    for (uint i = 0; i < KR; i++) {
+      float v = vec[i] * inv;
+      if (kind == 0u) v /= sqrt(float(DK));
+      dst[kind * DK + lane + 32u * i] = v;
+    }
+  } else {
+    for (uint i = 0; i < VR; i++)
+      dst[2u * DK + lane + 32u * i] = conv_at(pq, p.in_stride, conv_state, conv_w, 2u * p.key_dim + h * DV + lane + 32u * i, t);
+  }
+#endif
+  if (kind == 2u && lane == 0) {
+    device const ushort* ab = p.ab_separate ? proj_ab : proj;
+    const uint stride = p.ab_separate ? p.ab_stride : p.in_stride;
+    const float a = bf16f(ab[t * stride + p.a_off + h]), b = bf16f(ab[t * stride + p.b_off + h]);
+    dst[2u * DK + DV] = round_bf16(1.0f / (1.0f + exp(-b)));
+    dst[2u * DK + DV + 1u] = exp(neg_exp_a_log[h] * softplus_f(a + dt_bias[h]));
+  }
+#if SLOTS == 2u
+  // The last token's preparation owns the final window. Readers use the other
+  // slot, so q/k/v groups can write independently without a cross-group race.
+  // Keeping these address calculations out of the recurrence reduces its live registers.
+  if (t + 1u == T && (kind == 2u || h % (p.hv / p.hk) == 0u)) {
+    const uint base = kind < 2u ? kind * p.key_dim + kh * DK : 2u * p.key_dim + h * DV;
+    for (uint i = 0; i < (kind < 2u ? KR : VR); i++)
+      conv_state_update(pq, p.in_stride, conv_state, conv_dst, base + lane + 32u * i, T);
+  }
+#endif
+}
+
 // Compute the convolution and normalization once per (token, value head),
 // rather than once per state-column block. The recurrence keeps the same FP32 order.
 kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
-                        device const ushort* conv_state [[buffer(2)]], device const ushort* conv_w [[buffer(4)]],
+                        device ushort* conv_state [[buffer(2)]], device const ushort* conv_w [[buffer(4)]],
                         device const float* neg_exp_a_log [[buffer(5)]], device const float* dt_bias [[buffer(6)]],
                         device float* prepared [[buffer(8)]], constant GdnParams& p [[buffer(9)]],
 #if STEP_STATE
@@ -137,37 +253,18 @@ kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const us
 #else
   const uint T = p.t_active;
 #endif
-  const uint t = sg / p.hv, h = sg % p.hv, kh = h / (p.hv / p.hk);
+  const uint group = sg / 3u, kind = sg % 3u;
+  const uint t = group / p.hv, h = group % p.hv, kh = h / (p.hv / p.hk);
   if (t >= T) return;
 #if SLOTS == 2u
+  device ushort* conv_dst = conv_state + ((st->step & 1u) ^ 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
   conv_state += (st->step & 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
+#else
+  device ushort* conv_dst = conv_state;
 #endif
-  float qv[KR], kv[KR], vv[VR], y[1];
-  device const ushort* pq = proj + p.q_off;
-  for (uint i = 0; i < KR; i++) {
-    conv_channel(pq, p.in_stride, conv_state, conv_w, kh * DK + lane + 32u * i, t, 1, y);
-    qv[i] = y[0];
-    conv_channel(pq, p.in_stride, conv_state, conv_w, p.key_dim + kh * DK + lane + 32u * i, t, 1, y);
-    kv[i] = y[0];
-  }
-  for (uint i = 0; i < VR; i++) {
-    conv_channel(pq, p.in_stride, conv_state, conv_w, 2u * p.key_dim + h * DV + lane + 32u * i, t, 1, y);
-    vv[i] = y[0];
-  }
-  float sq = 0.0f, sk = 0.0f;
-  for (uint i = 0; i < KR; i++) { sq = fma(qv[i], qv[i], sq); sk = fma(kv[i], kv[i], sk); }
-  sq = simd_sum(sq); sk = simd_sum(sk);
-  const float rq = rsqrt(sq + 1e-6f), rk = rsqrt(sk + 1e-6f), scale = sqrt(float(DK));
   device float* dst = prepared + (t * p.hv + h) * PREP_STRIDE;
-  for (uint i = 0; i < KR; i++) { dst[lane + 32u * i] = (qv[i] * rq) / scale; dst[DK + lane + 32u * i] = kv[i] * rk; }
-  for (uint i = 0; i < VR; i++) dst[2u * DK + lane + 32u * i] = vv[i];
-  if (lane == 0) {
-    device const ushort* ab = p.ab_separate ? proj_ab : proj;
-    const uint stride = p.ab_separate ? p.ab_stride : p.in_stride;
-    const float a = bf16f(ab[t * stride + p.a_off + h]), b = bf16f(ab[t * stride + p.b_off + h]);
-    dst[2u * DK + DV] = round_bf16(1.0f / (1.0f + exp(-b)));
-    dst[2u * DK + DV + 1u] = exp(neg_exp_a_log[h] * softplus_f(a + dt_bias[h]));
-  }
+  prepare_token(proj, proj_ab, conv_state, conv_dst, conv_w, neg_exp_a_log, dt_bias,
+                p, t, T, h, kh, kind, lane, dst);
 }
 
 kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
@@ -175,14 +272,28 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
                       device const ushort* conv_w [[buffer(4)]], device const float* neg_exp_a_log [[buffer(5)]],
                       device const float* dt_bias [[buffer(6)]], device float* o_part [[buffer(7)]],
 
-#if PREPARED
+#if PREPARED && !LOCAL_PREPARE
                       device const float* prepared [[buffer(8)]],
 #endif
                       constant GdnParams& p [[buffer(9)]],
+#if FUSED_NORM
+                      constant GdnParams& np [[buffer(11)]],
+                      device const float* norm_w [[buffer(12)]],
+                      device const ushort* z [[buffer(13)]],
+                      device ushort* final_out [[buffer(14)]],
+#endif
 #if STEP_STATE
                       device const StepState* st [[buffer(15)]],
 #endif
                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
+#if FUSED_NORM
+  // One whole head per threadgroup: state slices publish each token for its
+  // gated RMSNorm, preserving the standalone norm's lane and summation order.
+  threadgroup float readout[TP][DV];
+#endif
+#if LOCAL_PREPARE
+  threadgroup float local_prep[TP * PREP_STRIDE];
+#endif
   const uint sg = gid / sw;
   const uint rep = p.hv / p.hk;
 #if STEP_STATE
@@ -217,11 +328,32 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
   // conv channels are indexed relative to the q|k|v columns (q at q_off, k at q_off + key_dim, v at q_off + 2·key_dim):
   // the projection may carry other rows ahead of them
   device const ushort* pq = proj + p.q_off;
+#if SINGLE_PASS
+  // The emitter launches every state slice, with compiled T <= TP. No grid or
+  // token-pass replay is needed; partial active lengths still use live state.
+  const uint b = sg;
+  if (b < n_blocks) {
+#else
   for (uint b = sg; b < n_blocks; b += p.n_sg) {
+#endif
     const uint h = b / NSG, grp = b % NSG;
     const uint kh = h / rep;
+#if SINGLE_PASS
+    const uint t0 = 0;
+    if (T > 0) {
+#else
     for (uint t0 = 0; t0 < T; t0 += TP) {
+#endif
       const uint n = min(TP, T - t0);
+#if LOCAL_PREPARE
+      // A threadgroup owns a whole head or a disjoint subset of its columns.
+      // Each subset shares preparation; only the first writes the conv state.
+      for (uint job = grp % LOCAL_GROUPS; job < 3u * n; job += LOCAL_GROUPS)
+        prepare_token(proj, proj_ab, conv_in, conv_out, conv_w, neg_exp_a_log, dt_bias,
+                      p, t0 + job / 3u, grp < LOCAL_GROUPS ? T : 0u, h, kh, job % 3u, lane,
+                      local_prep + (job / 3u) * PREP_STRIDE);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+#endif
       // 1. conv + SiLU of this lane's channels for the pass's tokens
       float qv[TREG][KR], kv[TREG][KR], vv[TREG][VR];
       float beta[TREG], eg[TREG];
@@ -269,7 +401,11 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
         for (uint t = 0; t < TP; t++) {
           if (t >= n) break;
 #if PREPARED
+#if LOCAL_PREPARE
+          threadgroup const float* src = local_prep + t * PREP_STRIDE;
+#else
           device const float* src = prepared + ((t0 + t) * p.hv + h) * PREP_STRIDE;
+#endif
           for (uint i = 0; i < KR; i++) {
             qv[0][i] = src[lane + 32u * i]; kv[0][i] = src[DK + lane + 32u * i];
           }
@@ -295,7 +431,13 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
             float part = 0.0f;                                   // advances the state and binds no output of its own)
             for (uint i = 0; i < KR; i++) part = fma(S[i][j], qv[TI][i], part);
             const float o = simd_sum(part);
-            if (lane == 0) o_part[(t0 + t) * p.out_stride + h * DV + s * SL + j] = o;
+            if (lane == 0) {
+#if FUSED_NORM
+              readout[t][s * SL + j] = o;
+#else
+              o_part[(t0 + t) * p.out_stride + h * DV + s * SL + j] = o;
+#endif
+            }
           }
 #endif
         }
@@ -303,9 +445,37 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
           for (uint j = 0; j < SL; j++) rec_out[((ulong)(h * DK + lane + 32u * i)) * DV + s * SL + j] = S[i][j];
         }
       }
+#if LOCAL_PREPARE && !FUSED_NORM && !SINGLE_PASS
+      if (t0 + TP < T) threadgroup_barrier(mem_flags::mem_threadgroup);
+#endif
+#if FUSED_NORM
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      for (uint t = sg % NSG; t < n; t += NSG) {
+        float ob[VR], ss = 0.0f;
+        for (uint i = 0; i < VR; i++) {
+          ob[i] = round_bf16(readout[t][lane + 32u * i]);
+          ss = fma(ob[i], ob[i], ss);
+        }
+        const float rstd = rsqrt(simd_sum(ss) / float(DV) + np.eps);
+        for (uint i = 0; i < VR; i++) {
+          const uint v = lane + 32u * i;
+          float y = round_bf16(ob[i] * rstd);
+          y = round_bf16(norm_w[v] * y);
+          const float zz = bf16f(z[(t0 + t) * np.in_stride + h * DV + v]);
+          y = round_bf16(y * silu_f(zz));
+#if PERM_OUT
+          final_out[(t0 + t) * p.out_stride + perm_dest(h * DV + v)] = bf16bits(y);
+#else
+          final_out[(t0 + t) * p.out_stride + h * DV + v] = bf16bits(y);
+#endif
+        }
+      }
+      if (t0 + TP < T) threadgroup_barrier(mem_flags::mem_threadgroup);
+#endif
     }
     // the new conv state: the last CW-1 inputs of the step (q/k channels once per key head, v channels per head),
     // written by the head's first slice group
+#if !PREPARED || SLOTS != 2u
     if (grp == 0u) {
       if (h % rep == 0u) {
         for (uint i = 0; i < KR; i++) {
@@ -315,6 +485,7 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
       }
       for (uint i = 0; i < VR; i++) conv_state_update(pq, p.in_stride, conv_in, conv_out, 2u * p.key_dim + h * DV + lane + 32u * i, T);
     }
+#endif
   }
 }
 
@@ -341,6 +512,10 @@ kernel void gdn_norm(device const float* o_part [[buffer(0)]], device const usho
     y = round_bf16(norm_w[v] * y);
     const float z = bf16f(proj[t * p.in_stride + p.z_off + h * DV + v]);
     y = round_bf16(y * silu_f(z));
+#if PERM_OUT
+    out[t * p.out_stride + perm_dest(h * DV + v)] = bf16bits(y);
+#else
     out[t * p.out_stride + h * DV + v] = bf16bits(y);
+#endif
   }
 }

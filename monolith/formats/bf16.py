@@ -22,6 +22,7 @@ class BF16(Format):
     msl_decode = """
 #define WEIGHTS_PER_WORD 8u
 #define SCALE_GROUP 0u
+#define BF16_STORAGE 1
 static inline void decode_word(uint4 q, thread float* out) {
   uint w[4] = {q.x, q.y, q.z, q.w};
   for (uint i = 0; i < 4; i++) { out[2 * i] = as_type<float>(w[i] << 16); out[2 * i + 1] = as_type<float>(w[i] & 0xFFFF0000u); }

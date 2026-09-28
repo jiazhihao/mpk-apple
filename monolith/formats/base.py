@@ -22,8 +22,12 @@ class PackLayout:
     lane_order: str = "interleaved16"
     lanes: int = 32
     scale_placement: str = "inline"
+    share_scales: bool = True  # affine INT4 block scales: store a group once when several lane stripes share it
+    scale_order: str = "lane"  # "payload": coalesce eligible NVFP4 block scales in physical weight-word order
 
     def __post_init__(self) -> None:
+        if self.scale_order not in ("lane", "payload"):
+            raise ValueError("PackLayout.scale_order must be 'lane' or 'payload'")
         if self.lane_order not in ("contiguous", "interleaved16"):
             raise ValueError(f"PackLayout.lane_order must be 'contiguous' or 'interleaved16', got {self.lane_order!r}")
         if self.rows <= 0 or self.lanes != 32:

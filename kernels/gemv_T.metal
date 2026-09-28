@@ -35,6 +35,9 @@
 #ifndef EPILOGUE_ROUND
 #define EPILOGUE_ROUND 0             // with EPILOGUE=1: round the product to BF16 before the residual add (two roundings, the
 #endif                               // reference's separate linear + add; the fused layers keep the single rounding)
+#ifndef LOCAL_GATE_CACHE
+#define LOCAL_GATE_CACHE 0
+#endif
 #ifndef EPILOGUE
 #define EPILOGUE 0
 #endif
@@ -154,16 +157,55 @@ static inline uint4 sub_word(uint4 q, uint lane) {
   return q;
 #endif
 }
+#ifndef SCALE_LANE_DIVISOR
+#define SCALE_LANE_DIVISOR 1u
+#endif
 #ifndef SCALE_PLACEMENT
 #define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
 #endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
 #if SCALE_PLACEMENT
 #define SCALE_BASE (R * 32u * PAYLOAD_WORDS / LANES_PER_WORD)          // the block's payload words (sub-word units share words)
-#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
-#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * (32u / SCALE_LANE_DIVISOR) * SCALE_RUN + ((ln) / SCALE_LANE_DIVISOR) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) (((((ln) / SCALE_LANE_DIVISOR) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
 #else
 #define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
 #define SCALE_SOFF(ln) 0u
+#endif
+// Reconstruct a lane's scale words for the legacy GEMV/gather interfaces.
+// Matrix and row-specialized kernels read coalesced scale pairs directly.
+#if SCALE_PAYLOAD_ORDER
+#undef SCALE_SOFF
+#define SCALE_SOFF(ln) 0u
+static inline uint4 payload_scale_word(device const uint4* wb, uint ln, uint r, uint s) {
+  uint4 result = uint4(0);
+#pragma clang loop unroll(full)
+  for (uint b = 0; b < 16u; b++) {
+    const uint g = s * 16u + b;
+    if (g < SCALE_RUN) {
+      const uint off = r * 32u * SCALE_RUN + (g / 2u) * 64u + ln * 2u + g % 2u;
+      const uint v = reinterpret_cast<device const uchar*>(wb + SCALE_BASE)[off];
+      result[b / 4u] |= v << ((b % 4u) * 8u);
+    }
+  }
+  return result;
+}
+#define LOAD_SCALE_WORD(wb, ln, r, s) payload_scale_word((wb), (ln), (r), (s))
+#else
+#define LOAD_SCALE_WORD(wb, ln, r, s) ((wb)[SCALE_WORD((ln), (r), (s))])
+#endif
+
+// Load a short, uint-aligned scale run directly instead of a uint4 followed
+// by lane-dependent extraction (affine pairs or byte-sized FP4 scales).
+#if !SCALE_PAYLOAD_ORDER && SCALE_PLACEMENT && SCALE_RUN <= 8 && ((SCALE_BIAS && SCALE_UNIT_BYTES == 4) || (SCALE_UNIT_BYTES == 1 && SCALE_RUN % 4 == 0))
+#define NARROW_SCALE_RUN 1
+#define SCALE_REG_OFFSET(ln) 0u
+static inline uint narrow_scale_word(device const uint4* wb, uint ln, uint r, uint g) {
+  return reinterpret_cast<device const uint*>(wb + SCALE_BASE)[
+      (r * (32u / SCALE_LANE_DIVISOR) + ln / SCALE_LANE_DIVISOR) * (SCALE_RUN / 4u) + g];
+}
+#else
+#define NARROW_SCALE_RUN 0
+#define SCALE_REG_OFFSET(ln) SCALE_SOFF(ln)
 #endif
 #if SCALE_PLACEMENT
 #define BLOCK_WORDS (R * 32u * UNIT_WORDS / LANES_PER_WORD + SCALE_REGION_WORDS)   // a block: its payload words then its scale region
@@ -298,11 +340,23 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
     for (uint t = 0; t < T; t++) ssq_out[t] = 0.0f;
 #endif
 #if EPILOGUE == 2
-    float gate_v[CHUNK][T];
-    // the item's gate rows [part·CR, (part+1)·CR) then their up partners CHUNK + the same range (the pairs stay in one item)
 #define CR (CHUNK / RSPLIT)
+#if LOCAL_GATE_CACHE
+    // A row-split item only consumes its own gate rows. Relative indices let
+    // the compiler keep a single row group's values in registers.
+    float gate_v[CR][T];
+#define GATE_SLOT (ri + i)
+#else
+    float gate_v[CHUNK][T];
+#endif
+    // the item's gate rows [part·CR, (part+1)·CR) then their up partners CHUNK + the same range (the pairs stay in one item)
     for (uint side = 0; side < 2u; side++)
+#if LOCAL_GATE_CACHE
+    for (uint ri = 0; ri < CR; ri += RG) {
+      const uint r0 = side * CHUNK + part * CR + ri;
+#else
     for (uint r0 = side * CHUNK + part * CR; r0 < side * CHUNK + (part + 1u) * CR; r0 += RG) {
+#endif
 #elif PAIRS
     for (uint r0 = 0; r0 < R; r0 += RG) {
 #else
@@ -311,11 +365,17 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
       float acc[RG][T];
       for (uint i = 0; i < RG; i++) for (uint t = 0; t < T; t++) acc[i][t] = 0.0f;
 #if SCALE_GROUP > 0
+#if NARROW_SCALE_RUN
+      uint scw[RG][SCALE_RUN / 4u];
+      for (uint i = 0; i < RG; i++) for (uint g = 0; g < SCALE_RUN / 4u; g++)
+        scw[i][g] = narrow_scale_word(wb, lane, r0 + i, g);
+#else
       uint scw[RG][SCALE_WORDS * 4];
       for (uint i = 0; i < RG; i++) for (uint s = 0; s < SCALE_WORDS; s++) {
-        uint4 q = wb[SCALE_WORD(lane, r0 + i, s)];
+        uint4 q = LOAD_SCALE_WORD(wb, lane, r0 + i, s);
         scw[i][4 * s] = q.x; scw[i][4 * s + 1] = q.y; scw[i][4 * s + 2] = q.z; scw[i][4 * s + 3] = q.w;
       }
+#endif
 #endif
       for (uint j = 0; j < PAYLOAD_WORDS; j++) {
         const uint col = lane * KL + j * WPW;
@@ -408,10 +468,10 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
                 part = fma(wv[ee], xv, part);
               }
 #if SCALE_GROUP > 0
-              const float s = decode_scale(scw[i] + SCALE_UOFF, SCALE_SOFF(lane) + GROUP_OF(j, g));
+              const float s = decode_scale(scw[i] + SCALE_UOFF, SCALE_REG_OFFSET(lane) + GROUP_OF(j, g));
               acc[i][t] = fma(part, s, acc[i][t]);
 #if SCALE_BIAS
-              acc[i][t] = fma(decode_bias(scw[i] + SCALE_UOFF, SCALE_SOFF(lane) + GROUP_OF(j, g)), xs[t][g], acc[i][t]);
+              acc[i][t] = fma(decode_bias(scw[i] + SCALE_UOFF, SCALE_REG_OFFSET(lane) + GROUP_OF(j, g)), xs[t][g], acc[i][t]);
 #endif
 #else
               acc[i][t] += part;
@@ -428,9 +488,20 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
         for (uint t = 0; t < T; t++) {
           float v = simd_sum(acc[i][t]) * rs;
 #if EPILOGUE == 2
-          if (r < CHUNK) { gate_v[r][t] = v; continue; }
+          if (r < CHUNK) {
+#if LOCAL_GATE_CACHE
+            gate_v[GATE_SLOT][t] = v;
+#else
+            gate_v[r][t] = v;
+#endif
+            continue;
+          }
           const uint orow = bb * CHUNK + (r - CHUNK), n_out = p.n_rows / 2u;
+#if LOCAL_GATE_CACHE
+          v = silu_f(gate_v[GATE_SLOT][t]) * v;
+#else
           v = silu_f(gate_v[r - CHUNK][t]) * v;
+#endif
 #else
           const uint orow = rrow, n_out = p.n_rows;
 #if EPILOGUE == 1

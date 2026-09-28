@@ -36,21 +36,37 @@ def _module(hidden, hk, hv, dk, dv, seed):
 
 
 class Harness:
-    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False):
+    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False, perm_out=None, fused_norm=False, specialize=False, local_prepare=False, local_groups=None, single_pass=False):
         """The engine's configuration: two state slots by step parity read from StepState (a single slot races when
         several value heads share a key head's conv window — the kernel's note)."""
         from monolith.core import StepStateLayout
 
         self.dev, self.m, self.ab_separate = dev, m, ab_separate
-        self.prepared = prepared
+        self.prepared, self.fused_norm = prepared, fused_norm
+        self.local_prepare = local_prepare
+        assert not local_prepare or (prepared and slices_per_block == 1)
+        self.local_groups = local_groups or m.dv // slice_cols
         self.layout = StepStateLayout(t_max=max(8, t_max), gamma_max=7)
         macros = dict(kernels.gdn_macros(m.dk, m.dv, conv_width=CW, t=t_max, slice_cols=slice_cols, slices_per_block=slices_per_block,
                                          tokens_per_pass=tokens_per_pass, slots=2), STEP_STATE="1")
+        if perm_out is not None:
+            macros.update(kernels.perm_out_macros(m.value_dim, *perm_out))
         if prepared:
             macros["PREPARED"] = "1"
-        lib = nt.Library(dev, kernels.gdn_source().replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1), macros)
+        if fused_norm:
+            assert prepared and slice_cols == 4 and slices_per_block == 1
+            macros["FUSED_NORM"] = "1"
+        if local_prepare:
+            macros["LOCAL_PREPARE"] = "1"
+            macros["LOCAL_GROUPS"] = f"{self.local_groups}u"
+        if single_pass:
+            assert local_prepare and t_max <= int(macros["TP"].rstrip("u"))
+            macros["SINGLE_PASS"] = "1"
+        self.source = kernels.gdn_source().replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1)
+        self.macros, self.specialize = macros, specialize
+        lib = nt.Library(dev, self.source, macros)
         self.pso, self.pso_norm = nt.Pipeline(lib, "gdn_mixer"), nt.Pipeline(lib, "gdn_norm")
-        if prepared:
+        if prepared and not local_prepare:
             self.pso_prepare = nt.Pipeline(lib, "gdn_prepare")
             self.prep = nt.Buffer(dev, t_max * m.v_heads * (2 * m.dk + m.dv + 2) * 4)
         self.o_part = nt.Buffer(dev, kernels.gdn_workspace(t_max, m.v_heads, m.dv))
@@ -64,7 +80,7 @@ class Harness:
                     nt.Buffer(dev, (-np.exp(m.param("a_log").float().numpy())).astype(np.float32).tobytes()),
                     nt.Buffer(dev, m.param("dt_bias").float().numpy().astype(np.float32).tobytes()),
                     nt.Buffer(dev, m.param("norm_w").float().numpy().astype(np.float32).tobytes())]
-        self.n_sg = 12 * dev.info().gpu_cores
+        self.n_sg = m.v_heads * m.dv // slice_cols if local_prepare or fused_norm else 12 * dev.info().gpu_cores
 
     def set_state(self, state):                                              # into the slot the next pass reads
         slot = self.step_no & 1
@@ -79,7 +95,7 @@ class Harness:
         rec = np.frombuffer(self.rec_state.read(slot * self.rec_bytes, self.rec_bytes), dtype=np.float32).reshape(m.v_heads, m.dk, m.dv)
         return conv, rec
 
-    def step(self, proj, t_active=None):
+    def step(self, proj, t_active=None, done=False):
         """``proj`` torch BF16 [T, N1] in checkpoint column order."""
         m = self.m
         t = proj.shape[0]
@@ -95,20 +111,35 @@ class Harness:
         params = kernels.gdn_params(hv=hv, hk=m.k_heads, t_active=t if t_active is None else t_active, q_off=vd, k_off=vd + kd, v_off=vd + 2 * kd,
                                     z_off=0, a_off=a_off, b_off=b_off, in_stride=main.shape[1], ab_stride=ab_stride,
                                     ab_separate=self.ab_separate, out_stride=vd, n_sg=self.n_sg, key_dim=kd, eps=EPS)
+        if self.specialize:
+            source, constants = kernels.specialize_params(self.source, "gdn", params)
+            if self.fused_norm:
+                source, norm_constants = kernels.specialize_params(source, "gdn", params, "np")
+                constants.update(norm_constants)
+            lib = nt.Library(self.dev, source, dict(self.macros, **constants))
+            self.pso, self.pso_norm = nt.Pipeline(lib, "gdn_mixer"), nt.Pipeline(lib, "gdn_norm")
+            if self.prepared and not self.local_prepare:
+                self.pso_prepare = nt.Pipeline(lib, "gdn_prepare")
+            self.specialize = False
         out = nt.Buffer(self.dev, t * vd * 2); out.fill(0)
         mb = nt.Buffer(self.dev, main.tobytes())
         abb = nt.Buffer(self.dev, ab.tobytes()) if self.ab_separate else mb
-        self.st.write(self.layout.pack({"step": self.step_no, "t_this_step": t if t_active is None else t_active}), 0)
+        self.st.write(self.layout.pack({"step": self.step_no, "t_this_step": t if t_active is None else t_active, "done": int(done)}), 0)
         d = (nt.Dispatch().pipeline(self.pso).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state).buffer(3, self.rec_state)
              .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(7, self.o_part)
              .bytes(9, params).buffer(15, self.st).grid(-(-(self.n_sg * 32) // 384)).threadgroup(384).barrier())
         d2 = (nt.Dispatch().pipeline(self.pso_norm).buffer(0, self.o_part).buffer(1, mb).buffer(2, self.aux[3]).buffer(3, out)
               .bytes(4, params).buffer(15, self.st).grid(t * hv).threadgroup(32))
         ds = [d, d2]
-        if self.prepared:
+        if self.local_prepare:
+            d.grid(self.n_sg // self.local_groups).threadgroup(32 * self.local_groups)
+        if self.fused_norm:
+            d.bytes(11, params).buffer(12, self.aux[3]).buffer(13, mb).buffer(14, out).grid(hv).threadgroup(32 * m.dv // 4)
+            ds = [d]
+        if self.prepared and not self.local_prepare:
             dp = (nt.Dispatch().pipeline(self.pso_prepare).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state)
                   .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(8, self.prep)
-                  .bytes(9, params).buffer(15, self.st).grid(t * hv).threadgroup(32).barrier())
+                  .bytes(9, params).buffer(15, self.st).grid(3 * t * hv).threadgroup(32).barrier())
             d.buffer(8, self.prep)
             ds.insert(0, dp)
         r = nt.Queue(self.dev).run(ds)
@@ -144,7 +175,7 @@ def _check(got, ref_out, got_rec, ref_rec, got_conv, ref_conv):
 def test_matches_layer_oracle(dev, hk, hv, ab_separate, t, prepared):
     torch = pytest.importorskip("torch")
     m, rng = _module(64, hk, hv, 128, 128, seed=hk * 7 + hv + t)
-    h = Harness(dev, m, t, ab_separate=ab_separate, prepared=prepared, slice_cols=1 if prepared else 8, slices_per_block=1 if prepared else 4, tokens_per_pass=8 if prepared else None)
+    h = Harness(dev, m, t, ab_separate=ab_separate, prepared=prepared, slice_cols=4 if prepared else 8, slices_per_block=1 if prepared else 4, tokens_per_pass=8 if prepared else None)
     state = {"l.conv_state": torch.from_numpy((rng.standard_normal((m.conv_dim, CW - 1)) * 0.5).astype(np.float32)).to(torch.bfloat16),
              "l.rec_state": torch.from_numpy((rng.standard_normal((hv, 128, 128)) * 0.1).astype(np.float32))}
     h.set_state(state)
@@ -272,3 +303,101 @@ def test_state_slots_and_commit_pass(dev):
     got2 = run(proj2, {"step": 1, "t_this_step": 1})
     c0, r0 = slot(0)
     _check(got2, ref2, r0, s_two["l.rec_state"].numpy(), c0, s_two["l.conv_state"].float().numpy())
+
+
+@pytest.mark.parametrize("wpw,tk", [(8, 64), (32, 64), (32, 128)])
+def test_norm_writes_consumer_permutation(dev, wpw, tk):
+    torch = pytest.importorskip("torch")
+    m, rng = _module(64, 16, 16, 128, 128, seed=25)
+    proj = _proj(rng, torch, 4, m.in_proj.n)
+    natural = Harness(dev, m, 4, prepared=True).step(proj, t_active=3)
+    permuted = Harness(dev, m, 4, prepared=True, perm_out=(wpw, tk)).step(proj, t_active=3)
+    columns = kernels.x_permute_columns(m.value_dim, wpw, tk)
+    assert np.array_equal(permuted, natural[:, columns])
+    assert np.all(permuted[3:] == 0)
+
+
+@pytest.mark.parametrize("active", [0, 1, 4, 6, 8])
+@pytest.mark.parametrize("tp,ab_separate,perm_out", [(8, False, None), (3, True, (8, 64)), (1, False, None)])
+@pytest.mark.parametrize("local_prepare", [False, True])
+def test_fused_norm_matches_separate_passes(dev, active, tp, ab_separate, perm_out, local_prepare):
+    """Exact fusion equivalence with filled state, continuation, inactive rows,
+    separate scalar projection, output permutation and multiple token passes."""
+    torch = pytest.importorskip("torch")
+    m, rng = _module(64, 8, 16, 128, 128, seed=71)
+    state = {"l.conv_state": torch.from_numpy(rng.normal(0, .2, (m.conv_dim, CW - 1)).astype(np.float32)).to(torch.bfloat16),
+             "l.rec_state": torch.from_numpy(rng.normal(0, .1, (16, 128, 128)).astype(np.float32))}
+    hs = [Harness(dev, m, 8, prepared=True, slice_cols=4, slices_per_block=1, tokens_per_pass=tp,
+                  ab_separate=ab_separate, perm_out=perm_out, fused_norm=fused, local_prepare=local_prepare and fused) for fused in (False, True)]
+    for h in hs:
+        h.set_state(state)
+    for _ in range(2):
+        proj = _proj(rng, torch, 8, m.in_proj.n)
+        out = [h.step(proj, t_active=active) for h in hs]
+        np.testing.assert_array_equal(*out)
+        for attr in ("conv_state", "rec_state"):
+            size = 2 * (hs[0].conv_bytes if attr == "conv_state" else hs[0].rec_bytes)
+            assert getattr(hs[0], attr).read(0, size) == getattr(hs[1], attr).read(0, size)
+        assert not out[1][active:].any()
+    h = hs[1]
+    before = (h.conv_state.read(0, 2 * h.conv_bytes), h.rec_state.read(0, 2 * h.rec_bytes))
+    assert not h.step(proj, done=True).any()
+    assert before == (h.conv_state.read(0, 2 * h.conv_bytes), h.rec_state.read(0, 2 * h.rec_bytes))
+
+
+@pytest.mark.parametrize("sl,groups,tp", [(4, 16, 4), (2, 32, 6), (4, 32, 8), (2, 16, 3)])
+def test_local_column_groups_match_workspace_preparation(dev, sl, groups, tp):
+    """Split heads retain exclusive convolution writers and synchronize shared
+    preparation between token passes, including partial/empty steps and done."""
+    torch = pytest.importorskip("torch")
+    m, rng = _module(64, 8, 16, 128, 128, seed=83)
+    state = {"l.conv_state": torch.from_numpy(rng.normal(0, .2, (m.conv_dim, CW - 1)).astype(np.float32)).to(torch.bfloat16),
+             "l.rec_state": torch.from_numpy(rng.normal(0, .1, (16, 128, 128)).astype(np.float32))}
+    hs = [Harness(dev, m, 8, prepared=True, slice_cols=sl, slices_per_block=1, tokens_per_pass=tp,
+                  ab_separate=True, perm_out=(8, 64), local_prepare=local, local_groups=groups, specialize=True)
+          for local in (False, True)]
+    for h in hs:
+        h.set_state(state)
+    for active, done in [(8, False), (3, False), (1, False), (0, False), (8, True)]:
+        proj = _proj(rng, torch, 8, m.in_proj.n)
+        np.testing.assert_array_equal(*[h.step(proj, t_active=active, done=done) for h in hs])
+        for attr, size in (("conv_state", 2 * hs[0].conv_bytes), ("rec_state", 2 * hs[0].rec_bytes)):
+            assert getattr(hs[0], attr).read(0, size) == getattr(hs[1], attr).read(0, size)
+
+
+@pytest.mark.parametrize("prepared,fused,separate,local", [(False, False, False, False), (True, False, True, False), (True, True, False, False), (True, True, True, True)])
+def test_static_geometry_preserves_live_state_and_partial_steps(dev, prepared, fused, separate, local):
+    torch = pytest.importorskip("torch")
+    m, rng = _module(64, 8, 16, 128, 128, seed=91)
+    state = {"l.conv_state": torch.from_numpy(rng.normal(0, .2, (m.conv_dim, CW - 1)).astype(np.float32)).to(torch.bfloat16),
+             "l.rec_state": torch.from_numpy(rng.normal(0, .1, (16, 128, 128)).astype(np.float32))}
+    hs = [Harness(dev, m, 8, prepared=prepared, fused_norm=fused, ab_separate=separate,
+                  slice_cols=4, slices_per_block=1, tokens_per_pass=8, specialize=flag, local_prepare=local) for flag in (False, True)]
+    for h in hs:
+        h.set_state(state)
+    for active, done in [(1, False), (8, False), (3, False), (0, False), (8, True)]:
+        proj = _proj(rng, torch, 8, m.in_proj.n)
+        out = [h.step(proj, t_active=active, done=done) for h in hs]
+        np.testing.assert_array_equal(*out)
+        for attr in ("conv_state", "rec_state"):
+            size = 2 * (hs[0].conv_bytes if attr == "conv_state" else hs[0].rec_bytes)
+            assert getattr(hs[0], attr).read(0, size) == getattr(hs[1], attr).read(0, size)
+
+
+@pytest.mark.parametrize("t,sl,groups", [(1, 4, 32), (4, 4, 16), (6, 2, 32), (8, 4, 32), (8, 2, 32)])
+@pytest.mark.parametrize("separate", [False, True])
+def test_single_pass_matches_general_recurrence_with_continuation(dev, t, sl, groups, separate):
+    torch = pytest.importorskip("torch")
+    m, rng = _module(64, 8, 16, 128, 128, seed=103)
+    state = {"l.conv_state": torch.from_numpy(rng.normal(0, .2, (m.conv_dim, CW - 1)).astype(np.float32)).to(torch.bfloat16),
+             "l.rec_state": torch.from_numpy(rng.normal(0, .1, (16, 128, 128)).astype(np.float32))}
+    hs = [Harness(dev, m, t, prepared=True, slice_cols=sl, slices_per_block=1, tokens_per_pass=t,
+                  ab_separate=separate, perm_out=(8, 64), local_prepare=True, local_groups=groups,
+                  specialize=True, fused_norm=t == 1, single_pass=single) for single in (False, True)]
+    for h in hs:
+        h.set_state(state)
+    for active, done in [(t, False), (1, False), (max(0, t - 1), False), (0, False), (t, False), (t, True)]:
+        proj = _proj(rng, torch, t, m.in_proj.n)
+        np.testing.assert_array_equal(*[h.step(proj, t_active=active, done=done) for h in hs])
+        for attr, size in (("conv_state", 2 * hs[0].conv_bytes), ("rec_state", 2 * hs[0].rec_bytes)):
+            assert getattr(hs[0], attr).read(0, size) == getattr(hs[1], attr).read(0, size)

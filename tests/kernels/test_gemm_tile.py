@@ -68,7 +68,7 @@ def test_x_permute_column_order():
     assert perm[4] == 2 * kl and perm[8] == 4 * kl and perm[16] == 4 and perm[64] == 16 and perm[256] == 8 * kl
 
 
-def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1, placement="inline"):
+def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None, tk=None, ksplit=1, placement="inline", specialize=False):
     rng = np.random.default_rng(5)
     spec = random_spec(fmt, n, k, rng)
     data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
@@ -83,6 +83,10 @@ def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None
     y = nt.Buffer(dev, tm * n * (2 if out_bf16 else 4)); y.fill(0)
     n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", kernels.gemm_tiles(n, tn), dev.info().gpu_cores,
                                            min(384, pso.max_threads_per_threadgroup))
+    if specialize:
+        source, constants = kernels.specialize_params(kernels.gemm_source(fmt), "gemm",
+            kernels.gemm_params(n, kernels.gemm_tiles(n, tn), n_sg, tm))
+        pso = nt.Pipeline(nt.Library(dev, source, dict(macros, **constants), kernels.MSL_TENSOR_OPS), "gemm_tile")
     d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(dev, xb.tobytes())).buffer(3, xp)
           .bytes(4, kernels.x_permute_params(k, t_act, tm, int(f.weights_per_word), tk)).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
     d1 = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, data)).buffer(1, nt.Buffer(dev, row_scales.tobytes())).buffer(2, xp).buffer(3, y)
@@ -140,11 +144,13 @@ def _rbf(a):
 class Gemm:
     """One packed matrix and the dispatch plumbing for the tile's variants (mirrors the fused-GEMV harness)."""
 
-    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16"):
+    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16", function="gemm_tile", placement="inline", scale_order="lane"):
         self.dev, self.n, self.k, self.tm, self.fmt = dev, n, k, tm, fmt
+        self.function = function
         rng = np.random.default_rng(seed)
         self.spec = random_spec(fmt, n, k, rng)
-        self.data, self.info, self.row_scales = pack_spec(self.spec, PackLayout(rows=rows, lane_order=lane_order))
+        self.data, self.info, self.row_scales = pack_spec(self.spec, PackLayout(rows=rows, lane_order=lane_order,
+            scale_placement=placement, scale_order=scale_order))
         f = FORMATS.get(fmt)
         rs = self.row_scales.astype(np.float64)[:, None]
         self.w = _rbf((f.dequantize(self.spec) / rs).astype(np.float32)).astype(np.float64) * rs      # the BF16 operand × the tensor scale
@@ -152,7 +158,8 @@ class Gemm:
         self.wbuf, self.rsbuf = nt.Buffer(dev, self.data), nt.Buffer(dev, self.row_scales.tobytes())
 
     def run(self, x_bf16, *, t_active=None, norm=None, epilogue=None, residual=None, stat_out=False, out_bf16=None,
-            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None, ksplit=1):
+            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None, ksplit=1, conv=None,
+            fixed_active=False, perm_groups=1, perm_simdgroups=kernels.GEMM_PERM_SG, perm_unroll=4):
         """``norm`` = (stat [T, parts] float32, parts, norm_w [K]); ``row_range`` = (start, count) in slab rows;
         ``step_state`` = (layout, values) with ``t_range`` = (lo, hi) for a predicated variant."""
         t_act = self.tm if t_active is None else t_active
@@ -160,7 +167,8 @@ class Gemm:
             out_bf16 = epilogue is not None
         macros = kernels.gemm_macros(self.info, tm=self.tm, out_bf16=out_bf16, epilogue=epilogue, stat_out=stat_out, round_before_residual=round_residual, ksplit=ksplit)
         tk = int(macros["TK"].rstrip("u"))
-        pmacros = dict(kernels.x_permute_macros(norm is not None))
+        pmacros = dict(kernels.x_permute_macros(norm is not None, groups=perm_groups,
+                                               simdgroups=perm_simdgroups, unroll=perm_unroll))
         src = kernels.gemm_source(self.fmt)
         if step_state is not None:
             layout, values = step_state
@@ -173,7 +181,7 @@ class Gemm:
         macros.update(extra_macros or {}); pmacros.update(extra_macros or {})
         lib = nt.Library(self.dev, src, macros, language_version=kernels.MSL_TENSOR_OPS)
         plib = nt.Library(self.dev, src, {**macros, **pmacros}, language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
-        pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(plib, "x_permute")
+        pso, ppso = nt.Pipeline(lib, self.function), nt.Pipeline(plib, "x_permute")
         n = self.n
         if row_range is None:
             tile0, n_tiles, n_rows = 0, kernels.gemm_tiles(n, int(macros["TN"].rstrip("u"))), n
@@ -183,29 +191,52 @@ class Gemm:
         n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", n_tiles, self.dev.info().gpu_cores,
                                                min(384, pso.max_threads_per_threadgroup))
         n_blocks = -(-n_rows // self.info.rows)
+        n_parts = n_blocks
+        if self.function in ("gemv_bf16_small", "gemv_nvfp4_rows", "gemv_bf16_rows"):
+            rm = int(str(macros.get("BF_ROWS", "2")).rstrip("u")) if self.function == "gemv_bf16_rows" else 2
+            n_sg, n_tg, tg = n_blocks * self.info.rows // rm, n_blocks, 32 * self.info.rows // rm
+            if self.function == "gemv_nvfp4_rows":
+                rm = int(str(macros.get("NV_ROWS", "2")).rstrip("u"))
+                groups = int(str(macros.get("NV_SG", self.info.rows // rm)).rstrip("u"))
+                n_sg, n_tg, tg = n_blocks * self.info.rows // rm, n_blocks * self.info.rows // (rm * groups), 32 * groups
+                n_parts = n_tg
+        if fixed_active:
+            assert step_state is None
+            specialized, constants = kernels.specialize_params(src, "gemm",
+                kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks), fixed_active=True)
+            pso = nt.Pipeline(nt.Library(self.dev, specialized, dict(macros, **constants),
+                language_version=kernels.MSL_TENSOR_OPS), self.function)
         n_out = n_rows // 2 if epilogue == "silu_mul" else n_rows
         xp = nt.Buffer(self.dev, self.tm * self.k * 2)
         y = nt.Buffer(self.dev, self.tm * n_out * 4); y.fill(0)
         parts = norm[1] if norm else 1
         d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(self.dev, x_bf16.tobytes())).buffer(3, xp)
-              .bytes(4, kernels.x_permute_params(self.k, t_act, self.tm, self.wpw, tk, parts, EPS)).grid(self.tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
+              .bytes(4, kernels.x_permute_params(self.k, t_act, self.tm, self.wpw, tk, parts, EPS))
+              .grid(self.tm * perm_simdgroups // perm_groups).threadgroup(32 * perm_groups).barrier())
         if norm:
             d0.buffer(1, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes())).buffer(2, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
         d1 = (nt.Dispatch().pipeline(pso).buffer(0, self.wbuf).buffer(1, self.rsbuf).buffer(2, xp).buffer(3, y)
               .bytes(4, kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks)).grid(n_tg).threadgroup(tg))
+        direct_norm = (extra_macros or {}).get("DIRECT_NORM") == "1"
+        if direct_norm:
+            d1.buffer(2, nt.Buffer(self.dev, x_bf16.tobytes()))
+            d1.buffer(5, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes()))
+            d1.buffer(6, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
+        if conv is not None:
+            d1.buffer(10, conv[0]).buffer(11, nt.Buffer(self.dev, conv[1].tobytes()))
         if epilogue == "residual":
             d1.buffer(7, nt.Buffer(self.dev, residual.tobytes()))
         so = None
         if stat_out:
-            so = nt.Buffer(self.dev, self.tm * n_blocks * 4); so.fill(0)
+            so = nt.Buffer(self.dev, self.tm * n_parts * 4); so.fill(0)
             d1.buffer(8, so)
         if step_state is not None:
             d0.buffer(15, st); d1.buffer(15, st)
-        r = nt.Queue(self.dev).run([d0, d1])
+        r = nt.Queue(self.dev).run([d1] if direct_norm else [d0, d1])
         assert not r.error, r.error
         raw = y.read(0, self.tm * n_out * (2 if out_bf16 else 4))
         out = bf16_to_f32(np.frombuffer(raw, dtype=np.uint16)).reshape(self.tm, n_out) if out_bf16 else np.frombuffer(raw, dtype=np.float32).reshape(self.tm, n_out)
-        so_arr = np.frombuffer(so.read(0, self.tm * n_blocks * 4), dtype=np.float32).reshape(self.tm, n_blocks) if stat_out else None
+        so_arr = np.frombuffer(so.read(0, self.tm * n_parts * 4), dtype=np.float32).reshape(self.tm, n_parts) if stat_out else None
         return out, so_arr
 
 
@@ -377,13 +408,59 @@ def test_gemm_ksplit_epilogues_and_predication(dev, fmt, ksplit):
     assert np.all(out4 == 0)
 
 
-@pytest.mark.parametrize("fmt,k", [("nvfp4", 4096), ("nvfp4", 5120), ("int8", 4096), ("int4_affine", 4096), ("nvfp4", 2048)])
+@pytest.mark.parametrize("fmt", ["bf16", "int4_affine", "nvfp4"])
+@pytest.mark.parametrize("tokens", [2, 4, 6, 8])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_ksplit_live_token_partials(dev, monkeypatch, fmt, tokens, persistent):
+    """Compact scratch preserves residual/stat results and the reuse barrier.
+
+    A single persistent threadgroup deliberately reuses scratch across row tiles;
+    the production geometry normally launches one threadgroup per tile.
+    """
+    from monolith.core import StepStateLayout
+    if persistent:
+        geometry = kernels.gemm_geometry
+        monkeypatch.setattr(kernels, "gemm_geometry", lambda mode, n, *a:
+                            (4, 1, 128) if mode == "ksplit4" else geometry(mode, n, *a))
+    rng = np.random.default_rng(29)
+    g = Gemm(dev, fmt, 288, 2048, 8)
+    x = f32_to_bf16(rng.normal(0, .2, (8, 2048)).astype(np.float32))
+    residual = f32_to_bf16(rng.normal(0, .2, (8, 288)).astype(np.float32))
+    layout = StepStateLayout(t_max=8, gamma_max=7)
+    out, stat = g.run(x, epilogue="residual", residual=residual, stat_out=True, ksplit=4,
+                      step_state=(layout, {"t_this_step": tokens}), t_range=(1, tokens),
+                      extra_macros={"COMPACT_PARTIALS": "1"})
+    ref = _rbf(bf16_to_f32(x[:tokens]).astype(np.float64) @ g.w.T + bf16_to_f32(residual[:tokens]))
+    assert check_against_oracle(out[:tokens], ref).max_ulp_elementwise <= 1
+    assert np.all(out[tokens:] == 0) and np.all(stat[tokens:] == 0)
+    expected = (ref.reshape(tokens, -1, g.info.rows).astype(np.float64) ** 2).sum(-1)
+    assert np.allclose(stat[:tokens], expected, rtol=1e-4, atol=1e-3)
+
+
+@pytest.mark.parametrize("fmt,k", [("nvfp4", 4096), ("nvfp4", 5120), ("int8", 4096), ("int4_affine", 4096), ("int4_affine", 1024), ("int4_affine", 3072), ("nvfp4", 2048)])
 @pytest.mark.parametrize("ksplit", [1, 2])
 def test_gemm_tile_block_scale_placement(dev, fmt, k, ksplit):
     """The tile's cooperative fill reading the block's scale region (#101), with and without the scale cache and the K-split."""
     out, ref = _run(dev, fmt, 272, k, 8, 8, "interleaved16", ksplit=ksplit, placement="block")
     chk = check_against_oracle(out, ref)
     assert chk.ok() and chk.max_rel_err < 2e-6, chk
+
+
+@pytest.mark.parametrize("ksplit", [1, 2, 8])
+@pytest.mark.parametrize("rows", [8, 16])
+@pytest.mark.parametrize("n", [269, 272])
+def test_nvfp4_24_byte_scale_region_matches_inline(dev, ksplit, rows, n):
+    """Moving scales preserves every output bit, including a partial row block.
+    The longer reduction also meets the independent kernel ULP contract.
+    """
+    outputs = []
+    for placement in ("inline", "block"):
+        out, ref = _run(dev, "nvfp4", n, 12288, 8, 8, "interleaved16",
+                        rows=rows, ksplit=ksplit, placement=placement)
+        chk = check_against_oracle(out, ref)
+        assert chk.ok(), chk
+        outputs.append(out)
+    assert np.array_equal(*outputs)
 
 
 @pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3"])
@@ -408,3 +485,12 @@ def test_small_affine_tile(dev, tk, ksplit):
                     tn=16, tk=tk, ksplit=ksplit, placement="block")
     assert check_against_oracle(out[:5], bf16_to_f32(f32_to_bf16(ref))).ok()
     assert np.all(out[5:] == 0)
+
+
+@pytest.mark.parametrize("fmt", ["int4_affine", "nvfp4", "bf16"])
+@pytest.mark.parametrize("active,ksplit", [(3, 1), (6, 2)])
+def test_static_geometry_preserves_matrix_tails_and_partial_tokens(dev, fmt, active, ksplit):
+    outputs = [_run(dev, fmt, 100, 1024, 8, active, "interleaved16", ksplit=ksplit, specialize=flag)[0]
+               for flag in (False, True)]
+    np.testing.assert_array_equal(*outputs)
+    assert not outputs[1][active:].any()

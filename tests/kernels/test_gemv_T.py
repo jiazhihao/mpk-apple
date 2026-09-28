@@ -18,7 +18,7 @@ def dev():
     return nt.Device()
 
 
-def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None, K=K, placement="inline"):
+def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False, extra_macros=None, K=K, placement="inline", specialize=False):
     rng = np.random.default_rng(3)
     spec = random_spec(fmt, n, K, rng)
     data, info, row_scales = pack_spec(spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
@@ -31,6 +31,10 @@ def _run(dev, fmt, n, rows, t, lane_order, t_active=None, one_block_per_sg=False
     tg = 64 if one_block_per_sg else 384
     y = nt.Buffer(dev, t * n * 4); y.fill(0)
     t_act = t if t_active is None else t_active
+    if specialize:
+        source, constants = kernels.specialize_params(kernels.gemv_source(fmt), "gemv",
+            kernels.gemv_params(n, info.n_blocks, n_sg, t))
+        pso = nt.Pipeline(nt.Library(dev, source, dict(macros, **constants)), "gemv_T")
     d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, data)).buffer(1, nt.Buffer(dev, row_scales.tobytes()))
          .buffer(2, nt.Buffer(dev, xb.tobytes())).buffer(3, y).bytes(4, struct.pack("<IIIIfIII", n, info.n_blocks, n_sg, t_act, 1.0, 0, 0, 0))
          .grid(-(-(n_sg * 32) // tg)).threadgroup(tg))
@@ -77,7 +81,7 @@ def test_nvfp4_decode_variants_are_exact(dev, variant, rows, t):
     assert chk.ok() and chk.max_rel_err < 1e-6, chk         # the decodes are bit-exact; only accumulation order differs
 
 
-@pytest.mark.parametrize("fmt,K", [("nvfp4", 4096), ("nvfp4", 5120), ("nvfp4", 12288), ("int8", 4096), ("int8", 5120), ("int4_affine", 4096), ("nvfp4", 3584)])
+@pytest.mark.parametrize("fmt,K", [("nvfp4", 2048), ("nvfp4", 4096), ("nvfp4", 5120), ("nvfp4", 12288), ("int8", 4096), ("int8", 5120), ("int4_affine", 4096), ("int4_affine", 1024), ("int4_affine", 1536), ("int4_affine", 3072), ("nvfp4", 3584)])
 @pytest.mark.parametrize("lane_order", ["interleaved16", "contiguous"])
 @pytest.mark.parametrize("rows,t", [(16, 1), (8, 4)])
 def test_gemv_block_scale_placement(dev, fmt, K, lane_order, rows, t):
@@ -135,3 +139,12 @@ def test_int4_affine_f16_pairs_match_oracle(dev):
         out = np.frombuffer(y.read(0, t * n * 4), dtype=np.float32).reshape(t, n)
         chk = check_against_oracle(out, ref)
         assert chk.ok(), (placement, chk)
+
+
+@pytest.mark.parametrize("fmt", ["int4_affine", "nvfp4", "bf16"])
+@pytest.mark.parametrize("active", [1, 3])
+def test_static_geometry_preserves_row_tails_and_partial_tokens(dev, fmt, active):
+    outputs = [_run(dev, fmt, 100, 16, 4, "interleaved16", t_active=active, specialize=flag)[0]
+               for flag in (False, True)]
+    np.testing.assert_array_equal(*outputs)
+    assert not outputs[1][active:].any()

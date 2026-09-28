@@ -49,17 +49,43 @@ static inline uint unit_word(uint lane, uint r, uint j) {
 #ifdef LANES_PER_WORD
 #error "sub-word units are the shader GEMV's: the tile and the gather read whole-word units"
 #endif
+#ifndef SCALE_LANE_DIVISOR
+#define SCALE_LANE_DIVISOR 1u
+#endif
 #ifndef SCALE_PLACEMENT
 #define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
 #endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
 #if SCALE_PLACEMENT
 #define SCALE_BASE (R * 32u * PAYLOAD_WORDS)
-#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
-#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * (32u / SCALE_LANE_DIVISOR) * SCALE_RUN + ((ln) / SCALE_LANE_DIVISOR) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) (((((ln) / SCALE_LANE_DIVISOR) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
 #else
 #define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
 #define SCALE_SOFF(ln) 0u
 #endif
+// Reconstruct a lane's scale words for the legacy GEMV/gather interfaces.
+// Matrix and row-specialized kernels read coalesced scale pairs directly.
+#if SCALE_PAYLOAD_ORDER
+#undef SCALE_SOFF
+#define SCALE_SOFF(ln) 0u
+static inline uint4 payload_scale_word(device const uint4* wb, uint ln, uint r, uint s) {
+  uint4 result = uint4(0);
+#pragma clang loop unroll(full)
+  for (uint b = 0; b < 16u; b++) {
+    const uint g = s * 16u + b;
+    if (g < SCALE_RUN) {
+      const uint off = r * 32u * SCALE_RUN + (g / 2u) * 64u + ln * 2u + g % 2u;
+      const uint v = reinterpret_cast<device const uchar*>(wb + SCALE_BASE)[off];
+      result[b / 4u] |= v << ((b % 4u) * 8u);
+    }
+  }
+  return result;
+}
+#define LOAD_SCALE_WORD(wb, ln, r, s) payload_scale_word((wb), (ln), (r), (s))
+#else
+#define LOAD_SCALE_WORD(wb, ln, r, s) ((wb)[SCALE_WORD((ln), (r), (s))])
+#endif
+
 #if SCALE_PLACEMENT
 #define BLOCK_WORDS (R * 32u * UNIT_WORDS + SCALE_REGION_WORDS)       // a block: its payload words then its scale region
 #else
@@ -96,7 +122,7 @@ kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* ta
 #if EMBED_DEQUANT
   // the lane's stripe: PAYLOAD_WORDS words of codes, SCALE_WORDS words of group scales; out columns [lane·KL, +KL)
   uint scw[SCALE_WORDS * 4];
-  for (uint s = 0; s < SCALE_WORDS; s++) { uint4 q = blk[SCALE_WORD(lane, r, s)]; scw[4 * s] = q.x; scw[4 * s + 1] = q.y; scw[4 * s + 2] = q.z; scw[4 * s + 3] = q.w; }
+  for (uint s = 0; s < SCALE_WORDS; s++) { uint4 q = LOAD_SCALE_WORD(blk, lane, r, s); scw[4 * s] = q.x; scw[4 * s + 1] = q.y; scw[4 * s + 2] = q.z; scw[4 * s + 3] = q.w; }
   const uint kl = K / 32u, lane_off = (lane * kl) % SCALE_GROUP;     // a stripe may start inside a group (ragged K)
   device ushort* orow = (device ushort*)out + lane * kl;
   for (uint j = 0; j < PAYLOAD_WORDS; j++) {

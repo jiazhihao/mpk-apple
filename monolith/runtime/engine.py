@@ -72,7 +72,10 @@ class Engine:
         ring = self.buffers[program.ring]
         if ring.nbytes < program.ring_capacity * 8:
             raise ValueError("the token ring needs 8 bytes per slot: (sequence << 32) | token")
-        self.runner = nt.Runner(self.dev, self.icb, self.ops, list(self.buffers.values()), self.buffers[program.step_state],
+        # Programs can retain unreferenced state buffers for session reuse. Only
+        # buffers actually bound by the ICB need a Metal residency declaration.
+        resources = {name: self.buffers[name] for op in program.ops for _, name, _ in op.bindings}
+        self.runner = nt.Runner(self.dev, self.icb, self.ops, list(resources.values()), self.buffers[program.step_state],
                                 lay.offset("done"), lay.offset("ring_head"), lay.offset("ring_tail"), ring, program.ring_capacity)
 
     def run(self, max_steps: int, *, steps_per_cb: int = 8, in_flight: int = 3, reencode: bool = False, max_tokens: int = 0) -> StepReport:

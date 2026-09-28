@@ -4,6 +4,7 @@ decode snippets and the macros that specialize them (design §5.7: block bodies 
 from __future__ import annotations
 
 import math
+import re
 import struct
 from pathlib import Path
 from typing import List, Dict, Mapping, Optional, Sequence, Tuple
@@ -77,7 +78,10 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
             raise ValueError(f"decode kernels: {info.format}'s scale run of {s} bytes is not whole {unit_bytes}-byte scales")
         g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": "0", "SCALE_UOFF": "0", "SCALE_WORDS": str(info.scale_words),
              "SCALE_PLACEMENT": "1", "SCALE_RUN": f"{s}u", "SCALE_UNIT_BYTES": f"{unit_bytes}u",
+             "SCALE_LANE_DIVISOR": f"{info.scale_lane_divisor}u",
              "SCALE_REGION_WORDS": f"{info.scale_region_bytes // 16}u"}
+        if info.scale_order == "payload":
+            g["SCALE_PAYLOAD_ORDER"] = "1"
     else:
         g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": str(p // 16), "SCALE_UOFF": str((p % 16) // 4),
              "SCALE_WORDS": str(-(-(p + s) // 16) - p // 16 if s else 0)}
@@ -127,6 +131,10 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
     # floats of registers: K ≤ 1024 at T = 1 for a 4-bit format — the 0.6B's projections (§11.1); at 64 floats the
     # occupancy collapsed (a 1024 × 2048 slab 2.7× slower)
     hoist = preconvert and int(geometry["PAYLOAD_WORDS"]) * t * f.weights_per_word <= 32 and pairs is None
+    # At one token the unnormalized and gated BF16 projections benefit from
+    # keeping activations packed until the dot product (M5 paired layer runs).
+    if info.format == "bf16" and info.k <= 4096 and t == 1 and pairs is None and (not norm or epilogue == "silu_mul"):
+        preconvert = hoist = False
     if epilogue not in EPILOGUES:
         raise ValueError(f"gemv_T: unknown epilogue {epilogue!r}")
     macros = {"K": str(info.k), "R": str(info.rows), "T": str(t), "RG": str(rg),
@@ -138,6 +146,8 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
         if info.rows % 2 or (info.rows // 2) % rg:
             raise ValueError(f"gemv_T silu_mul: R={info.rows} must be even and RG={rg} must divide R/2")
         macros["CHUNK"] = str(info.rows // 2)
+        if info.format == "nvfp4" and t == 1:
+            macros["LOCAL_GATE_CACHE"] = "1"
     if round_before_residual:
         if epilogue != "residual":
             raise ValueError("gemv_T: round_before_residual needs the residual epilogue")
@@ -208,7 +218,13 @@ THREADGROUP_MEMORY_LIMIT = 32768  # bytes of threadgroup memory a dispatch may d
 def gemm_source(fmt: str) -> str:
     """The gemm_tile kernel (the M5 accelerator path for T > 1, #50) for storage format ``fmt``; compile it with
     ``language_version=MSL_TENSOR_OPS``."""
-    return PRELUDE + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+    src = PRELUDE + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+    if fmt == "bf16":
+        src += "\n" + template("gemv_bf16_small.metal")
+        src += "\n" + template("gemv_bf16_rows.metal")
+    if fmt == "nvfp4":
+        src += "\n" + template("gemv_nvfp4_rows.metal")
+    return src
 
 
 def gemm_tile_shape(tm: int) -> Tuple[int, int]:
@@ -232,7 +248,12 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
     wpw = int(f.weights_per_word)
     if tn is None or tk is None:
         # Small INT4 and BF16 projections benefit from fewer live operand registers (#113).
-        tn, tk = (16, 64) if ((info.format == "int4_affine" and info.k <= 3072) or (info.format == "bf16" and info.k <= 4096)) and tm <= 16 else gemm_tile_shape(tm)
+        if info.format == "nvfp4" and info.k >= 4096 and tm == 8:
+            tn, tk = 16, 128
+            if scale_cache is None:
+                scale_cache = False
+        else:
+            tn, tk = (16, 64) if ((info.format == "int4_affine" and info.k <= 3072) or (info.format == "bf16" and info.k <= 4096)) and tm <= 16 else gemm_tile_shape(tm)
     if info.rows not in (8, 16):
         raise ValueError(f"gemm_tile: R={info.rows} must be 8 or 16 (the epilogues index pack blocks)")
     if info.lanes_per_word > 1:
@@ -261,6 +282,8 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
               "EPILOGUE": EPILOGUES[epilogue], "STAT_OUT": "1" if stat_out else "0"}
     if round_before_residual:
         macros["EPILOGUE_ROUND"] = "1"
+    if info.format in ("int4_affine", "bf16"):
+        macros["COMPACT_PARTIALS"] = "1"
     lpt = tk // wpw                                            # lanes per tile: LPT * 16 bytes of each row's 128-byte line
     if lpt * 16 >= 64:
         macros["Q_OUTER"] = "1"                                # lane group outer (half a line or more per row piece) …
@@ -319,13 +342,24 @@ def x_permute_params(k: int, t_active: int, tm: int, wpw: int, tk: int = GEMM_TK
     return struct.pack("<IIIIIIfI", k, t_active, tm, wpw, tk, stat_parts, eps, 0)
 
 
-def x_permute_macros(norm: bool = False) -> Dict[str, str]:
-    return {"PERM_NORM": "1" if norm else "0", "PERM_SG": f"{GEMM_PERM_SG}u"}
+def _check_permute_geometry(groups: int, simdgroups: int) -> None:
+    if simdgroups not in (16, 32, 64, 128, 256) or groups not in (1, 2, 4, 8, 16) or simdgroups % groups:
+        raise ValueError("x_permute needs 16–256 power-of-two SIMD-groups per row and 1–16 per threadgroup")
 
 
-def x_permute_grid(tm: int) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
-    """(grid, threadgroup) of x_permute for ``tm`` output rows: GEMM_PERM_SG SIMD-groups per row, 32 threads each."""
-    return (tm * GEMM_PERM_SG, 1, 1), (32, 1, 1)
+def x_permute_macros(norm: bool = False, *, groups: int = 1, simdgroups: int = GEMM_PERM_SG,
+                     unroll: int = 4) -> Dict[str, str]:
+    _check_permute_geometry(groups, simdgroups)
+    if unroll not in (1, 2, 4):
+        raise ValueError("x_permute gather unroll must be 1, 2 or 4")
+    return {"PERM_NORM": "1" if norm else "0", "PERM_SG": f"{simdgroups}u",
+            "PERM_GROUPS": f"{groups}u", "PERM_UNROLL": f"{unroll}u"}
+
+
+def x_permute_grid(tm: int, *, groups: int = 1, simdgroups: int = GEMM_PERM_SG) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+    """Pack ``groups`` SIMD-groups of the same token row into each threadgroup."""
+    _check_permute_geometry(groups, simdgroups)
+    return (tm * simdgroups // groups, 1, 1), (32 * groups, 1, 1)
 
 
 def x_permute_columns(k: int, wpw: int, tk: int = GEMM_TK) -> "np.ndarray":
@@ -423,13 +457,22 @@ def gqa_source(v2: bool = False, steal: bool = False, v3: bool = False, mma: boo
     ``mma`` uses MSL 4 tensor operations and the v1 merge; compile with MSL_TENSOR_OPS."""
     src = PRELUDE + PERM_OUT_MSL + template("gqa_common.metal") + "\n"
     if mma:
-        return src + template("gqa_decode.metal") + "\n" + template("gqa_decode_mma.metal")
+        return (src + template("gqa_decode.metal") + "\n#if ADAPTIVE_CHUNK\n" + template("gqa_decode_mma_adaptive.metal") +
+                "\n#else\n" + template("gqa_decode_mma.metal") + "\n#endif\n")
     if steal:
         src += template("common/steal.metal") + "\n"                                   # the claim protocol (#44), v1 only
     return src + template("gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
 
 
 GQA_V3_SIMDGROUPS = 32                  # v3's SIMD-groups per threadgroup at most (1024 threads; the fold gives each one D / (4·NSG3) dims)
+
+
+def gqa_mma_simdgroups(head_dim: int, heads_per_kv: int) -> int:
+    """Measured matrix-attention crew: four groups for D=128 with two queries per KV head.
+
+    Wider heads and higher query replication keep eight groups (decode-kernels.md §12).
+    """
+    return 4 if head_dim == 128 and heads_per_kv == 2 else 8
 
 
 def gqa_v3_simdgroups(head_dim: int) -> int:
@@ -502,6 +545,52 @@ def gqa_params(*, heads: int, kv_heads: int, t_active: int, position: int, n_sg:
                        in_stride, out_stride, ctx_max, eps, scaling, 1 if has_gate else 0, n_chunks_max, rows_max, 0, gate_stride, nominal_sg)
 
 
+def specialize_params(source: str, kind: str, params: bytes, variable: str = "p", *,
+                      fixed_active: bool = False) -> Tuple[str, Dict[str, str]]:
+    """Expose an emitted kernel's immutable geometry to the Metal compiler.
+
+    The values come from the exact packed parameter record, including FP32
+    rounding. Active lengths remain runtime data unless the caller guarantees a
+    fixed-length program; cache positions and StepState are always runtime data.
+    Constants are macros so they participate in the emitter's pipeline key.
+    Standalone kernel harnesses can keep using the ordinary parameterized source.
+    """
+    if kind == "gqa":
+        fmt = "<12I2f6I"
+        names = ("heads kv_heads t_active position n_sg q_off gate_off k_off v_off in_stride out_stride ctx_max "
+                 "eps scaling has_gate n_chunks_max rows_max pad0 pad1 nominal_sg").split()
+        dynamic = {"t_active", "position"}
+    elif kind == "gdn":
+        fmt = "<16I4f"
+        names = ("hv hk t_active q_off k_off v_off z_off a_off b_off in_stride ab_stride ab_separate "
+                 "out_stride n_sg key_dim pad0 eps pad1 pad2 pad3").split()
+        dynamic = {"t_active", "pad0", "pad1", "pad2", "pad3"}
+    elif kind == "gemv":
+        fmt = "<4I2f2I"
+        names = "n_rows n_blocks n_sg t_active out_scale eps stat_parts block0".split()
+        dynamic = {"t_active"}
+    elif kind == "gemm":
+        fmt = "<4If3I"
+        names = "n_rows n_tiles n_sg t_active out_scale tile0 n_blocks pad".split()
+        dynamic = {"t_active", "pad"}
+    else:
+        raise ValueError(f"unknown kernel parameter schema: {kind}")
+    if variable not in ("p", "np"):
+        raise ValueError(f"unsupported parameter variable: {variable}")
+    if fixed_active:
+        dynamic.discard("t_active")
+    constants = {}
+    for name, value in zip(names, struct.unpack(fmt, params)):
+        if name in dynamic:
+            continue
+        macro = f"STATIC_{kind.upper()}_{variable.upper()}_{name.upper()}"
+        pattern = rf"\b{variable}\.{name}\b"
+        source, count = re.subn(pattern, macro, source)
+        if count:
+            constants[macro] = repr(value) + ("f" if isinstance(value, float) else "u")
+    return source, constants
+
+
 def steal_reset_params(n: int) -> bytes:
     """``steal_reset``'s count (buffer 1): the cursors to zero (one per nominal SIMD-group)."""
     return struct.pack("<I", n)
@@ -529,7 +618,7 @@ def gqa_workspace(kv_heads: int, n_chunks_max: int, rows_max: int, head_dim: int
 # ---- Gated DeltaNet ----------------------------------------------------------------------------------------------
 
 def gdn_source() -> str:
-    return PRELUDE + template("gdn_mixer.metal")
+    return PRELUDE + PERM_OUT_MSL + template("gdn_mixer.metal")
 
 
 def gdn_macros(dk: int, dv: int, *, conv_width: int, t: int, slice_cols: int = 8, slices_per_block: int = 4,

@@ -6,7 +6,9 @@
 // key normed + RoPE'd from the projection and, for the kv head's first row, appended to the caches — writer and
 // reader are the same SIMD-group), scores it (q·k by one simd_sum, bf16(bf16(q·k) · scaling), causal inside the
 // step), and folds it into its running online softmax (m, d, o) with exact FP32 rescaling, p̃ = bf16(exp(s − m))
-// rounded like the reference's P. The NSG3 partials then meet in threadgroup memory and every SIMD-group folds one
+// rounded like the reference's P. Cached pairs share their maximum and the rescaling of prior accumulators;
+// an unpaired tail and new causal keys are folded individually. The NSG3 partials then meet in threadgroup memory
+// and every SIMD-group folds one
 // slice of D/NSG3 dims (lane ℓ = partial ℓ: one simd_max, one simd_sum per value) and writes it, normalized, rounded
 // to BF16 and times bf16(σ(gate)) when the projection carries the gate — no partial workspace, no second dispatch.
 //
@@ -24,6 +26,9 @@
 #ifndef NSG3
 #define NSG3 32u
 #endif
+#ifndef SINGLE_BLOCK
+#define SINGLE_BLOCK 0
+#endif
 #define MRG_STRIDE (D + 4u)          // floats per partial in the fold buffer: o[D], m, d, then padding to 16 bytes
 
 kernel void gqa_decode_v3(device const ushort* qkvg [[buffer(0)]], device ushort* k_cache [[buffer(1)]], device ushort* v_cache [[buffer(2)]],
@@ -37,6 +42,7 @@ kernel void gqa_decode_v3(device const ushort* qkvg [[buffer(0)]], device ushort
                           uint tgid [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]],
                           uint sgi [[simdgroup_index_in_threadgroup]]) {
   threadgroup float mrg[NSG3 * MRG_STRIDE];
+  threadgroup float query[D];
   const uint rep = p.heads / p.kv_heads;
 #if STEP_STATE
   if (st->done) return;
@@ -56,17 +62,57 @@ kernel void gqa_decode_v3(device const ushort* qkvg [[buffer(0)]], device ushort
   const uint rows = rep * T;
   const uint ctx = position + T;
   const uint n_blocks = p.kv_heads * rows;                       // block = (kv head, row): the row's token t = r / rep, q head j·rep + r % rep
+#if SINGLE_BLOCK
+  const uint b = tgid;
+  if (b < n_blocks) {
+#else
   for (uint b = tgid; b < n_blocks; b += p.n_sg) {
+#endif
     const uint j = b / rows, r = b % rows;
     const uint t = r / rep, h = j * rep + (r % rep);
-    // prologue: the row's query, normed and RoPE'd, DL dims per lane (every SIMD-group for itself: no barrier)
+    // Prologue: the row's query, normed and RoPE'd, DL dims per lane.
     float q[DL];
-    load_dl(qkvg + t * p.in_stride + p.q_off + h * D + lane * DL, q);
-    norm_rope(q, q_norm, cos_t + (position + t) * D, sin_t + (position + t) * D, p.eps, lane);
+    // Every key group uses the same query. Normalize and rotate it once.
+    if (sgi == 0u) {
+      load_dl(qkvg + t * p.in_stride + p.q_off + h * D + lane * DL, q);
+      norm_rope(q, q_norm, cos_t + (position + t) * D, sin_t + (position + t) * D, p.eps, lane);
+      for (uint e = 0; e < DL; e++) query[lane * DL + e] = q[e];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint e = 0; e < DL; e++) q[e] = query[lane * DL + e];
     // this SIMD-group's keys: s, s + NSG3, … — each scored and folded into the running (m, d, o)
     float m_run = -INFINITY, d_run = 0.0f, o_run[DL];
     for (uint e = 0; e < DL; e++) o_run[e] = 0.0f;
     uint key = sgi;
+
+    // Two cached keys share one rescaling of the previous softmax state. Keep
+    // score/probability BF16 boundaries; the tail and new causal keys follow below.
+    for (; key + NSG3 < position; key += 2u * NSG3) {
+      float scores[2u];
+      float m_new = m_run;
+#pragma clang loop unroll(full)
+      for (uint pair = 0; pair < 2u; pair++) {
+        float kf[DL];
+        load_dl(k_cache + ((key + pair * NSG3) * p.kv_heads + j) * D + lane * DL, kf);
+        float dot = 0.0f;
+        for (uint e = 0; e < DL; e++) dot = fma(q[e], kf[e], dot);
+        dot = simd_sum(dot);
+        scores[pair] = round_bf16(round_bf16(dot) * p.scaling);
+        m_new = max(m_new, scores[pair]);
+      }
+      const float a = m_run == -INFINITY ? 0.f : exp(m_run - m_new);
+      d_run *= a;
+      for (uint e = 0; e < DL; e++) o_run[e] *= a;
+#pragma clang loop unroll(full)
+      for (uint pair = 0; pair < 2u; pair++) {
+        const float pr = exp(scores[pair] - m_new), pb = round_bf16(pr);
+        float vf[DL];
+        load_dl(v_cache + ((key + pair * NSG3) * p.kv_heads + j) * D + lane * DL, vf);
+        d_run += pr;
+        for (uint e = 0; e < DL; e++) o_run[e] = fma(pb, vf[e], o_run[e]);
+      }
+      m_run = m_new;
+    }
     for (; key < position; key += NSG3) {
       float kf[DL], vf[DL];
       load_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, kf);
@@ -137,6 +183,8 @@ kernel void gqa_decode_v3(device const ushort* qkvg [[buffer(0)]], device ushort
         }
       }
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);              // the next block rewrites the fold buffer
+#if !SINGLE_BLOCK
+    threadgroup_barrier(mem_flags::mem_threadgroup);              // the next block rewrites the fold buffer and query
+#endif
   }
 }

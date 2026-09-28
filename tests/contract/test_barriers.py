@@ -103,6 +103,7 @@ def test_attention_kernel_follows_the_profile(tmp_path):
     v3 = [o for o in prog_v3.ops if prog_v3.kernels[o.kernel].function == "gqa_decode_v3"]
     assert len(v3) == 1 and not [o for o in prog_v3.ops if o.name == "gqa_merge"] and v3[0].meta["attention"] == "v3"
     assert v3[0].grid == (8 * 2, 1, 1) and v3[0].threadgroup == (8 * 32, 1, 1) and sorted(b for b, _, _ in v3[0].bindings) == [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 15]   # D = 32: 8 SIMD-groups
+    assert prog_v3.kernels[v3[0].kernel].macros["SINGLE_BLOCK"] == "1"
     assert [o for o in prog_v3.ops if o.name == "gqa_decode"] == v3
     # D=32 has no matrix variant: auto retains v3 at every row count; v2 / v1 remain explicit
     pa = Profile.from_dict("d", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "auto"}})
@@ -157,13 +158,14 @@ def test_attention_kernel_follows_the_profile(tmp_path):
 
 
 @pytest.mark.parametrize("d", [128, 256])
-def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d):
+@pytest.mark.parametrize("kv", [4, 8])
+def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d, kv):
     from test_nn_lowering import CFG
     from monolith import kernels
     import struct
 
     monkeypatch.setitem(CFG["text_config"], "head_dim", d)
-    monkeypatch.setitem(CFG["text_config"], "num_key_value_heads", 8)
+    monkeypatch.setitem(CFG["text_config"], "num_key_value_heads", kv)
     _checkpoint(tmp_path)
     m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=8192)
     pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
@@ -174,11 +176,116 @@ def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d):
     assert "gqa_decode_mma" not in [k.function for k in one.kernels.values()]
     prog = compile_program(m, pf, profile, t=4)
     core = next(o for o in prog.ops if prog.kernels[o.kernel].function == "gqa_decode_mma")
-    assert core.threadgroup == (256, 1, 1)
+    adaptive = d == 128 and kv == 4
+    assert core.threadgroup == (128 if adaptive else 256, 1, 1)
+    assert (prog.kernels[core.kernel].macros.get("ADAPTIVE_CHUNK") == "1") == adaptive
+    merge = next(o for o in prog.ops if prog.kernels[o.kernel].function == "gqa_merge")
+    assert (prog.kernels[merge.kernel].macros.get("ADAPTIVE_CHUNK") == "1") == adaptive
     assert prog.kernels[core.kernel].language_version == kernels.MSL_TENSOR_OPS
     bindings = {i: b for i, b, _ in core.bindings}
     params = struct.unpack("<IIIIIIIIIIIIffIIIIII", prog.buffers[bindings[9]].init)
+    constants = prog.kernels[core.kernel].macros
+    assert constants["STATIC_GQA_P_HEADS"] == "8u"
+    assert constants["STATIC_GQA_P_KV_HEADS"] == f"{kv}u"
+    assert "STATIC_GQA_P_POSITION" not in constants and "STATIC_GQA_P_T_ACTIVE" not in constants
     chunks, rows = params[15:17]
-    assert chunks == 8192 // (32 if d == 256 else 64)
-    assert prog.buffers[bindings[7]].nbytes >= 8 * chunks * rows * d * 4
-    assert prog.buffers[bindings[8]].nbytes >= 8 * chunks * rows * 2 * 4
+    assert chunks == 8192 // (32 if d == 256 or adaptive else 64)
+    assert prog.buffers[bindings[7]].nbytes >= kv * chunks * rows * d * 4
+    assert prog.buffers[bindings[8]].nbytes >= kv * chunks * rows * 2 * 4
+
+
+@pytest.mark.parametrize("t", [1, 2, 3, 4, 6, 8])
+def test_fused_gdn_norm_waits_for_gate_and_preserves_state_writes(tmp_path, monkeypatch, t):
+    from test_nn_lowering import CFG
+
+    for key, value in (("linear_num_key_heads", 8), ("linear_num_value_heads", 16),
+                       ("linear_key_head_dim", 128), ("linear_value_head_dim", 128)):
+        monkeypatch.setitem(CFG["text_config"], key, value)
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=32)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    profile = Profile.from_dict("fused", {"gpu_cores": 20, "nominal_gbps": 307,
+        "engine": {"family": "Apple10", "lane_order": "interleaved16", "accelerator": "on"}})
+    prog = compile_program(m, PackFile(tmp_path / "pack"), profile, t=t)
+    names = [op.name for op in prog.ops]
+    if t != 1:
+        assert "gdn_mixer_norm" not in names
+        assert "gdn_mixer" in names and "gdn_norm" in names
+        if t in (4, 6, 8):
+            assert "gdn_prepare" not in names
+            core = next(op for op in prog.ops if op.name == "gdn_mixer")
+            constants = prog.kernels[core.kernel].macros
+            assert constants["LOCAL_PREPARE"] == constants["SINGLE_PASS"] == "1"
+            assert core.meta["writes"] == [2, 3, 7]
+            groups, sl = (16, 4) if t == 4 else (32, 2 if t in (6, 8) else 4)
+            assert core.grid == (16 * (128 // sl) // groups, 1, 1)
+            assert core.threadgroup == (32 * groups, 1, 1)
+            norm = next(op for op in prog.ops if op.name == "gdn_norm")
+            assert norm.barrier_before
+        return
+    assert "gdn_mixer" not in names and "gdn_norm" not in names
+    fused = next(op for op in prog.ops if op.name == "gdn_mixer_norm")
+    assert "gdn_prepare" not in names
+    assert fused.grid == (16, 1, 1) and fused.threadgroup == (1024, 1, 1)
+    assert fused.barrier_before and fused.meta["writes"] == [2, 3, 14]
+    fb = {i: name for i, name, _ in fused.bindings}
+    assert fb[2].endswith("conv_state") and 8 not in fb
+    assert fb[3].endswith("rec_state")
+    constants = prog.kernels[fused.kernel].macros
+    assert constants["FUSED_NORM"] == constants["LOCAL_PREPARE"] == constants["SINGLE_PASS"] == "1"
+    assert constants["TP"] == f"{t}u"
+    assert constants["STATIC_GDN_P_HK"] == "8u"
+    assert constants["STATIC_GDN_P_IN_STRIDE"] != constants["STATIC_GDN_NP_IN_STRIDE"]
+    assert "STATIC_GDN_P_T_ACTIVE" not in constants
+    assert "st->t_this_step" in prog.kernels[fused.kernel].source
+    before = prog.ops[:prog.ops.index(fused)]
+    assert any(any(i in op.meta.get("writes", []) and name == fb[13] for i, name, _ in op.bindings) for op in before)
+    after = prog.ops[prog.ops.index(fused) + 1:]
+    consumer = next(op for op in after if any(name == fb[14] for _, name, _ in op.bindings))
+    assert consumer.barrier_before
+
+
+def test_projection_convolution_owns_state_and_is_local_to_one_compilation(tmp_path, monkeypatch):
+    from test_nn_lowering import CFG
+    from monolith.core import Graph
+    from monolith.compiler import emit_program
+    from monolith.compiler.passes import DEFAULT_PASSES
+
+    for key, value in (("hidden_size", 1024), ("linear_num_key_heads", 8),
+                       ("linear_num_value_heads", 16), ("linear_key_head_dim", 128),
+                       ("linear_value_head_dim", 128)):
+        monkeypatch.setitem(CFG["text_config"], key, value)
+    _checkpoint(tmp_path)
+    model = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=32)
+    pack_model(model, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    profile = Profile.from_dict("projection_conv", {"gpu_cores": 20, "nominal_gbps": 307,
+        "engine": {"family": "Apple10", "lane_order": "interleaved16", "accelerator": "on"}})
+    graph = Graph("projection_conv")
+    model.lower(graph)
+    for transform in DEFAULT_PASSES:
+        transform(graph)
+    pack = PackFile(tmp_path / "pack")
+    # Reusing the IR must not leak the private intermediate's interpretation into
+    # another token count or a speculative program that replays raw projections.
+    for t, speculative in ((1, False), (4, False), (1, True), (1, False)):
+        prog = emit_program(graph, pack=pack, profile=profile, t=t, tail=None, speculative=speculative)
+        projections = [op for op in prog.ops if prog.kernels[op.kernel].macros.get("PROJ_CONV") == "1"]
+        cores = [op for op in prog.ops if prog.kernels[op.kernel].macros.get("PRECONVOLVED") == "1"]
+        if t == 4:
+            shared = [op for op in prog.ops if prog.kernels[op.kernel].macros.get("SHARED_NORM") == "1"]
+            assert shared
+            for op in shared:
+                bindings = {i: name for i, name, _ in op.bindings}
+                assert {2, 5, 6} <= bindings.keys() and not bindings[2].endswith(".xp")
+                assert prog.kernels[op.kernel].function == "gemv_bf16_small"
+        if t != 1 or speculative:
+            assert not projections and not cores
+            continue
+        assert len(projections) == len(cores) == 1
+        projection, core = projections[0], cores[0]
+        pb = {i: (name, offset) for i, name, offset in projection.bindings}
+        cb = {i: (name, offset) for i, name, offset in core.bindings}
+        assert pb[10] == cb[2] and pb[11] == cb[4] and pb[15] == cb[15]
+        assert 10 in projection.meta["writes"] and 2 not in core.meta["writes"]
+        assert pb[3] == cb[0] and core.barrier_before
+        assert prog.ops.index(projection) < prog.ops.index(core)

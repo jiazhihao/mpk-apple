@@ -61,6 +61,11 @@ using namespace mpp::tensor_ops;
 #ifndef STAT_OUT
 #define STAT_OUT 0                   // 1: per-block partial sums of squares of the BF16-rounded outputs, stat_out[t * n_blocks + block]
 #endif
+#ifdef ROW_SCALE_BITS
+#define GEMM_ROW_SCALE(i) as_type<float>(uint(ROW_SCALE_BITS))
+#else
+#define GEMM_ROW_SCALE(i) row_scale[(i)]
+#endif
 #if R != 16 && R != 8
 #error "gemm_tile: the epilogues index pack blocks of 8 or 16 rows"
 #endif
@@ -111,6 +116,28 @@ using namespace mpp::tensor_ops;
 #define NB_C ((TM > 16u) ? (TM / 16u) : 1u)               // 16-row blocks of the destination (its element order is
                                                           // q, slot (2), jump (TN/16), block — the right operand's is q, slot (8), jump)
 #define C_CAP (NB_C * TN / 2u)                            // destination elements per thread (16 · NB_C rows × TN over 32 lanes)
+// Opt-in after whole-layer measurement: compacting scratch can also change
+// register allocation. The hardware accumulator covers at least 16 token rows.
+#ifndef COMPACT_PARTIALS
+#define COMPACT_PARTIALS 0
+#endif
+#ifdef T_HI
+#define PART_TOKENS T_HI
+#else
+#define PART_TOKENS TM
+#endif
+#if COMPACT_PARTIALS && PART_TOKENS <= 8 && TM <= 16
+#define PART_CAP (C_CAP / 2u)
+#define PART_INDEX(i) (((i) / 4u) * 8u + (i) % 4u)
+#else
+#define PART_CAP C_CAP
+#define PART_INDEX(i) (i)
+#endif
+#if COMPACT_PARTIALS && PART_TOKENS <= 4
+#define PART_LANES 16u
+#else
+#define PART_LANES 32u
+#endif
 #define KT_S (KT / KSPLIT)                                // K tiles per slice
 #if (KT % KSPLIT) != 0
 #error "gemm_tile: KSPLIT must divide the K tiles"
@@ -143,16 +170,32 @@ static inline uint unit_word(uint lane, uint r, uint j) {
 #ifdef LANES_PER_WORD
 #error "sub-word units are the shader GEMV's: the tile and the gather read whole-word units"
 #endif
+#ifndef SCALE_LANE_DIVISOR
+#define SCALE_LANE_DIVISOR 1u
+#endif
 #ifndef SCALE_PLACEMENT
 #define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
 #endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
 #if SCALE_PLACEMENT
 #define SCALE_BASE (R * 32u * PAYLOAD_WORDS)
-#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
-#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * (32u / SCALE_LANE_DIVISOR) * SCALE_RUN + ((ln) / SCALE_LANE_DIVISOR) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) (((((ln) / SCALE_LANE_DIVISOR) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
 #else
 #define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
 #define SCALE_SOFF(ln) 0u
+#endif
+// Load a short, uint-aligned scale run directly instead of a uint4 followed
+// by lane-dependent extraction (affine pairs or byte-sized FP4 scales).
+#if SCALE_PLACEMENT && SCALE_RUN <= 8 && ((SCALE_BIAS && SCALE_UNIT_BYTES == 4) || (SCALE_UNIT_BYTES == 1 && SCALE_RUN % 4 == 0))
+#define NARROW_SCALE_RUN 1
+#define SCALE_REG_OFFSET(ln) 0u
+static inline uint narrow_scale_word(device const uint4* wb, uint ln, uint r, uint g) {
+  return reinterpret_cast<device const uint*>(wb + SCALE_BASE)[
+      (r * (32u / SCALE_LANE_DIVISOR) + ln / SCALE_LANE_DIVISOR) * (SCALE_RUN / 4u) + g];
+}
+#else
+#define NARROW_SCALE_RUN 0
+#define SCALE_REG_OFFSET(ln) SCALE_SOFF(ln)
 #endif
 #if SCALE_PLACEMENT
 #define BLOCK_WORDS (R * 32u * UNIT_WORDS + SCALE_REGION_WORDS)       // a block: its payload words then its scale region
@@ -184,7 +227,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
   const uint sg = gid / sw;
 #if KSPLIT > 1
   const uint slice = sg % KSPLIT, sg_tile = sg / KSPLIT, n_tg = p.n_sg / KSPLIT;   // a threadgroup is the KSPLIT SIMD-groups of one tile
-  threadgroup float part[KSPLIT - 1][32][C_CAP];                            // the partial tiles of slices 1 … KSPLIT-1
+  threadgroup float part[KSPLIT - 1][PART_LANES][PART_CAP];                            // the partial tiles of slices 1 … KSPLIT-1
 #else
   const uint sg_tile = sg, n_tg = p.n_sg;
 #endif
@@ -260,6 +303,19 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
 #pragma clang loop unroll(full)
         for (uint i = 0; i < NW; i++) {
+#if SCALE_PAYLOAD_ORDER
+          const uint off = r * 32u * SCALE_RUN + j * 64u + (ln0 + i) * 2u;
+          uint sw = reinterpret_cast<device const ushort*>(wb + SCALE_BASE)[off / 2u];
+#pragma clang loop unroll(full)
+          for (uint ch = 0; ch < ((CT < WPW) ? 1u : (WPW / 16u)); ch++)
+            scv[i * (WPW / 16u) + ch] = decode_scale(&sw, e0 / 16u + ch);
+#else
+#if NARROW_SCALE_RUN
+          uint scw[SCALE_RUN / 4u];
+#pragma clang loop unroll(full)
+          for (uint sc = 0; sc < SCALE_RUN / 4u; sc++)
+            scw[sc] = narrow_scale_word(wb, ln0 + i, r, sc);
+#else
 #if SCALE_CACHE
           if (j == 0u) {
 #pragma clang loop unroll(full)
@@ -285,15 +341,17 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
             scw[4 * sc] = v4.x; scw[4 * sc + 1] = v4.y; scw[4 * sc + 2] = v4.z; scw[4 * sc + 3] = v4.w;
           }
 #endif
+#endif
           const uint ln = ln0 + i;                                       // (LANE_OFF is a function of ln)
 #pragma clang loop unroll(full)
           for (uint ch = 0; ch < ((CT < WPW) ? 1u : (WPW / 16u)); ch++) {
             const uint g = (LANE_OFF + j * WPW + e0 + 16u * ch) / SCALE_GROUP;
-            scv[i * (WPW / 16u) + ch] = decode_scale(scw + SCALE_UOFF, SCALE_SOFF(ln) + g);
+            scv[i * (WPW / 16u) + ch] = decode_scale(scw + SCALE_UOFF, SCALE_REG_OFFSET(ln) + g);
 #if SCALE_BIAS
-            bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, SCALE_SOFF(ln) + g);
+            bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, SCALE_REG_OFFSET(ln) + g);
 #endif
           }
+#endif // SCALE_PAYLOAD_ORDER
         }
 #endif
 #pragma clang loop unroll(full)
@@ -307,7 +365,14 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
             v += bv[jump / 4u];
 #endif
 #endif
+#if BF16_STORAGE
+            // Preserve the stored BF16 bits instead of expanding each element
+            // to FP32 and rounding it back for the cooperative matrix operand.
+            const uint e = 4u * jump + qq;
+            bT[uint16_t(((jump * NS_B + s) << 2) | qq)] = as_type<bfloat2>(words[e / 8u][(e % 8u) / 2u])[e % 2u];
+#else
             bT[uint16_t(((jump * NS_B + s) << 2) | qq)] = bfloat(v);
+#endif
           }
       }
 #if EXP_MODE == 2
@@ -328,20 +393,25 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
     }
 #if KSPLIT > 1
     // the slices' partial tiles meet in threadgroup memory: slices 1 … KSPLIT-1 write theirs, slice 0 adds them into
-    // its own (the same element order in every SIMD-group) and runs the epilogue alone; the second barrier keeps the
-    // next tile's writes behind this tile's reads. Every thread of the threadgroup reaches both barriers.
-    if (slice != 0u) {
+    // its own and runs the epilogue alone. Compact scratch omits padded token rows;
+    // PART_INDEX maps its slots back to the hardware accumulator. Only a subsequent
+    // tile needs the second barrier to keep its writes behind this tile's reads.
+    if (slice != 0u && lane < PART_LANES) {
 #pragma clang loop unroll(full)
-      for (uint16_t i = 0; i < C_CAP; i++) part[slice - 1u][lane][i] = cT[i];
+      for (uint16_t i = 0; i < PART_CAP; i++) part[slice - 1u][lane][i] = cT[PART_INDEX(i)];
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (slice == 0u) {
+    if (slice == 0u && lane < PART_LANES) {
 #pragma clang loop unroll(full)
       for (uint s2 = 1; s2 < KSPLIT; s2++)
 #pragma clang loop unroll(full)
-        for (uint16_t i = 0; i < C_CAP; i++) cT[i] += part[s2 - 1u][lane][i];
+        for (uint16_t i = 0; i < PART_CAP; i++) cT[PART_INDEX(i)] += part[s2 - 1u][lane][i];
     }
+#if COMPACT_PARTIALS
+    if (tile + n_tg < p.tile0 + p.n_tiles) threadgroup_barrier(mem_flags::mem_threadgroup);
+#else
     threadgroup_barrier(mem_flags::mem_threadgroup);
+#endif
     if (slice != 0u) continue;
 #endif
     // epilogue over the destination: element ((blk*(TN/16) + jump)*2 + s2) << 2 | q holds row n = c0b + 16*jump + q
@@ -355,7 +425,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
       const uint bb = (tile - p.tile0) * (TN / R) + (n / R);             // the range-relative pack block
       float rs[4];
 #pragma clang loop unroll(full)
-      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? row_scale[min(row + qq, p.tile0 * TN + p.n_rows - 1u)] * p.out_scale : 0.0f;   // in bounds even when hoisted
+      for (uint qq = 0; qq < 4u; qq++) rs[qq] = (rrow + qq < p.n_rows) ? GEMM_ROW_SCALE(min(row + qq, p.tile0 * TN + p.n_rows - 1u)) * p.out_scale : 0.0f;   // in bounds even when hoisted
 #pragma clang loop unroll(full)
       for (uint blk = 0; blk < NB_C; blk++)
 #pragma clang loop unroll(full)
@@ -431,7 +501,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #ifndef PERM_SG
 #define PERM_SG 4u
 #endif
+#ifndef PERM_UNROLL
 #define PERM_UNROLL 4u
+#endif
 #ifndef PERM_FOLD_LOADS
 #define PERM_FOLD_LOADS 16u          // the norm fold's loads requested per round (divides by 4)
 #endif
@@ -446,6 +518,9 @@ static inline uint perm_source(uint i) {                                  // the
   return l * KL + j * WPW + e;
 }
 
+#ifndef PERM_GROUPS
+#define PERM_GROUPS 1u
+#endif
 kernel void x_permute(device const ushort* x [[buffer(0)]],
 #if PERM_NORM
                       device const float* stat [[buffer(1)]], device const float* norm_w [[buffer(2)]],
@@ -475,6 +550,10 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
     return;
   }
 #if PERM_NORM
+#if PERM_GROUPS > 1
+  threadgroup float shared_r;
+  if (slice % PERM_GROUPS == 0u) {
+#endif
   // the statistic's partials folded FOLD_LOADS loads per round (as gemv_T's fold: a row-split producer leaves up to 2048
   // per token, one load latency per 32 of them was the dispatch's critical path), four accumulators in a fixed order
   float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
@@ -486,6 +565,12 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
   }
   const float ssq = simd_sum((s0 + s1) + (s2 + s3));
   const float r = rsqrt(ssq / float(K) + p.eps);
+#if PERM_GROUPS > 1
+  if (lane == 0u) shared_r = r;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const float r = shared_r;
+#endif
 #endif
   device const ushort* row = x + (ulong)t * K;
   for (uint i = k0 + lane; i < k1; i += 32u * PERM_UNROLL) {

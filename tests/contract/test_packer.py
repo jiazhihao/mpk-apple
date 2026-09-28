@@ -129,3 +129,35 @@ def test_cli_with_plan(tmp_path):
     pf = PackFile(tmp_path / "out")
     assert set(pf.slabs) == {"l0.qkv", "l0.gateup", "l0.q01"} and pf.manifest["layout"]["lane_order"] == "interleaved16"
     assert np.array_equal(pf.dequantize_slab("l0.q01"), src[L + "self_attn.q_proj"][:32])
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_shared_scale_manifest_and_legacy_reader(tmp_path, shared):
+    n, k = 19, 1024
+    r = np.random.default_rng(29)
+    codes = r.integers(0, 2**32, size=(n, k // 8), dtype=np.uint32)
+    scales = r.uniform(.001, .01, size=(n, k // 64)).astype(np.float16)
+    biases = r.uniform(-.1, 0, size=scales.shape).astype(np.float16)
+    write_safetensors(tmp_path / "model.safetensors", {
+        "w.weight": ("U32", codes), "w.scales": ("F16", scales), "w.biases": ("F16", biases)})
+    pk = Packer(tmp_path, tmp_path / "pack")
+    pk.add_slab(SlabRequest("w", "int4_affine", [Segment("w")],
+                           PackLayout(scale_placement="block", share_scales=shared)))
+    manifest = pk.write()
+    assert manifest["version"] == 2
+    pf = PackFile(tmp_path / "pack")
+    assert pf.slab_info("w").scale_lane_divisor == (2 if shared else 1)
+    assert pf.slab_info("w").nbytes == manifest["slabs"][0]["nbytes"]
+    ref = FORMATS.get("int4_affine").dequantize(FORMATS.get("int4_affine").unpack(
+        {"weight": codes, "scales": scales, "biases": biases}, shape=(n, k)))
+    assert np.array_equal(pf.dequantize_slab("w"), ref)
+    manifest["version"] = 1
+    path = tmp_path / "pack" / "manifest.json"
+    if shared:
+        path.write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="require manifest version 2"):
+            PackFile(tmp_path / "pack")
+    else:
+        del manifest["slabs"][0]["scale_lane_divisor"]
+        path.write_text(json.dumps(manifest))
+        assert np.array_equal(PackFile(tmp_path / "pack").dequantize_slab("w"), ref)

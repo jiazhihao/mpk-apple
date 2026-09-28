@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import gc
 import importlib.metadata
+import itertools
 import platform
 import json
 import sys
@@ -134,11 +135,14 @@ def main():
     ap.add_argument('--ctx', default='128,1024')
     ap.add_argument('--kind', default='all', choices=['all', 'attention', 'gdn'])
     ap.add_argument('--limit', type=int)
+    ap.add_argument('--layers', help='comma-separated checkpoint layer indices, within the selected kind')
+    ap.add_argument('--individual', action='store_true', help='benchmark each selected layer separately; retain stack runs to check streaming latency')
     ap.add_argument('--kv-prefix', choices=['random', 'zero'], default='random')
     ap.add_argument('--attention', choices=['auto','v1','v2','v3','mma'], default='auto')
     ap.add_argument('--reps', type=int, default=5)
     ap.add_argument('--steps', type=int, default=24)
     ap.add_argument('--out', type=Path)
+    ap.add_argument('--continue-on-oracle-failure', action='store_true', help='record failed numerical checks and finish the sweep; still exit nonzero')
     ap.add_argument('--fail-on-regression', action='store_true', help='exit nonzero if any measured MPK/MLX ratio is >= 1')
     a = ap.parse_args()
     import mlx.core as mx
@@ -152,64 +156,72 @@ def main():
     model, _ = load(a.model)
     indices = [i for i, l in enumerate(model.layers) if a.kind == 'all' or
                (a.kind == 'gdn') == bool(getattr(l, 'is_linear', False))]
+    if a.layers:
+        requested = list(map(int, a.layers.split(',')))
+        if len(set(requested)) != len(requested) or any(i not in indices for i in requested):
+            raise ValueError('--layers must contain distinct valid indices within --kind')
+        indices = requested
     if a.limit:
         indices = indices[:a.limit]
     if not indices:
         raise ValueError('no layers selected')
     failed = False
-    for t in ts:
-        for ctx in ctxs:
-            x = bf16_to_f32(f32_to_bf16(np.random.default_rng(17).normal(0, .1, (t, sess.model.config.hidden_size)).astype(np.float32)))
-            eng, outputs = our_stack(sess, indices, t, ctx, x, a.kv_prefix == 'random')
-            if sess.tuner is not None:
-                sess.tuner.save(sess.dev.info().name)
-            step, check = mlx_stack(model, indices, t, ctx, x, a.kv_prefix == 'random')
-            def ours():
-                r = eng.run(a.steps, steps_per_cb=1, in_flight=2)
-                return r.wall_ms / a.steps, r.gpu_ms / a.steps
-            def mlx():
-                pending = []
-                start = time.perf_counter()
-                for _ in range(a.steps):
-                    y = step()
-                    mx.async_eval(y)
-                    pending.append(y)
-                    if len(pending) > 1:
-                        mx.eval(pending.pop(0))
-                mx.eval(*pending)
-                return (time.perf_counter() - start) * 1e3 / a.steps
-            ours()
-            mlx()
-            # Untimed output check: the two references differ in intermediate
-            # rounding, but must meet the composite-layer cosine contract.
-            got = [bf16_to_f32(np.frombuffer(eng.read(output, x.size * 2), dtype=np.uint16)).reshape(x.shape) for output in outputs]
-            cosine = check(got)
-            if not np.isfinite(cosine) or cosine < .999:
-                raise AssertionError(f'output cosine {cosine} < .999')
-            samples = []
-            for rep in range(a.reps):
-                if rep % 2:
-                    m = mlx(); w, g = ours()
-                else:
-                    w, g = ours(); m = mlx()
-                samples.append({'ours_wall_ms': w, 'ours_gpu_ms': g, 'mlx_wall_ms': m})
-            w, m = min(s['ours_wall_ms'] for s in samples), min(s['mlx_wall_ms'] for s in samples)
-            row = dict(model=Path(a.model).name, chip=sess.dev.info().name, date=time.strftime('%Y-%m-%d %H:%M'),
-                       metric='fixed_layer_stack', kind=a.kind, layer_indices=indices, T=t, ctx=ctx, steps=a.steps,
-                       attention=a.attention, pack=str(Path(a.pack).resolve()), checkpoint=str(Path(a.model).resolve()),
-                       mlx_version=importlib.metadata.version('mlx'), mlx_lm_version=importlib.metadata.version('mlx-lm'),
-                       os=platform.platform(), repetitions=a.reps, prefix=f'{a.kv_prefix} KV; zero recurrent input slot',
-                       dtype='bfloat16', cosine=cosine, ours_us=w * 1000 / len(indices), mlx_us=m * 1000 / len(indices),
-                       ratio=w / m, faster_in_every_pair=all(s["ours_wall_ms"] < s["mlx_wall_ms"] for s in samples), samples=samples)
-            failed |= row["ratio"] >= 1
-            print(json.dumps(row), flush=True)
-            if a.out:
-                a.out.parent.mkdir(parents=True, exist_ok=True)
-                with a.out.open('a') as f:
-                    f.write(json.dumps(row) + '\n')
-            del eng, step, check
-            gc.collect()
-    return int(a.fail_on_regression and failed)
+    oracle_failed = False
+    selections = [[i] for i in indices] if a.individual else [indices]
+    for indices, t, ctx in itertools.product(selections, ts, ctxs):
+        x = bf16_to_f32(f32_to_bf16(np.random.default_rng(17).normal(0, .1, (t, sess.model.config.hidden_size)).astype(np.float32)))
+        eng, outputs = our_stack(sess, indices, t, ctx, x, a.kv_prefix == 'random')
+        if sess.tuner is not None:
+            sess.tuner.save(sess.dev.info().name)
+        step, check = mlx_stack(model, indices, t, ctx, x, a.kv_prefix == 'random')
+        def ours():
+            r = eng.run(a.steps, steps_per_cb=1, in_flight=2)
+            return r.wall_ms / a.steps, r.gpu_ms / a.steps
+        def mlx():
+            pending = []
+            start = time.perf_counter()
+            for _ in range(a.steps):
+                y = step()
+                mx.async_eval(y)
+                pending.append(y)
+                if len(pending) > 1:
+                    mx.eval(pending.pop(0))
+            mx.eval(*pending)
+            return (time.perf_counter() - start) * 1e3 / a.steps
+        ours()
+        mlx()
+        # Untimed output check: the two references differ in intermediate
+        # rounding, but must meet the composite-layer cosine contract.
+        got = [bf16_to_f32(np.frombuffer(eng.read(output, x.size * 2), dtype=np.uint16)).reshape(x.shape) for output in outputs]
+        cosine = check(got)
+        oracle_pass = bool(np.isfinite(cosine) and cosine >= .999)
+        oracle_failed |= not oracle_pass
+        if not oracle_pass and not a.continue_on_oracle_failure:
+            raise AssertionError(f'output cosine {cosine} < .999')
+        samples = []
+        for rep in range(a.reps):
+            if rep % 2:
+                m = mlx(); w, g = ours()
+            else:
+                w, g = ours(); m = mlx()
+            samples.append({'ours_wall_ms': w, 'ours_gpu_ms': g, 'mlx_wall_ms': m})
+        w, m = min(s['ours_wall_ms'] for s in samples), min(s['mlx_wall_ms'] for s in samples)
+        row = dict(model=Path(a.model).name, chip=sess.dev.info().name, date=time.strftime('%Y-%m-%d %H:%M'),
+                   metric='fixed_individual_layer' if a.individual else 'fixed_layer_stack', kind=a.kind, layer_indices=indices, T=t, ctx=ctx, steps=a.steps,
+                   attention=a.attention, pack=str(Path(a.pack).resolve()), checkpoint=str(Path(a.model).resolve()),
+                   mlx_version=importlib.metadata.version('mlx'), mlx_lm_version=importlib.metadata.version('mlx-lm'),
+                   os=platform.platform(), repetitions=a.reps, prefix=f'{a.kv_prefix} KV; zero recurrent input slot',
+                   dtype='bfloat16', cosine=cosine, oracle_pass=oracle_pass, oracle_threshold=.999, ours_us=w * 1000 / len(indices), mlx_us=m * 1000 / len(indices),
+                   ratio=w / m, faster_in_every_pair=all(s["ours_wall_ms"] < s["mlx_wall_ms"] for s in samples), samples=samples)
+        failed |= row["ratio"] >= 1
+        print(json.dumps(row), flush=True)
+        if a.out:
+            a.out.parent.mkdir(parents=True, exist_ok=True)
+            with a.out.open('a') as f:
+                f.write(json.dumps(row) + '\n')
+        del eng, step, check
+        gc.collect()
+    return int(oracle_failed or (a.fail_on_regression and failed))
 
 
 if __name__ == '__main__':

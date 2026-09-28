@@ -36,11 +36,30 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
 
 ## MLX (ml-explore/mlx, MIT)
 
+- `kernels/gemv_bf16_small.metal` — adapted from `mlx/backend/metal/kernels/gemv.h`
+  @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): GemvWide's four-vector prefetch/reuse
+  and row reduction, extended for MPK's packed weights, permuted activations, row ranges,
+  residual/statistic and SiLU/multiply epilogues. License: `third_party/MLX-LICENSE`.
+
 - `monolith/formats/nvfp4.py` — `NVFP4_DECODE = 3` in the MSL snippet adapted from `mlx/backend/metal/kernels/fp4.h`
   (v0.32, MIT): the E2M1 nibble decoded by placing its three magnitude bits into a half's exponent field
   (`as_type<half>(ushort((bits & 7) << 9))`, the sign a select) with the 2^14 folded into the block scale; the
   quantized-checkpoint reader also follows MLX's `nvfp4` layout (codes eight per U32, E4M3 scales as U8), no code
   copied for that.
+  The E4M3 block-scale conversion also adapts `mlx/backend/metal/kernels/fp8.h`
+  @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85`: construct a half from the magnitude
+  bits and apply the exact exponent-bias correction in float, including subnormals.
+  License: `third_party/MLX-LICENSE`.
+
+- `kernels/gemv_nvfp4_rows.metal` — adapted from `mlx/backend/metal/kernels/fp_quantized.h`
+  @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): quantization-group dot products
+  reusing four activation vectors across output rows, extended for MPK's packed
+  weights, permuted activations, row ranges and epilogues. License: `third_party/MLX-LICENSE`.
+
+- `kernels/gemv_bf16_rows.metal` — adapted from `mlx/backend/metal/kernels/gemv.h`
+  @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): activation-vector reuse across
+  output rows, extended for packed BF16 weights, fused normalization and epilogues.
+  License: `third_party/MLX-LICENSE`.
 
 ## Original
 

@@ -1298,3 +1298,13 @@ The remaining work for [#113](https://github.com/jiazhihao/mpk-apple/issues/113)
 single-token projection/dispatch latency, the short-context T=4 path, and the
 hybrid GDN layer's projection and recurrence cost. These results do not meet the
 strict all-configurations gate, so that issue must stay open.
+
+
+### Fixed-token layer follow-up (2026-09-28)
+
+The implementation at `40a78fd` passes 704/704 individual minimum-latency
+comparisons and 24/24 streaming-stack comparisons on M5 Pro at T=1/4/6/8,
+contexts 128/1024. NVFP4 requires the opt-in payload-order scale layout.
+See [the implementation and evidence report](m5-native-code.md) for the measured
+changes, raw samples, narrow streaming margins, and the independent numerical
+audit of #124. Speculative acceptance throughput is outside this comparison.

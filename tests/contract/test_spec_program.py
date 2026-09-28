@@ -210,6 +210,13 @@ def test_accelerator_plan_in_the_round_program(pair):
     assert [o.meta.get("t_variant") for o in only] == [8] and only[0].meta["t_range"] == [0, 8] and only[0].meta["accelerator"]
     assert cost_prog.kernels[only[0].kernel].macros["T_LO"] == "0"
     prog = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="threshold", verify_threshold=0.5)
+    # Preparation now writes the opposite convolution slot; recurrence and rollback must
+    # bind that same state and observe the preparation dispatch's writes.
+    prepare = next(o for o in prog.ops if o.name == "gdn_prepare")
+    mixer = next(o for o in prog.ops if o.name == "gdn_mixer")
+    commit = next(o for o in prog.ops if o.name == "gdn_commit")
+    assert 2 in prepare.meta["writes"] and 2 not in mixer.meta["writes"] and 2 in commit.meta["writes"]
+    assert prepare.bindings[2] == mixer.bindings[2] == commit.bindings[2] and mixer.barrier_before
     gate_up = [o for o in prog.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]
     assert [o.meta.get("t_variant") for o in gate_up] == [1, 8] and [o.meta["t_range"] for o in gate_up] == [[0, 1], [1, 8]]
     shader, tile = gate_up
@@ -290,7 +297,7 @@ def test_fused_permutes(pair):
     out3 = lambda o: [b for b in o.bindings if b[0] == 3][0][1]
     target_tiles = [t for t in tiles if t.name.startswith("gemv:layers.")]
     fused_target = [o for o in prog.ops if o.meta.get("perm_out") and any(xin(t) == out3(o) for t in target_tiles)]
-    assert len(fused_target) == 3                                                          # o_proj of layer 1, down of layers 0 and 1
+    assert len(fused_target) == 4                                                          # attention/GDN out projections and both down projections
     plain = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="threshold", verify_threshold=0.5)
     # the target keeps its T = 1 shader variants there, so its inputs go through permutes again; the drafter's block GEMVs
     # (static rows: the tile alone under any rule) stay fused

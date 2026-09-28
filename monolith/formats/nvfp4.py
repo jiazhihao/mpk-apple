@@ -103,10 +103,11 @@ static inline void decode_word(uint4 q, thread float* out) {
 }
 #endif
 static inline float fp8_e4m3_scale(uint q) {
-  uint e = (q >> 3) & 15u, m = q & 7u;
-  float v = as_type<float>(((q & 0x7Fu) << 20) + (120u << 23));
-  v = (e == 0u) ? float(m) * (1.0f / 512.0f) : v;
-  return (q & 0x80u) ? -v : v;
+  // Adapted from MLX fp8.h @ 1f8e74e3f12f31365464a6867c6579f0e9b29d85
+  // (MIT; third_party/NOTICE). Half conversion handles E4M3 subnormals too;
+  // moving the exact power-of-two multiply to float preserves every scale bit.
+  half h = as_type<half>(ushort((q & 127u) << 7));
+  return float((q & 128u) ? -h : h) * 256.0f;
 }
 // scale of group g of this lane-row: byte g of the unit's scale region (held in registers as uints)
 #if NVFP4_DECODE == 2

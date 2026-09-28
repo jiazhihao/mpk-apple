@@ -27,9 +27,11 @@ def dev():
 
 
 class Cfg:
-    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0):
+    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0, adaptive=False, single_block=False):
         self.heads, self.kv, self.d, self.rot, self.ctx_max, self.t_max = heads, kv, d, rot, ctx_max, t_max
         self.mma, self.step_state, self.lm_mode = mma, step_state, lm_mode
+        self.single_block = single_block
+        self.adaptive = adaptive
         self.v2, self.n_tg, self.steal = v2, n_tg, steal                # v2: the partial granularity is 32 keys (the numpy model's chunk)
         self.v3, self.nsg3 = v3, nsg3 or kernels.gqa_v3_simdgroups(d)   # v3: one dispatch, a threadgroup of nsg3 SIMD-groups per query row
         if v2 or (mma and d == 256):
@@ -42,6 +44,8 @@ class Cfg:
         self.n1 = hd + 2 * kd + (hd if gate else 0)
         self.rows_max = self.rep * t_max
         self.n_chunks_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, 12 * dev.info().gpu_cores) if False else kernels.gqa_chunks_max(ctx_max, kv, chunk)
+        if adaptive:
+            self.n_chunks_max = -(-ctx_max // 32)
         self.scaling = d ** -0.5
 
 
@@ -51,7 +55,9 @@ class Harness:
     def __init__(self, dev, cfg, qn, kn):
         self.dev, self.cfg = dev, cfg
         if cfg.mma:
-            macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG="8")
+            macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(cfg.d, cfg.rep)))
+            if cfg.adaptive:
+                macros["ADAPTIVE_CHUNK"] = "1"
             source = kernels.gqa_source(mma=True)
             if cfg.step_state:
                 from monolith.core import StepStateLayout
@@ -61,7 +67,7 @@ class Harness:
             lib = nt.Library(dev, source, macros, kernels.MSL_TENSOR_OPS)
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_mma"), nt.Pipeline(lib, "gqa_merge")
         elif cfg.v3:
-            lib = nt.Library(dev, kernels.gqa_source(v3=True), kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3))
+            lib = nt.Library(dev, kernels.gqa_source(v3=True), dict(kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3), SINGLE_BLOCK=str(int(cfg.single_block))))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v3"), None
             assert self.p_dec.max_threads_per_threadgroup >= cfg.nsg3 * 32
         elif cfg.v2:
@@ -106,6 +112,27 @@ class Harness:
                                     q_off=c.q_off, gate_off=c.gate_off, k_off=c.k_off, v_off=c.v_off, in_stride=c.n1,
                                     out_stride=c.heads * c.d, ctx_max=c.ctx_max, eps=EPS, scaling=c.scaling, has_gate=c.gate,
                                     n_chunks_max=c.n_chunks_max, rows_max=c.rows_max, nominal_sg=self.n_sg, gate_stride=c.n1 if c.v3 else 0)
+        if getattr(c, "specialize", False) and not getattr(self, "specialized", False):
+            source = kernels.gqa_source(v2=c.v2, v3=c.v3, mma=c.mma)
+            if c.v3:
+                macros = dict(kernels.gqa_v3_macros(c.d, nsg=c.nsg3), SINGLE_BLOCK=str(int(c.single_block)))
+            elif c.v2:
+                macros = kernels.gqa_v2_macros(c.d, rmax=c.rows_max, rg=c.rb)
+            else:
+                macros = kernels.gqa_macros(c.d, chunk=c.chunk, rb_max=16 if c.mma else c.rb)
+            if c.mma:
+                macros.update(FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(c.d, c.rep)))
+                if c.adaptive:
+                    macros["ADAPTIVE_CHUNK"] = "1"
+            if c.step_state:
+                macros["STEP_STATE"] = "1"
+                source = source.replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl(), 1)
+            source, constants = kernels.specialize_params(source, "gqa", params)
+            lib = nt.Library(self.dev, source, dict(macros, **constants), kernels.MSL_TENSOR_OPS if c.mma else 0)
+            name = "gqa_decode_mma" if c.mma else "gqa_decode_v3" if c.v3 else "gqa_decode_v2" if c.v2 else "gqa_decode"
+            self.p_dec = nt.Pipeline(lib, name)
+            self.p_merge = None if c.v3 else nt.Pipeline(lib, "gqa_merge_v2" if c.v2 else "gqa_merge")
+            self.specialized = True
         pb = nt.Buffer(self.dev, proj_bf16.tobytes())
         out = nt.Buffer(self.dev, t * c.heads * c.d * 2); out.fill(0)
         if c.v3:                                                       # one dispatch: heads · T threadgroups; the gate read from the projection (buffer 10, stride n1)
@@ -120,7 +147,7 @@ class Harness:
               .buffer(3, self.bufs["cos"]).buffer(4, self.bufs["sin"]).buffer(5, self.bufs["qn"]).buffer(6, self.bufs["kn"])
               .buffer(7, self.part_o).buffer(8, self.part_md).bytes(9, params).grid(-(-(n_disp * 32) // 384)).threadgroup(384).barrier())
         if c.mma:
-            d1.grid(dispatch_sg or self.dev.info().gpu_cores * 4).threadgroup(256)
+            d1.grid(dispatch_sg or self.dev.info().gpu_cores * 4).threadgroup(32 * kernels.gqa_mma_simdgroups(c.d, c.rep))
         d2 = (nt.Dispatch().pipeline(self.p_merge).buffer(0, self.part_o).buffer(1, self.part_md).buffer(2, pb).buffer(3, out)
               .bytes(4, params).grid(t * c.heads).threadgroup(32))
         if c.step_state:
@@ -446,10 +473,11 @@ def test_v3_matches_kernel_contract(dev, cfg):
 
 
 @pytest.mark.parametrize("mma", [False, True])
-def test_v3_is_bit_stable_and_t_active(dev, mma):
+@pytest.mark.parametrize("heads", [4, 8])
+def test_v3_is_bit_stable_and_t_active(dev, mma, heads):
     """Repeats are bit-identical; t_active limits the rows and the append; the same inputs through v1 agree within the
     composite bar (the two contracts round p̃ against different maxima)."""
-    heads, kv, d, ctx_max = 8, 2, 128, 2048
+    kv, d, ctx_max = 2, 128, 2048
     rng = np.random.default_rng(78)
     qn, kn = _norms(rng, d)
     h1 = Harness(dev, Cfg(heads, kv, d, 64, ctx_max, 8), qn, kn)
@@ -508,13 +536,14 @@ def test_mma_matches_kernel_contract(dev, heads, kv, rot, ctx_max, gate):
 
 
 @pytest.mark.parametrize("mode", [0, 1, 2, 3])
-def test_mma_step_state_and_strided_grid(dev, mode):
+@pytest.mark.parametrize("heads", [4, 12])
+def test_mma_step_state_and_strided_grid(dev, mode, heads):
     """A short crew must visit every chunk; LM row sources and done/empty steps are predicated on GPU."""
     rng = np.random.default_rng(190)
-    cfg = Cfg(12, 2, 128, 64, 256, 8, mma=True)
+    cfg = Cfg(heads, 2, 128, 64, 256, 8, mma=True)
     qn, kn = _norms(rng, 128)
     ref = Harness(dev, cfg, qn, kn)
-    dyn = Harness(dev, Cfg(12, 2, 128, 64, 256, 8, mma=True, step_state=True, lm_mode=mode), qn, kn)
+    dyn = Harness(dev, Cfg(heads, 2, 128, 64, 256, 8, mma=True, step_state=True, lm_mode=mode), qn, kn)
     pos, t = 123, 5
     proj = _random_proj(rng, cfg, t)
     state = dict(position=pos, t_this_step=t, n_inject=t, n_chain=t)
@@ -537,3 +566,78 @@ def test_mma_step_state_and_strided_grid(dev, mode):
 @pytest.mark.parametrize("ctx", [256, 4096])
 def test_mma_wide_heads(dev, ctx):
     test_v3_matches_kernel_contract(dev, Cfg(8, 2, 256, 64, ctx, 8, gate=True, mma=True))
+
+
+@pytest.mark.parametrize("position", [0, 60, 128, 248, 249, 256, 1024])
+@pytest.mark.parametrize("t", [1, 4, 8])
+def test_adaptive_mma_matches_fixed_chunk_and_cache(dev, position, t):
+    """Cross chunk and branch boundaries with live prefixes, inactive rows, and a crew that reuses scratch."""
+    rng = np.random.default_rng(211 + position + t)
+    qn, kn = _norms(rng, 128)
+    chunk = 32 if position + t <= 256 else 64
+    gate = t != 4
+    fixed = Harness(dev, Cfg(4, 2, 128, 64, 1152, 8, chunk=chunk, gate=gate, mma=True), qn, kn)
+    cfg = Cfg(4, 2, 128, 64, 1152, 8, gate=gate, mma=True, adaptive=True, step_state=True)
+    adaptive = Harness(dev, cfg, qn, kn)
+    caches = [rbf(rng.standard_normal((cfg.ctx_max, cfg.kv, cfg.d)).astype(np.float32) * .1) for _ in range(2)]
+    fixed.set_caches(*caches)
+    adaptive.set_caches(*caches)
+    proj = _random_proj(rng, cfg, 8)
+    expected = fixed.step(proj, position, t_active=t, dispatch_sg=3)
+    got = adaptive.step(proj, position, t_active=t, dispatch_sg=3)
+    assert np.array_equal(got, expected)
+    assert np.all(got[t:] == 0)
+    assert all(np.array_equal(a, b) for a, b in zip(fixed.caches(), adaptive.caches()))
+    before = adaptive.caches()
+    for state in [dict(position=position, t_this_step=t, done=1), dict(position=position, t_this_step=0)]:
+        assert np.all(adaptive.step(proj, position, dispatch_sg=3, state=state) == 0)
+        assert all(np.array_equal(a, b) for a, b in zip(before, adaptive.caches()))
+
+
+@pytest.mark.parametrize("kind,d,gate", [("v1", 64, True), ("v2", 128, False), ("v3", 128, True),
+                                       ("mma", 256, True), ("adaptive", 128, False)])
+def test_static_geometry_keeps_position_and_active_length_dynamic(dev, kind, d, gate):
+    rng = np.random.default_rng(159)
+    configs = [Cfg(4, 2, d, d, 512, 4, gate=gate, v2=kind == "v2", v3=kind == "v3",
+                   mma=kind in ("mma", "adaptive"), adaptive=kind == "adaptive",
+                   step_state=kind in ("mma", "adaptive")) for _ in range(2)]
+    configs[1].specialize = True
+    configs[1].single_block = kind == "v3"
+    qn, kn = [rng.uniform(.8, 1.2, d).astype(np.float32) for _ in range(2)]
+    hs = [Harness(dev, c, qn, kn) for c in configs]
+    prefix = [rbf(rng.normal(0, .2, (512, 2, d))) for _ in range(2)]
+    for h in hs:
+        h.set_caches(*prefix)
+    # Reuse one specialized pipeline across partial/full/empty steps and the
+    # adaptive chunk boundary. Neither position nor active length may freeze.
+    for position, active in [(127, 1), (252, 4), (253, 4), (300, 0)]:
+        proj = f32_to_bf16(rng.normal(0, .3, (4, configs[0].n1)).astype(np.float32))
+        out = [h.step(proj, position, active) for h in hs]
+        np.testing.assert_array_equal(*out)
+        for a, b in zip(hs[0].caches(), hs[1].caches()):
+            np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("nsg", [16, 32])
+@pytest.mark.parametrize("position", [31, 32, 63, 64, 65, 127, 128, 129, 1023])
+@pytest.mark.parametrize("single_block", [False, True])
+def test_v3_cached_key_pair_boundaries(dev, nsg, position, single_block):
+    """Pair batching, the unpaired cached tail and new causal keys meet the
+    unchanged independent kernel contract, including exactly one or no pair."""
+    cfg = Cfg(4, 2, 128, 64, 2048, 4, v3=True, nsg3=nsg, single_block=single_block)
+    rng = np.random.default_rng(79 + position)
+    qn, kn = _norms(rng, cfg.d)
+    h = Harness(dev, cfg, qn, kn)
+    kc = np.zeros((cfg.ctx_max, cfg.kv, cfg.d), np.float32)
+    vc = np.zeros_like(kc)
+    kc[:position] = rbf(rng.normal(0, .5, kc[:position].shape))
+    vc[:position] = rbf(rng.normal(0, .5, vc[:position].shape))
+    h.set_caches(kc, vc)
+    proj = _random_proj(rng, cfg, 3)
+    got = h.step(proj, position)
+    ref = ref_step(h, bf16_to_f32(proj), position, kc, vc)
+    cos, max_abs, scale = _bars(got, ref)
+    assert cos > 0.99999 and max_abs <= 2 * _ulp(scale), (cos, max_abs, scale)
+    got_k, got_v = h.caches()
+    assert np.array_equal(got_v[:position + 3], vc[:position + 3])
+    assert np.abs(got_k[:position + 3] - kc[:position + 3]).max() <= 1e-2 * max(np.abs(kc[:position + 3]).max(), 1e-6)

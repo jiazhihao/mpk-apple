@@ -25,6 +25,11 @@ The reported microseconds per layer are the directly measured stack latency divi
 by the number of selected layers; they are **not individual-layer measurements**.
 Attention and GDN stacks can be selected independently for hybrid models.
 
+For the measured M5 NVFP4 layout, repack the same checkpoint with
+`tools/pack_weights.py --model <checkpoint> --out <pack> --scale-placement block --scale-order payload`.
+The v3 manifest records the physical scale order; the original codes and dequantized weights are unchanged.
+Existing packs remain readable and retain their recorded layout. Include the pack path and layout in reports.
+
 ```bash
 python tools/bench/layer_fixed_vs_mlx.py \
   --model ~/models/mlx-community-Qwen3-0.6B-4bit --pack /tmp/pack-06b \
@@ -49,3 +54,9 @@ aborts. `--fail-on-regression` exits nonzero if any minimum-time ratio is at lea
 one; `faster_in_every_pair` separately reports consistency across repetitions.
 A faster stack mean does not establish that every individual layer is faster.
 Run without Metal shader validation for timing, and use validation for correctness.
+
+Use `--individual` to measure every selected layer separately, or `--layers 0,13,27`
+to narrow the checkpoint indices. These isolated replays have different weight
+cache residency and host-overhead amortization; keep streaming stack runs as a
+companion check. See [the M5 performance report](../../docs/research/m5-native-code.md)
+for the final result summary and archived native-code investigation tools.

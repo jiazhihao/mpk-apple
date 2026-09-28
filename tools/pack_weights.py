@@ -121,10 +121,14 @@ def main(argv=None) -> int:
     ap.add_argument("--rows", type=int, default=16)
     ap.add_argument("--scale-placement", default="inline", choices=["inline", "block"],
                     help="block: the block's scales in their own region, a unit of whole payload words — the pack streams the weights' bytes (#101)")
+    ap.add_argument("--no-share-scales", action="store_true", help="keep duplicate affine INT4 block scales for layout comparisons")
+    ap.add_argument("--scale-order", default="lane", choices=["lane", "payload"],
+                    help="payload: order eligible NVFP4 block scales with the physical weight words (manifest v3)")
     ap.add_argument("--quantize", default=None, help="quantize the checkpoint's BF16 / F32 matrices into this format at pack time (nvfp4, int8, fp8_e4m3, int4_affine)")
     ap.add_argument("--quantize-keep", default=None, help="comma-separated tensor-name substrings that stay as stored with --quantize (e.g. embed_tokens,markov)")
     a = ap.parse_args(argv)
-    layout = PackLayout(rows=a.rows, lane_order=a.lane_order, scale_placement=a.scale_placement)
+    layout = PackLayout(rows=a.rows, lane_order=a.lane_order, scale_placement=a.scale_placement,
+                        share_scales=not a.no_share_scales, scale_order=a.scale_order)
     if a.drafter_kind is not None:
         return pack_from_drafter(a, layout)
     if a.plan is None:
@@ -136,7 +140,8 @@ def main(argv=None) -> int:
         pk.add_slab(SlabRequest(s["name"], s["format"], [_segment(x) for x in s["segments"]], layout, _perm(s.get("row_perm"))))
     for x in plan.get("aux", []):
         pk.add_aux(AuxRequest(x["name"], x["source"], x.get("transform")))
-    m = pk.write({"plan": str(a.plan), "layout": {"rows": a.rows, "lane_order": a.lane_order, "scale_placement": a.scale_placement}})
+    m = pk.write({"plan": str(a.plan), "layout": {"rows": a.rows, "lane_order": a.lane_order, "scale_placement": a.scale_placement,
+                                               "share_scales": layout.share_scales, "scale_order": layout.scale_order}})
     print(f"packed {len(m['slabs'])} slabs and {len(m['aux'])} aux tensors, {m['nbytes'] / 1e6:.1f} MB -> {a.out}")
     return 0
 
