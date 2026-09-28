@@ -140,8 +140,9 @@ def _rbf(a):
 class Gemm:
     """One packed matrix and the dispatch plumbing for the tile's variants (mirrors the fused-GEMV harness)."""
 
-    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16"):
+    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16", function="gemm_tile"):
         self.dev, self.n, self.k, self.tm, self.fmt = dev, n, k, tm, fmt
+        self.function = function
         rng = np.random.default_rng(seed)
         self.spec = random_spec(fmt, n, k, rng)
         self.data, self.info, self.row_scales = pack_spec(self.spec, PackLayout(rows=rows, lane_order=lane_order))
@@ -173,7 +174,7 @@ class Gemm:
         macros.update(extra_macros or {}); pmacros.update(extra_macros or {})
         lib = nt.Library(self.dev, src, macros, language_version=kernels.MSL_TENSOR_OPS)
         plib = nt.Library(self.dev, src, {**macros, **pmacros}, language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
-        pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(plib, "x_permute")
+        pso, ppso = nt.Pipeline(lib, self.function), nt.Pipeline(plib, "x_permute")
         n = self.n
         if row_range is None:
             tile0, n_tiles, n_rows = 0, kernels.gemm_tiles(n, int(macros["TN"].rstrip("u"))), n
@@ -183,6 +184,8 @@ class Gemm:
         n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", n_tiles, self.dev.info().gpu_cores,
                                                min(384, pso.max_threads_per_threadgroup))
         n_blocks = -(-n_rows // self.info.rows)
+        if self.function == "gemv_bf16_small":
+            n_sg, n_tg, tg = n_blocks * self.info.rows // 2, n_blocks, 16 * self.info.rows
         n_out = n_rows // 2 if epilogue == "silu_mul" else n_rows
         xp = nt.Buffer(self.dev, self.tm * self.k * 2)
         y = nt.Buffer(self.dev, self.tm * n_out * 4); y.fill(0)

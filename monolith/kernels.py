@@ -208,7 +208,10 @@ THREADGROUP_MEMORY_LIMIT = 32768  # bytes of threadgroup memory a dispatch may d
 def gemm_source(fmt: str) -> str:
     """The gemm_tile kernel (the M5 accelerator path for T > 1, #50) for storage format ``fmt``; compile it with
     ``language_version=MSL_TENSOR_OPS``."""
-    return PRELUDE + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+    src = PRELUDE + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
+    if fmt == "bf16":
+        src += "\n" + template("gemv_bf16_small.metal")
+    return src
 
 
 def gemm_tile_shape(tm: int) -> Tuple[int, int]:

@@ -146,7 +146,7 @@ def _check(got, ref_out, got_rec, ref_rec, got_conv, ref_conv):
 def test_matches_layer_oracle(dev, hk, hv, ab_separate, t, prepared):
     torch = pytest.importorskip("torch")
     m, rng = _module(64, hk, hv, 128, 128, seed=hk * 7 + hv + t)
-    h = Harness(dev, m, t, ab_separate=ab_separate, prepared=prepared, slice_cols=1 if prepared else 8, slices_per_block=1 if prepared else 4, tokens_per_pass=8 if prepared else None)
+    h = Harness(dev, m, t, ab_separate=ab_separate, prepared=prepared, slice_cols=4 if prepared else 8, slices_per_block=1 if prepared else 4, tokens_per_pass=8 if prepared else None)
     state = {"l.conv_state": torch.from_numpy((rng.standard_normal((m.conv_dim, CW - 1)) * 0.5).astype(np.float32)).to(torch.bfloat16),
              "l.rec_state": torch.from_numpy((rng.standard_normal((hv, 128, 128)) * 0.1).astype(np.float32))}
     h.set_state(state)

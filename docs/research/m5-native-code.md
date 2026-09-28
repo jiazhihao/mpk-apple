@@ -154,3 +154,87 @@ After enabling compact partials and refreshing tuning, the streaming MLX check i
 
 T=4 remains slower at both contexts. Raw samples are in
 `apple-m5-pro-20c_fixed_int4_compact_20260928.jsonl`.
+
+## Prepared recurrence and packed BF16 SIMD follow-up
+
+Further inspection captured the actual MLX T=4 INT4 projection
+`affine_qmv_wide_bfloat16_t_gs_64_b_4_nv_4_kl_8_batch_0` (56 registers,
+no scratch) and `sdpa_vector_bfloat16_t_128_128_nomask_qnt_c_nosinks`
+(33 registers, no scratch, 4,352 shared bytes). These are archived pipeline
+specializations, not an inference from dispatch names in source code.
+
+Two changes were retained after paired whole-layer measurements:
+
+- Prepared GDN processes **four adjacent state columns per SIMD group**, with
+  four SIMD groups per threadgroup. It shares the prepared query/key loads
+  across those columns while preserving each column's FP32 recurrence order.
+  Both the parameter's work count and the dispatched grid shrink by four.
+- **BF16 K=1024, compiled T=4, interleaved packs** use a SIMD projection with
+  16 lanes per output row. Eight weight vectors are prefetched and reused over
+  four token vectors. The kernel reads the existing permuted activation layout
+  and implements row ranges, residual/statistic outputs and fused gate/up
+  permutation. Larger K and T retain their matrix kernels. The prefetch and
+  row-reduction structure is adapted from MLX's MIT-licensed `GemvWide`; the
+  source and license are recorded in `third_party/NOTICE`.
+
+The BF16 SIMD specialization reports 98 registers for plain projections and
+101 for gate/up, both with zero scratch. Prepared GDN changes from 51 to 69
+registers, also with zero scratch. These faster kernels use **more** registers:
+register count alone is not a performance ranking. The recurrence trades those
+registers for input reuse, and the SIMD projection avoids padded matrix work.
+
+Same-day A/B against `b8edaaf`, random BF16 inputs (seed 17), zero recurrent input
+slot, 18 distinct GDN layers, context 128, 7 alternating repetitions of 32 steps,
+two command buffers in flight:
+
+| T | Before µs/layer | After µs/layer | Faster in every pair |
+|---:|---:|---:|---|
+| 4 | 208.61 | 201.87 | Yes |
+| 6 | 206.26 | 203.63 | Yes |
+| 8 | 209.31 | 205.18 | Yes |
+
+T=6/8 exercise only the recurrence change and have identical measured outputs.
+The T=4 SIMD reduction changes floating-point summation order; its whole-stack
+before/after cosine is 0.999390. The stricter same-input **per-layer** comparison
+against MLX passes with minimum cosine 0.999982 at T=4. Leaf tests independently
+check projection, epilogue, state-predicate and permutation correctness.
+
+The updated MLX gate (7 repetitions of 48 steps) remains **open**:
+
+| T | MPK µs/layer | MLX µs/layer | MPK / MLX |
+|---:|---:|---:|---:|
+| 4 | 200.80 | 182.44 | 1.101 |
+| 6 | 202.33 | 182.64 | 1.108 |
+| 8 | 203.64 | 188.45 | 1.081 |
+
+Raw samples and native reports are in
+`apple-m5-pro-20c_gdn_bf16_ab_20260928.jsonl`,
+`apple-m5-pro-20c_fixed_gdn_bf16_20260928.jsonl`, and
+`apple-m5-pro-20c_gdn_bf16_native_20260928.jsonl` under `tools/bench/results`.
+
+Rejected experiments include direct BF16 tensor loading, larger SIMD prefetches
+and T=8 SIMD projections, register-softmax attention, and context-predicated
+attention dispatches. A single-SIMD register-softmax prototype allocated 400
+scratch bytes per thread and took about 125 versus 85 µs per INT4 layer at
+T=4/context 128. Independent smaller SIMD tiles reduced that loss but still
+lost. The existing v3 attention is faster at short T=4 contexts, but adding
+predicated v3/core/merge dispatches saved only 2.6 µs there and cost 3.0 µs at
+context 1024. Neither change was enabled.
+
+The initial source-replacement harness for GDN geometry did not update the
+compiler's `HANDLERS` table. Those measurements are invalid and were discarded.
+The retained A/B rebuilds the emitter and asserts the emitted recurrence slice
+width and number of SIMD projection dispatches before timing.
+
+Validation also exposed an **intermittent, independently reproduced baseline
+failure** when reusing a session for a long prompt after the oracle and short
+prompt checks. It is tracked separately in
+[#123](https://github.com/jiazhihao/mpk-apple/issues/123). Fresh-session checks
+and repeated sequences passed, but a pass on rerun does not resolve this issue.
+The failing dynamic-T=8 programs do not contain the new BF16 SIMD kernels.
+
+The combined validation run passed **342 tests**, with 3 skipped, under Metal
+shader validation: contracts, matrix and GDN kernel tests, the 25 new BF16 SIMD
+cases, and the real-model speculative rollback golden. The real-model layer
+oracle and twice-repeated 48-token short golden also passed. The independently
+reproduced session-reuse issue above remains open.

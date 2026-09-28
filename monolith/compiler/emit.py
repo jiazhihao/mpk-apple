@@ -519,6 +519,8 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     macros = kernels.gemm_macros(info, tm=tm, out_bf16=True, epilogue=epilogue, stat_out=stat_out is not None,
                                  round_before_residual=bool(op.attrs.get("round_residual")))
     tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
+    small_bf16 = (info.format == "bf16" and info.k == 1024 and info.lane_order == "interleaved16"
+                  and hi == 4 and tn == 16)
     tmac = dict(ctx.t_macros(hi, t_src))
     if predicated:
         tmac["T_LO"], tmac["T_HI"] = str(lo), str(hi)
@@ -553,9 +555,13 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     y_binding = (fused[0], 0) if fused else ctx.buf(y)                                    # consumer reads x' from here
     if fused:
         tmac = dict(tmac, **fused[1])
-    k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), "gemm_tile", dict(macros, **tmac), language_version=kernels.MSL_TENSOR_OPS)
+    function = "gemv_bf16_small" if small_bf16 else "gemm_tile"
+    k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), function, dict(macros, **tmac), language_version=kernels.MSL_TENSOR_OPS)
     n_tiles = -(-n_rows // tn)
     n_sg, grid, tg = ctx.geometry(mode, n_tiles)
+    if small_bf16:
+        n_sg, grid, tg = n_blocks * info.rows // 2, (n_blocks, 1, 1), (16 * info.rows, 1, 1)
+        mode = "bf16_simd16"
     prm = ctx.params("gemm", kernels.gemm_params(n_rows, n_tiles, n_sg, hi, tile0=block0 * info.rows // tn, n_blocks=n_blocks))
     bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, xp, 0), (3, *y_binding), (4, prm, 0)]
     writes = [3]
@@ -565,7 +571,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         bindings.append((8, stat_out, 0))
         writes.append(8)
     ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
-            accelerator=True, tm=tm, perm_out=bool(fused), tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
+            accelerator=not small_bf16, tm=tm, perm_out=bool(fused), tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
             variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
             row_range=[block0 * info.rows, n_rows] if op.attrs.get("row_range") is not None else None)
 
@@ -803,18 +809,21 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
         raise ValueError(f"gdn_mixer: the states need two slots (StateEntry.checkpoints = 2), got {ctx.shape(cs)} / {ctx.shape(rs)}")
     macros = _gdn_macros(ctx, a, commit)
     prepared = not commit and ctx.t > 1 and ctx.accelerator == "on"
+    # Four adjacent state columns amortize the prepared q/k loads while keeping
+    # the recurrence's FP32 accumulation order and enough independent work.
+    prepared_blocks = hv * (dv // 4)
     if prepared:
-        macros.update(PREPARED="1", SPB="1u", SL="1u", TP="8u")
+        macros.update(PREPARED="1", SPB="1u", SL="4u", TP="8u")
     kmix = ctx.kernel("gdn", kernels.gdn_source(), "gdn_mixer", macros)
     main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
     prm = ctx.params("gdn", kernels.gdn_params(
         hv=hv, hk=hk, t_active=ctx.t, q_off=ps["in_proj_qkv"][1], k_off=ps["in_proj_qkv"][1] + kd, v_off=ps["in_proj_qkv"][1] + 2 * kd,
         z_off=0, a_off=ps["in_proj_a"][1], b_off=ps["in_proj_b"][1], in_stride=ctx.shape(main)[1],
-        ab_stride=ctx.shape(abv)[1], ab_separate=ab_separate, out_stride=hv * dv, n_sg=hv * dv if prepared else ctx.n_sg, key_dim=kd, eps=float(a["eps"])))
+        ab_stride=ctx.shape(abv)[1], ab_separate=ab_separate, out_stride=hv * dv, n_sg=prepared_blocks if prepared else ctx.n_sg, key_dim=kd, eps=float(a["eps"])))
     st = ctx.program.step_state
     grid, tg = ctx.crew_grid()
     if prepared:
-        grid, tg = (-(-(hv * dv) // 4), 1, 1), (128, 1, 1)
+        grid, tg = (-(-prepared_blocks // 4), 1, 1), (128, 1, 1)
     prep_binding = []
     if prepared:
         prep = ctx.scratch("gdn.prepared", ctx.t * hv * (2 * dk + dv + 2) * 4, shared=True)
