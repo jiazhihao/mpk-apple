@@ -613,6 +613,12 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
                 t_range=[lo, hi] if predicated else None, normed=stat is not None)
     choice = ctx.tuner.tune_gemm(info, tm, epilogue) if ctx.tuner is not None else None
     mode = choice.grid_mode if choice else "crew"
+    # The leaf tuner measures full, unspecialized tiles. In the overlapping
+    # small-BF16 layer schedule, shorter input/gate slices and fewer output
+    # slices win at six/eight tokens (m5-native-code.md, paired layer gates).
+    if (info.format == "bf16" and info.lane_order == "interleaved16" and hi in (6, 8) and tn == 16 and tk == 64
+            and 1024 <= info.k <= 4096 and info.k % 512 == 0):
+        mode = "ksplit4" if epilogue == "silu_mul" else "ksplit8" if info.k == 1024 else "ksplit2"
     ksplit = kernels.gemm_ksplit(mode)
     if ksplit > 1:                                                       # the K-split's macro (validated for this slab's K tiles)
         macros = kernels.gemm_macros(info, tm=tm, out_bf16=True, epilogue=epilogue, stat_out=stat_out is not None,

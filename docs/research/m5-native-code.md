@@ -1108,3 +1108,42 @@ has been changed. These individual replays have different cache reuse and host
 amortization from the streaming stack. They meet the measured per-layer latency
 minimum gate, but do **not** close the streaming GDN/NVFP4 gaps above or establish
 an all-pairs win for the four noisy cases.
+
+## Matrix scheduling and scale decoding follow-up
+
+With the hoisted/shared baseline, a six/eight-token BF16 matrix schedule using
+K-split 8 for K=1024 plain projections, 4 for gate/up, and 2 for wider output
+projections reduces GDN T=6/8 from 189.15/191.25 to 185.49/187.29 µs in paired
+whole-stack measurements. The compiler selects it for the measured 16×64
+small-BF16 tile family at T=6/8. The independent layer-vs-MLX numerical minimum
+is 0.9999834/0.9999861; unchanged threshold 0.999. Fresh streaming gates show
+T=8 wins every pair at both context lengths (~187.0 vs ~188.9 µs). T=6 still
+trails (~185.1–185.5 vs ~183.4–183.5); changing reduction geometry alone does
+not close that gap. Whole-trajectory A/B cosines are lower (~0.998) because
+rounding differences accumulate across layers; they are not the independent
+layer oracle.
+
+NVFP4 scale decoding can use a half conversion to handle both normal and
+subnormal E4M3 magnitudes without a separate exponent-zero branch. Applying
+the exact exponent-bias correction in FP32 preserves every finite scale bit,
+including signed zeros. Whole-stack captures remain byte-identical; paired
+T=1/4 measurements improve 402.85/445.67→402.40/444.31 µs. This follows MLX's
+`fp8.h` conversion and has provenance in the source and NOTICE. All 254 finite
+byte codes pass an exact GPU-vs-independent-CPU bit comparison. The matrix,
+NVFP4-row and barrier suites pass another 214 checks (three existing skips).
+
+Unselected experiments: changing the hoisted NVFP4 loop from unroll-2 to 1/3/4
+costs ~4/8/13 µs, despite exact outputs; performing dequantized multiplication
+in half costs ~16–17 µs, also exact. Selective projection fast-math changes
+outputs for only ~0–1.4 µs benefit and is not selected. Smaller paired NVFP4
+threadgroups save less than 1 µs and add statistic-layout complexity. Reducing
+BF16 prefetch depth helps GDN by less than 1 µs with little attention benefit;
+staging four vectors at a time preserves exact sums but remains a candidate.
+Compact NVFP4 partials pass numerical gates, but the refreshed streaming run
+still loses short-context T=4 (~448.7 vs ~432.8 µs); they remain unselected.
+
+All five selected real-model checks pass again with the new BF16 schedule and
+scale decoder under Metal validation: prefill layer oracles, greedy goldens,
+sampling reproducibility and speculative rollback. The known #123 exclusion
+remains unchanged. The routing override is confined to interleaved16 weights;
+other layouts retain the tuner selection.

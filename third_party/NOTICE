@@ -46,6 +46,10 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
   (`as_type<half>(ushort((bits & 7) << 9))`, the sign a select) with the 2^14 folded into the block scale; the
   quantized-checkpoint reader also follows MLX's `nvfp4` layout (codes eight per U32, E4M3 scales as U8), no code
   copied for that.
+  The E4M3 block-scale conversion also adapts `mlx/backend/metal/kernels/fp8.h`
+  @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85`: construct a half from the magnitude
+  bits and apply the exact exponent-bias correction in float, including subnormals.
+  License: `third_party/MLX-LICENSE`.
 
 - `kernels/gemv_nvfp4_rows.metal` — adapted from `mlx/backend/metal/kernels/fp_quantized.h`
   @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): quantization-group dot products
