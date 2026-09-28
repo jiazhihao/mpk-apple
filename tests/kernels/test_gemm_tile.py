@@ -25,7 +25,7 @@ def _lib(dev, fmt, macros):
     return nt.Library(dev, kernels.gemm_source(fmt), macros, language_version=kernels.MSL_TENSOR_OPS)
 
 
-@pytest.mark.parametrize("tm,tn,tk", [(8, 64, 64), (16, 64, 64), (32, 64, 64), (8, 32, 128), (16, 16, 256), (32, 16, 256)])
+@pytest.mark.parametrize("tm,tn,tk", [(8, 64, 64), (16, 64, 64), (32, 64, 64), (8, 32, 128), (16, 16, 256), (32, 16, 256), (8, 16, 64), (8, 16, 128)])
 def test_cooperative_layout_matches_the_fill_formula(dev, tm, tn, tk):
     """Thread ``lane`` holds runs of 4 consecutive inner coordinates at 4·(bit0 + 2·bit3) + 16·jump for outer rows
     (bits 1, 2, 4) + 8·slot. The right operand (inner = k, outer = n) orders its elements q, slot (8), jump; the
@@ -43,7 +43,7 @@ def test_cooperative_layout_matches_the_fill_formula(dev, tm, tn, tk):
     nb_c, ns_b, nj_c = max(tm, 16) // 16, tn // 8, tn // 16
     for lane in range(32):
         cap_b, cap_c = int(a[lane, 0]), int(a[lane, 1])
-        assert cap_b == 128 and cap_c == 8 * nj_c * nb_c
+        assert cap_b == tn * tk // 32 and cap_c == 8 * nj_c * nb_c
         c0b = 4 * ((lane & 1) + 2 * ((lane >> 3) & 1))
         c1b = ((lane >> 1) & 3) + 4 * ((lane >> 4) & 1)
         rec = a[lane, 4:4 + 3 * cap_b].reshape(cap_b, 3)
@@ -399,3 +399,12 @@ def test_gemm_silu_mul_perm_out(dev, fmt):
     permuted, _ = g.run(x, epilogue="silu_mul", extra_macros=kernels.perm_out_macros(k_next, wpw_next, tk_next))
     cols = kernels.x_permute_columns(k_next, wpw_next, tk_next)
     assert np.array_equal(permuted, natural[:, cols])
+
+
+@pytest.mark.parametrize("tk", [64, 128])
+@pytest.mark.parametrize("ksplit", [1, 4, 8])
+def test_small_affine_tile(dev, tk, ksplit):
+    out, ref = _run(dev, "int4_affine", 272, 1024, 8, 5, "interleaved16", out_bf16=True,
+                    tn=16, tk=tk, ksplit=ksplit, placement="block")
+    assert check_against_oracle(out[:5], bf16_to_f32(f32_to_bf16(ref))).ok()
+    assert np.all(out[5:] == 0)

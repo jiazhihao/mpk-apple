@@ -27,11 +27,12 @@ def dev():
 
 
 class Cfg:
-    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None):
+    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0):
         self.heads, self.kv, self.d, self.rot, self.ctx_max, self.t_max = heads, kv, d, rot, ctx_max, t_max
+        self.mma, self.step_state, self.lm_mode = mma, step_state, lm_mode
         self.v2, self.n_tg, self.steal = v2, n_tg, steal                # v2: the partial granularity is 32 keys (the numpy model's chunk)
         self.v3, self.nsg3 = v3, nsg3 or kernels.gqa_v3_simdgroups(d)   # v3: one dispatch, a threadgroup of nsg3 SIMD-groups per query row
-        if v2:
+        if v2 or (mma and d == 256):
             chunk = 32
         self.chunk, self.rb, self.gate = chunk, rb, gate
         self.rep = heads // kv
@@ -49,7 +50,17 @@ class Harness:
 
     def __init__(self, dev, cfg, qn, kn):
         self.dev, self.cfg = dev, cfg
-        if cfg.v3:
+        if cfg.mma:
+            macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG="8")
+            source = kernels.gqa_source(mma=True)
+            if cfg.step_state:
+                from monolith.core import StepStateLayout
+                self.layout = StepStateLayout()
+                macros["STEP_STATE"] = "1"
+                source = source.replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl(), 1)
+            lib = nt.Library(dev, source, macros, kernels.MSL_TENSOR_OPS)
+            self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_mma"), nt.Pipeline(lib, "gqa_merge")
+        elif cfg.v3:
             lib = nt.Library(dev, kernels.gqa_source(v3=True), kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v3"), None
             assert self.p_dec.max_threads_per_threadgroup >= cfg.nsg3 * 32
@@ -85,13 +96,13 @@ class Harness:
         return (bf16_to_f32(np.frombuffer(self.k_cache.read(0, self.cache_bytes), dtype=np.uint16).reshape(shape)),
                 bf16_to_f32(np.frombuffer(self.v_cache.read(0, self.cache_bytes), dtype=np.uint16).reshape(shape)))
 
-    def step(self, proj_bf16, position, t_active=None, dispatch_sg=None):
+    def step(self, proj_bf16, position, t_active=None, dispatch_sg=None, state=None):
         """``dispatch_sg``: the SIMD-groups actually dispatched (the STEAL variant's crew may be short or surplus)."""
         c = self.cfg
         t = proj_bf16.shape[0]
         t_act = t if t_active is None else t_active
         params = kernels.gqa_params(heads=c.heads, kv_heads=c.kv, t_active=t_act, position=position,
-                                    n_sg=(t * c.heads) if c.v3 else (self.n_tg if c.v2 else self.n_sg),
+                                    n_sg=(dispatch_sg or self.dev.info().gpu_cores * 4) if c.mma else (t * c.heads) if c.v3 else (self.n_tg if c.v2 else self.n_sg),
                                     q_off=c.q_off, gate_off=c.gate_off, k_off=c.k_off, v_off=c.v_off, in_stride=c.n1,
                                     out_stride=c.heads * c.d, ctx_max=c.ctx_max, eps=EPS, scaling=c.scaling, has_gate=c.gate,
                                     n_chunks_max=c.n_chunks_max, rows_max=c.rows_max, nominal_sg=self.n_sg, gate_stride=c.n1 if c.v3 else 0)
@@ -108,8 +119,14 @@ class Harness:
         d1 = (nt.Dispatch().pipeline(self.p_dec).buffer(0, pb).buffer(1, self.k_cache).buffer(2, self.v_cache)
               .buffer(3, self.bufs["cos"]).buffer(4, self.bufs["sin"]).buffer(5, self.bufs["qn"]).buffer(6, self.bufs["kn"])
               .buffer(7, self.part_o).buffer(8, self.part_md).bytes(9, params).grid(-(-(n_disp * 32) // 384)).threadgroup(384).barrier())
+        if c.mma:
+            d1.grid(dispatch_sg or self.dev.info().gpu_cores * 4).threadgroup(256)
         d2 = (nt.Dispatch().pipeline(self.p_merge).buffer(0, self.part_o).buffer(1, self.part_md).buffer(2, pb).buffer(3, out)
               .bytes(4, params).grid(t * c.heads).threadgroup(32))
+        if c.step_state:
+            sb = nt.Buffer(self.dev, self.layout.pack(state or {'position': position, 't_this_step': t_act}))
+            d1.buffer(15, sb)
+            d2.buffer(15, sb)
         ds = [d1, d2]
         self.hits = None
         if c.steal:
@@ -428,14 +445,15 @@ def test_v3_matches_kernel_contract(dev, cfg):
         pos += t
 
 
-def test_v3_is_bit_stable_and_t_active(dev):
+@pytest.mark.parametrize("mma", [False, True])
+def test_v3_is_bit_stable_and_t_active(dev, mma):
     """Repeats are bit-identical; t_active limits the rows and the append; the same inputs through v1 agree within the
     composite bar (the two contracts round p̃ against different maxima)."""
     heads, kv, d, ctx_max = 8, 2, 128, 2048
     rng = np.random.default_rng(78)
     qn, kn = _norms(rng, d)
     h1 = Harness(dev, Cfg(heads, kv, d, 64, ctx_max, 8), qn, kn)
-    h3 = Harness(dev, Cfg(heads, kv, d, 64, ctx_max, 8, v3=True), qn, kn)
+    h3 = Harness(dev, Cfg(heads, kv, d, 64, ctx_max, 8, v3=not mma, mma=mma), qn, kn)
     pre = 1500
     k0, v0 = rbf(rng.standard_normal((pre, kv, d)) * 0.5), rbf(rng.standard_normal((pre, kv, d)))
     full = lambda x: np.concatenate([x, np.zeros((ctx_max - pre, kv, d), np.float32)])   # noqa: E731
@@ -479,3 +497,43 @@ def test_v3_matches_layer_oracle(dev):
         cos, max_abs, scale = _bars(got, ref)
         assert cos > 0.9999 and max_abs <= 1e-2 * scale, (t, pos, cos, max_abs, scale)
         pos += t
+
+
+@pytest.mark.parametrize('heads,kv,rot,ctx_max,gate', [
+    (16, 8, 128, 1024, False), (32, 8, 32, 4096, True), (6, 2, 64, 512, True),
+])
+def test_mma_matches_kernel_contract(dev, heads, kv, rot, ctx_max, gate):
+    cfg = Cfg(heads, kv, 128, rot, ctx_max, 8, gate=gate, mma=True)
+    test_v3_matches_kernel_contract(dev, cfg)
+
+
+@pytest.mark.parametrize("mode", [0, 1, 2, 3])
+def test_mma_step_state_and_strided_grid(dev, mode):
+    """A short crew must visit every chunk; LM row sources and done/empty steps are predicated on GPU."""
+    rng = np.random.default_rng(190)
+    cfg = Cfg(12, 2, 128, 64, 256, 8, mma=True)
+    qn, kn = _norms(rng, 128)
+    ref = Harness(dev, cfg, qn, kn)
+    dyn = Harness(dev, Cfg(12, 2, 128, 64, 256, 8, mma=True, step_state=True, lm_mode=mode), qn, kn)
+    pos, t = 123, 5
+    proj = _random_proj(rng, cfg, t)
+    state = dict(position=pos, t_this_step=t, n_inject=t, n_chain=t)
+    if mode == 1:
+        state['position'] += t
+    elif mode == 2:
+        state['position'] -= 2
+    elif mode == 3:
+        state.update(position=pos + 2, n_inject=2, n_chain=3)
+    expected = ref.step(proj, pos)
+    got = dyn.step(proj, pos, dispatch_sg=3, state=state)
+    assert np.array_equal(expected, got)
+    assert all(np.array_equal(a, b) for a, b in zip(ref.caches(), dyn.caches()))
+    before = dyn.caches()
+    for stop in [dict(state, done=1), dict(state, t_this_step=0, n_inject=0, n_chain=0)]:
+        assert np.all(dyn.step(proj, pos, dispatch_sg=3, state=stop) == 0)
+        assert all(np.array_equal(a, b) for a, b in zip(before, dyn.caches()))
+
+
+@pytest.mark.parametrize("ctx", [256, 4096])
+def test_mma_wide_heads(dev, ctx):
+    test_v3_matches_kernel_contract(dev, Cfg(8, 2, 256, 64, ctx, 8, gate=True, mma=True))

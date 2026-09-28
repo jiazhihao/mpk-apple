@@ -104,7 +104,7 @@ def test_attention_kernel_follows_the_profile(tmp_path):
     assert len(v3) == 1 and not [o for o in prog_v3.ops if o.name == "gqa_merge"] and v3[0].meta["attention"] == "v3"
     assert v3[0].grid == (8 * 2, 1, 1) and v3[0].threadgroup == (8 * 32, 1, 1) and sorted(b for b, _, _ in v3[0].bindings) == [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 15]   # D = 32: 8 SIMD-groups
     assert [o for o in prog_v3.ops if o.name == "gqa_decode"] == v3
-    # auto = v3 at every row count (it measured faster than v2 and v1 from 2 to 32 rows, 128 to 8192 keys); v2 / v1 explicit
+    # D=32 has no matrix variant: auto retains v3 at every row count; v2 / v1 remain explicit
     pa = Profile.from_dict("d", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "auto"}})
     for t in (1, 2, 8):
         prog = compile_program(m, PackFile(tmp_path / "pack"), pa, t=t)
@@ -124,7 +124,8 @@ def test_attention_kernel_follows_the_profile(tmp_path):
     import struct
     big = Profile.from_dict("f", {**base, "gpu_cores": 1000, "engine": {"family": "Apple10", "lane_order": "interleaved16", "threadgroups_per_core": 2}})
     m_long = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=65536)
-    prog_big = compile_program(m_long, PackFile(tmp_path / "pack"), big, t=1)
+    pack_model(m_long, str(tmp_path), str(tmp_path / "pack_long"), PackLayout(rows=16))
+    prog_big = compile_program(m_long, PackFile(tmp_path / "pack_long"), big, t=1)
     core_big = [o for o in prog_big.ops if o.name == "gqa_decode"][0]
     prm_big = prog_big.buffers[[b for i, b, _ in core_big.bindings if i == 9][0]].init
     n_chunks_max = struct.unpack("<IIIIIIIIIIIIffIIIIII", prm_big[:80])[15]
@@ -153,3 +154,31 @@ def test_attention_kernel_follows_the_profile(tmp_path):
     ws = [n for n in prog1.buffers if n.startswith("ws.") and n.endswith(".shared")]
     assert any("argmax.val" in n for n in ws)
 
+
+
+@pytest.mark.parametrize("d", [128, 256])
+def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d):
+    from test_nn_lowering import CFG
+    from monolith import kernels
+    import struct
+
+    monkeypatch.setitem(CFG["text_config"], "head_dim", d)
+    monkeypatch.setitem(CFG["text_config"], "num_key_value_heads", 8)
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=8192)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    pf = PackFile(tmp_path / "pack")
+    profile = Profile.from_dict("mma", {"gpu_cores": 20, "nominal_gbps": 307,
+        "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "auto", "accelerator": "on"}})
+    one = compile_program(m, pf, profile, t=1)
+    assert "gqa_decode_mma" not in [k.function for k in one.kernels.values()]
+    prog = compile_program(m, pf, profile, t=4)
+    core = next(o for o in prog.ops if prog.kernels[o.kernel].function == "gqa_decode_mma")
+    assert core.threadgroup == (256, 1, 1)
+    assert prog.kernels[core.kernel].language_version == kernels.MSL_TENSOR_OPS
+    bindings = {i: b for i, b, _ in core.bindings}
+    params = struct.unpack("<IIIIIIIIIIIIffIIIIII", prog.buffers[bindings[9]].init)
+    chunks, rows = params[15:17]
+    assert chunks == 8192 // (32 if d == 256 else 64)
+    assert prog.buffers[bindings[7]].nbytes >= 8 * chunks * rows * d * 4
+    assert prog.buffers[bindings[8]].nbytes >= 8 * chunks * rows * 2 * 4

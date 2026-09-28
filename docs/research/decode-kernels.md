@@ -1161,3 +1161,140 @@ that nothing overlaps, and at T > 1 the permute dispatches — MLX's concurrent 
 behind its GEMVs. What keeps the 0.6B at 1.45× at T = 4 is the tile's ~5 µs of fixed cost per dispatch on 1–3.5 MB
 slabs against MLX's compact `qmm` (~3 µs fixed): a small-T GEMV of a different design. Per step — what a token pays
 — the 0.6B is under MLX at T = 1 and level at T = 8, the 8B ahead 1.5× at T = 8 and behind 9–13 % at T = 1 and T = 4.
+
+
+## 12. Fixed verification blocks, matrix attention and small projection tiles (#113)
+
+Measured 2026-09-27 on Apple M5 Pro, 20 GPU cores, 24 GB, macOS 26.5.1,
+MLX 0.32.2 / mlx-lm 0.31.3. **The every-layer-type gate remains open.** These
+measurements exclude draft generation, acceptance, embeddings, the vocabulary
+projection and sampling. No speculative throughput claim follows from them.
+
+### Method
+
+`tools/bench/layer_fixed_vs_mlx.py` directly replays a dependency chain of distinct
+checkpoint decoder layers. It divides measured stack wall time by the selected
+layer count (28 / 36 / 6 attention / 18 GDN). This is a mean per decoder layer,
+not a subtraction of full-model timings, and does not prove that every individual
+layer is faster. The earlier slope study in §11 is a different measurement.
+
+Both engines use identical BF16 input rows, checkpoint weights, fixed token count
+and context position, with the same seeded nonzero KV prefix. GDN replays from
+zero convolution/recurrent input states in both engines. Each layer's output is
+compared against MLX given the same preceding layer input, with minimum cosine
+0.999 required. Compilation, tuning, cache initialization and checks are untimed.
+Five paired AB/BA repetitions of 32 steps use two evaluations in flight in both
+engines. The table uses each engine's minimum wall time; the raw file retains all
+pairs, GPU times, paths, versions and `faster_in_every_pair`.
+
+Source: [`apple-m5-pro-20c_fixed_layers_20260927.jsonl`](../../tools/bench/results/apple-m5-pro-20c_fixed_layers_20260927.jsonl).
+Desktop load varied during the session; compare each paired MPK/MLX result rather
+than absolute times across models or against earlier sections. Shader validation
+was disabled for timings and enabled separately for correctness.
+
+### Results [M]
+
+Lower ratio is better; values below 1 are faster than MLX.
+
+| Checkpoint / layer type | T | Context | Monolith µs/layer | MLX µs/layer | Ratio |
+|---|---:|---:|---:|---:|---:|
+| 0.6B INT4 attention | 1 | 128 | 67.92 | 63.41 | 1.071 |
+| 0.6B INT4 attention | 1 | 1024 | 84.28 | 80.70 | 1.044 |
+| 0.6B INT4 attention | 4 | 128 | 89.91 | 82.06 | 1.096 |
+| 0.6B INT4 attention | 4 | 1024 | 113.10 | 107.45 | 1.053 |
+| 0.6B INT4 attention | 6 | 128 | 91.83 | 98.93 | 0.928 |
+| 0.6B INT4 attention | 6 | 1024 | 115.12 | 136.21 | 0.845 |
+| 0.6B INT4 attention | 8 | 128 | 92.27 | 115.14 | 0.801 |
+| 0.6B INT4 attention | 8 | 1024 | 115.64 | 163.83 | 0.706 |
+| 8B NVFP4 attention | 1 | 128 | 441.06 | 391.56 | 1.126 |
+| 8B NVFP4 attention | 1 | 1024 | 464.50 | 410.34 | 1.132 |
+| 8B NVFP4 attention | 4 | 128 | 487.75 | 431.51 | 1.130 |
+| 8B NVFP4 attention | 4 | 1024 | 509.51 | 491.50 | 1.037 |
+| 8B NVFP4 attention | 6 | 128 | 489.81 | 647.87 | 0.756 |
+| 8B NVFP4 attention | 6 | 1024 | 525.43 | 718.42 | 0.731 |
+| 8B NVFP4 attention | 8 | 128 | 491.92 | 825.01 | 0.596 |
+| 8B NVFP4 attention | 8 | 1024 | 531.62 | 922.48 | 0.576 |
+| 0.8B BF16 attention | 1 | 128 | 159.93 | 152.92 | 1.046 |
+| 0.8B BF16 attention | 1 | 1024 | 180.60 | 192.26 | 0.939 |
+| 0.8B BF16 attention | 4 | 128 | 170.79 | 164.19 | 1.040 |
+| 0.8B BF16 attention | 4 | 1024 | 192.19 | 228.97 | 0.839 |
+| 0.8B BF16 attention | 6 | 128 | 171.31 | 169.37 | 1.011 |
+| 0.8B BF16 attention | 6 | 1024 | 204.19 | 247.24 | 0.826 |
+| 0.8B BF16 attention | 8 | 128 | 173.38 | 176.21 | 0.984 |
+| 0.8B BF16 attention | 8 | 1024 | 210.65 | 269.10 | 0.783 |
+| 0.8B BF16 gdn | 1 | 128 | 192.16 | 174.75 | 1.100 |
+| 0.8B BF16 gdn | 1 | 1024 | 192.53 | 175.36 | 1.098 |
+| 0.8B BF16 gdn | 4 | 128 | 213.82 | 184.75 | 1.157 |
+| 0.8B BF16 gdn | 4 | 1024 | 214.44 | 185.10 | 1.158 |
+| 0.8B BF16 gdn | 6 | 128 | 219.43 | 184.65 | 1.188 |
+| 0.8B BF16 gdn | 6 | 1024 | 219.79 | 184.64 | 1.190 |
+| 0.8B BF16 gdn | 8 | 128 | 226.76 | 189.83 | 1.195 |
+| 0.8B BF16 gdn | 8 | 1024 | 227.04 | 190.11 | 1.194 |
+
+13 of 32 configurations have a lower minimum latency; each of those
+also wins every paired repetition. The minimum layer cosine across the matrix is
+0.999902. The 0.6B and 8B win at T=6 and T=8 at both contexts.
+Their T=1/T=4 points still lose. Hybrid attention wins at context 1024 and at
+T=8/context 128, while all GDN points still lose. A small margin such as hybrid
+attention's T=8/context 128 should be rechecked under controlled load before
+claiming a robust hardware-wide advantage.
+
+### Retained changes
+
+* `gqa_decode_mma.metal` runs QK and PV through MSL 4 tensor operations for D=128/256.
+  A threadgroup owns a 16-query tile and a fixed key chunk (64 at D=128, 32 at
+  D=256), writes deterministic partials and uses the existing merge. The crew is
+  four threadgroups per GPU core. Query norm/RoPE and new-cache writes remain
+  fused. Auto selects this path for accelerator-enabled programs compiled for
+  at least four tokens; explicit `v1`, `v2`, `v3`, `mma` overrides remain available.
+  The compiler sizes partial workspaces for the fixed chunk rule, including long
+  contexts, and the kernel handles smaller runtime T and LM row sources.
+* INT4 projections with K≤3072 and BF16 projections with K≤4096 use a 16×64
+  matrix tile for TM≤16. The existing crew/K-split tuning remains in use; tuning
+  keys now include tile dimensions to avoid reusing timings for a different tile.
+* The v3 attention loop handles cached keys separately from newly projected keys,
+  removing the repeated new-key branch without changing reduction order.
+* Multi-token GDN computes convolution, q/k normalization, beta and decay once
+  per token/head into shared scratch, then keeps one state column per SIMD-group
+  across up to eight tokens. State layout and FP32 recurrence remain unchanged;
+  commit and single-token dispatches retain their original geometry.
+* Convolution history copies only its surviving final window. This also resolved
+  an intermittent exact-state failure observed after attention tests under Metal
+  validation ([#120](https://github.com/jiazhihao/mpk-apple/issues/120)); the underlying
+  compiler/runtime cause is not established. No tolerance was relaxed.
+* The compiler rejects a packed constant table shorter than the model requests
+  ([#119](https://github.com/jiazhihao/mpk-apple/issues/119)). An older 0.6B pack had
+  only 1024 RoPE rows, making verification at context 1024 invalid; the reported
+  matrix uses a repacked checkpoint with 4096 rows.
+
+### Rejected follow-up experiments [M]
+
+Paired runs on the 0.6B at T=4: disabling accelerator projections while keeping
+matrix attention cost 211 µs/layer versus 83 µs at context 128 (229 versus 101 at
+1024). Fusing input normalization into per-SIMD-group threadgroup activation tiles
+removed permute dispatches but cost 114 versus 81 µs at T=4, and 138 versus 82 at
+T=8; the output matched, but redundant preparation cost more than the boundaries
+saved. MSL 4's both-cooperative-operand path cannot use the current 8×16×64 tile
+(the API requires M=16/32 and K=16/32). Neither experiment is retained.
+
+D=128 attention chunks of 32 instead of 64 saved roughly 1–2 µs per short-context
+layer but lost 8–11 µs at context 1024. Dividing SIMD lanes across recurrent state
+columns gave small, inconsistent whole-layer gains and also was not retained.
+
+### Validation and remaining work
+
+Metal validation: 318 kernel/contract tests passed, 3 skipped. The previously
+failing attention/GDN order passed again (52 tests). The real hybrid checkpoint
+passed the existing per-layer oracle bars, 48 greedy golden tokens on two runs,
+and the 32-token long-prompt golden with chunked prefill. Seven additional
+runtime/integrated rollback tests passed with shader validation, including the
+real hybrid model through rejected verification blocks. Repository hygiene, Python
+compilation and `git diff --check` also passed. Attention tests cover
+partial rotary dimensions, masks, cache appends, long contexts, deterministic
+repetition, runtime T, done/empty steps and all LM row sources. Projection tests
+cover smaller cooperative layouts, split reductions and ragged output rows.
+
+The remaining work for [#113](https://github.com/jiazhihao/mpk-apple/issues/113) is
+single-token projection/dispatch latency, the short-context T=4 path, and the
+hybrid GDN layer's projection and recurrence cost. These results do not meet the
+strict all-configurations gate, so that issue must stay open.

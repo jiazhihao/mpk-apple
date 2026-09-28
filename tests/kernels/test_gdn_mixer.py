@@ -36,17 +36,23 @@ def _module(hidden, hk, hv, dk, dv, seed):
 
 
 class Harness:
-    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None):
+    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False):
         """The engine's configuration: two state slots by step parity read from StepState (a single slot races when
         several value heads share a key head's conv window — the kernel's note)."""
         from monolith.core import StepStateLayout
 
         self.dev, self.m, self.ab_separate = dev, m, ab_separate
+        self.prepared = prepared
         self.layout = StepStateLayout(t_max=max(8, t_max), gamma_max=7)
         macros = dict(kernels.gdn_macros(m.dk, m.dv, conv_width=CW, t=t_max, slice_cols=slice_cols, slices_per_block=slices_per_block,
                                          tokens_per_pass=tokens_per_pass, slots=2), STEP_STATE="1")
+        if prepared:
+            macros["PREPARED"] = "1"
         lib = nt.Library(dev, kernels.gdn_source().replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1), macros)
         self.pso, self.pso_norm = nt.Pipeline(lib, "gdn_mixer"), nt.Pipeline(lib, "gdn_norm")
+        if prepared:
+            self.pso_prepare = nt.Pipeline(lib, "gdn_prepare")
+            self.prep = nt.Buffer(dev, t_max * m.v_heads * (2 * m.dk + m.dv + 2) * 4)
         self.o_part = nt.Buffer(dev, kernels.gdn_workspace(t_max, m.v_heads, m.dv))
         self.conv_bytes, self.rec_bytes = m.conv_dim * (CW - 1) * 2, m.v_heads * m.dk * m.dv * 4
         self.conv_state = nt.Buffer(dev, 2 * self.conv_bytes); self.conv_state.fill(0)
@@ -63,7 +69,8 @@ class Harness:
     def set_state(self, state):                                              # into the slot the next pass reads
         slot = self.step_no & 1
         self.conv_state.write(f32_to_bf16(state["l.conv_state"].float().numpy()).tobytes(), slot * self.conv_bytes)
-        self.rec_state.write(state["l.rec_state"].float().numpy().astype(np.float32).tobytes(), slot * self.rec_bytes)
+        rec = state["l.rec_state"].float().numpy().astype(np.float32)
+        self.rec_state.write(rec.tobytes(), slot * self.rec_bytes)
 
     def get_state(self):                                                     # from the slot the last pass wrote
         m = self.m
@@ -97,7 +104,14 @@ class Harness:
              .bytes(9, params).buffer(15, self.st).grid(-(-(self.n_sg * 32) // 384)).threadgroup(384).barrier())
         d2 = (nt.Dispatch().pipeline(self.pso_norm).buffer(0, self.o_part).buffer(1, mb).buffer(2, self.aux[3]).buffer(3, out)
               .bytes(4, params).buffer(15, self.st).grid(t * hv).threadgroup(32))
-        r = nt.Queue(self.dev).run([d, d2])
+        ds = [d, d2]
+        if self.prepared:
+            dp = (nt.Dispatch().pipeline(self.pso_prepare).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state)
+                  .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(8, self.prep)
+                  .bytes(9, params).buffer(15, self.st).grid(t * hv).threadgroup(32).barrier())
+            d.buffer(8, self.prep)
+            ds.insert(0, dp)
+        r = nt.Queue(self.dev).run(ds)
         assert not r.error, r.error
         self.step_no += 1
         return bf16_to_f32(np.frombuffer(out.read(0, t * vd * 2), dtype=np.uint16).reshape(t, vd))
@@ -112,7 +126,12 @@ def _check(got, ref_out, got_rec, ref_rec, got_conv, ref_conv):
     # weight, gate), so the element-wise ULP is the meaningful gate here: FP32 summation-order noise flips a rounding
     # boundary in ~1 element per thousand by one ULP; the at-RMS metric of the GEMV gate over-weights such an
     # element when it is far above the RMS
-    assert np.array_equal(got_conv, ref_conv)
+    mismatch = got_conv != ref_conv
+    assert not mismatch.any(), {
+        "indices": np.argwhere(mismatch)[:3].tolist(),
+        "got": got_conv[mismatch][:3].tolist(), "expected": ref_conv[mismatch][:3].tolist(),
+        "count": int(np.count_nonzero(mismatch)),
+    }
     scale = float(np.abs(ref_rec).max())
     assert np.abs(got_rec - ref_rec).max() <= 8 * 2.0 ** -23 * max(scale, 1e-30), (np.abs(got_rec - ref_rec).max(), scale)
     chk = check_against_oracle(got, ref_out)
@@ -121,10 +140,11 @@ def _check(got, ref_out, got_rec, ref_rec, got_conv, ref_conv):
 
 @pytest.mark.parametrize("hk,hv,ab_separate", [(16, 16, False), (16, 48, True), (4, 4, False)], ids=["16x16", "16x48_ab_separate", "4x4"])
 @pytest.mark.parametrize("t", [1, 4, 8])
-def test_matches_layer_oracle(dev, hk, hv, ab_separate, t):
+@pytest.mark.parametrize("prepared", [False, True])
+def test_matches_layer_oracle(dev, hk, hv, ab_separate, t, prepared):
     torch = pytest.importorskip("torch")
     m, rng = _module(64, hk, hv, 128, 128, seed=hk * 7 + hv + t)
-    h = Harness(dev, m, t, ab_separate=ab_separate)
+    h = Harness(dev, m, t, ab_separate=ab_separate, prepared=prepared, slice_cols=1 if prepared else 8, slices_per_block=1 if prepared else 4, tokens_per_pass=8 if prepared else None)
     state = {"l.conv_state": torch.from_numpy((rng.standard_normal((m.conv_dim, CW - 1)) * 0.5).astype(np.float32)).to(torch.bfloat16),
              "l.rec_state": torch.from_numpy((rng.standard_normal((hv, 128, 128)) * 0.1).astype(np.float32))}
     h.set_state(state)
@@ -137,7 +157,8 @@ def test_matches_layer_oracle(dev, hk, hv, ab_separate, t):
         _check(got, ref, rec, state["l.rec_state"].numpy(), conv, state["l.conv_state"].float().numpy())
 
 
-def test_fresh_state_passes_and_repeat_runs(dev):
+@pytest.mark.parametrize("prepared", [False, True])
+def test_fresh_state_passes_and_repeat_runs(dev, prepared):
     torch = pytest.importorskip("torch")
     m, rng = _module(64, 16, 16, 128, 128, seed=3)
     state = {"l.conv_state": torch.zeros(m.conv_dim, CW - 1, dtype=torch.bfloat16), "l.rec_state": torch.zeros(16, 128, 128)}
@@ -145,24 +166,25 @@ def test_fresh_state_passes_and_repeat_runs(dev):
     with torch.no_grad():
         ref = m.mix(proj, state).float().numpy()
     for tp, spb in ((2, 1), (3, 4), (6, 16)):                  # 3, 2 and 1 token passes; 1, 4 and 16 slices per block
-        h = Harness(dev, m, 6, tokens_per_pass=tp, slices_per_block=spb)
+        h = Harness(dev, m, 6, tokens_per_pass=tp, slices_per_block=spb, prepared=prepared)
         got = h.step(proj)
         conv, rec = h.get_state()
         _check(got, ref, rec, state["l.rec_state"].numpy(), conv, state["l.conv_state"].float().numpy())
-    h = Harness(dev, m, 6)
+    h = Harness(dev, m, 6, prepared=prepared)
     a = h.step(proj)
-    h2 = Harness(dev, m, 6)
+    h2 = Harness(dev, m, 6, prepared=prepared)
     assert np.array_equal(a, h2.step(proj)) and np.array_equal(h.get_state()[1], h2.get_state()[1])
 
 
-def test_t_active_and_slice_width(dev):
+@pytest.mark.parametrize("prepared", [False, True])
+def test_t_active_and_slice_width(dev, prepared):
     torch = pytest.importorskip("torch")
     m, rng = _module(64, 16, 16, 128, 128, seed=5)
     state = {"l.conv_state": torch.zeros(m.conv_dim, CW - 1, dtype=torch.bfloat16), "l.rec_state": torch.zeros(16, 128, 128)}
     proj = _proj(rng, torch, 4, m.in_proj.n)
     with torch.no_grad():
         ref = m.mix(proj[:2], state).float().numpy()
-    h = Harness(dev, m, 4, slice_cols=16, slices_per_block=2)
+    h = Harness(dev, m, 4, slice_cols=16, slices_per_block=2, prepared=prepared)
     got = h.step(proj, t_active=2)
     assert np.all(got[2:] == 0)
     conv, rec = h.get_state()

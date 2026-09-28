@@ -51,8 +51,8 @@ def _checkpoint(tmp_path):
         f"{P}layers.0.linear_attn.dt_bias": w(4), f"{P}layers.0.linear_attn.A_log": w(4), f"{P}layers.0.linear_attn.norm.weight": w(64),
         f"{P}layers.0.mlp.gate_proj.weight": w(inter, h), f"{P}layers.0.mlp.up_proj.weight": w(inter, h), f"{P}layers.0.mlp.down_proj.weight": w(h, inter),
         f"{P}layers.1.input_layernorm.weight": w(h), f"{P}layers.1.post_attention_layernorm.weight": w(h),
-        f"{P}layers.1.self_attn.q_proj.weight": w(8 * 2 * d, h), f"{P}layers.1.self_attn.k_proj.weight": w(2 * d, h),
-        f"{P}layers.1.self_attn.v_proj.weight": w(2 * d, h), f"{P}layers.1.self_attn.o_proj.weight": w(h, 8 * d),
+        f"{P}layers.1.self_attn.q_proj.weight": w(8 * 2 * d, h), f"{P}layers.1.self_attn.k_proj.weight": w(c["num_key_value_heads"] * d, h),
+        f"{P}layers.1.self_attn.v_proj.weight": w(c["num_key_value_heads"] * d, h), f"{P}layers.1.self_attn.o_proj.weight": w(h, 8 * d),
         f"{P}layers.1.self_attn.q_norm.weight": w(d), f"{P}layers.1.self_attn.k_norm.weight": w(d),
         f"{P}layers.1.mlp.gate_proj.weight": w(inter, h), f"{P}layers.1.mlp.up_proj.weight": w(inter, h), f"{P}layers.1.mlp.down_proj.weight": w(h, inter),
         "model.visual.patch_embed.proj.weight": w(8, 8), "mtp.fc.weight": w(8, 8),
@@ -383,3 +383,22 @@ def test_params_records_are_per_program(tmp_path):
     for name in dyn.buffers.keys() & static.buffers.keys():                            # a shared name is the same bytes
         a, b = dyn.buffers[name], static.buffers[name]
         assert a.init == b.init, name
+
+
+def test_constant_table_capacity_checked_before_dispatch(tmp_path):
+    """A larger KV allocation cannot make a shorter packed RoPE table safe."""
+    from monolith.compiler import compile_program
+    from monolith.core.profile import Profile
+
+    _checkpoint(tmp_path)
+    small = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=16)
+    pack_model(small, str(tmp_path), str(tmp_path / 'pack'), PackLayout(rows=16))
+    pack = PackFile(tmp_path / 'pack')
+    profile = Profile.from_dict('p', {'gpu_cores': 20, 'nominal_gbps': 307,
+                                    'engine': {'family': 'Apple10', 'lane_order': 'interleaved16'}})
+    for capacity in (8, 16):
+        model = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=capacity)
+        compile_program(model, pack, profile, t=4)
+    large = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=32)
+    with pytest.raises(ValueError, match='constant.*rope_cos.*repack'):
+        compile_program(large, pack, profile, t=4)

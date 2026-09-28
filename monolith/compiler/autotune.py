@@ -174,6 +174,8 @@ class Autotuner:
         the way from ``stat_parts`` partials) — the tile-versus-shader decision must see the whole path, and a permute
         run once before every copy hid it."""
         key = f"gemm3|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|TM{tm}|{epilogue or 'plain'}"
+        tile = kernels.gemm_macros(info, tm=tm)
+        key += f"|tile{tile['TN']}x{tile['TK']}"
         if permute:
             key += "|perm" + (f"|norm|P{int(stat_parts)}" if norm_fed else "")
         if key in self.choices and not force:
