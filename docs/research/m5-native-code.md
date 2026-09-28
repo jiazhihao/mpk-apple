@@ -944,7 +944,119 @@ convolution prototype was also slower (191.73→192.20 µs, exact state/output).
 No such arithmetic or multi-token fusion is included.
 
 Exact final T=1 archives report 37–39 registers and zero scratch for the fused
-projection, with 2,838–2,898 code bytes. The recurrence/norm specialization reports
+projection, with 2,718–2,778 code bytes. The recurrence/norm specialization reports
 70 registers, zero scratch and 2,056 threadgroup bytes. These are compiler
 resource metadata, not decoded instructions; lower whole-layer latency is the
 acceptance evidence. The archive report is `gdn_projection_conv_native`.
+
+## Removing repeated recurrence, normalization and attention work
+
+The local GDN geometry launches every state slice and allocates one pass for
+all compiled tokens. A `SINGLE_PASS` specialization removes the unnecessary grid
+and token-pass loops; the general kernel remains for other geometries and commit.
+Partial active lengths and step-slot selection remain live. Seven paired runs
+measure T=4 191.62→189.77, T=6 190.28→189.50 and T=8 192.68→192.26 µs/layer,
+with every captured output and state byte equal. Recurrence/barrier validation
+passes 86 cases, including eight new filled-state continuation comparisons.
+All four selected BF16 real-model checks pass under Metal validation.
+
+The four-token BF16 vector projection now builds a normalized input tile once
+per threadgroup and shares it across the block's output rows. This removes the
+separate input permutation/normalization dispatch without recomputing RMSNorm
+for every weight row. The measured K=1024 tile needs 8 KB shared storage. A/B
+measurements give GDN 190.71→189.61 and attention 165.45→162.98 µs/layer, with
+exact outputs. The analogous NVFP4 experiment is slower and is not selected.
+Tests retain independent FP64 dot-product references, R=8/16 tails and ranges,
+partial/empty/done predicates, permutation, fused epilogues/statistics and
+1/65/517-part normalization reductions.
+
+Single-token attention previously rescaled its running softmax state after
+every cached key. Two cached keys now share a maximum and prior-state rescale;
+individual score and probability BF16 boundaries remain. Unpaired cached tails
+and new causal keys retain the original handling. This changes rounding order,
+so exact equality is not claimed. The unchanged attention kernel contracts pass,
+including the independent 0.99999 cosine / two-ULP limits. A paired A/B saves
+about 6.1 µs for NVFP4 and 8.4 µs for BF16 attention at context 1024. The fresh
+NVFP4 MLX comparison still loses (426.83 vs 409.34 µs at context 1024), but its
+minimum individual-layer cosine is 0.999939 and passes the unchanged 0.999 gate.
+Raw full-stack trajectories drift more than independent layer comparisons;
+both measurements are retained rather than conflated.
+
+Further rejected candidates: a 4,096-entry exact BF16 lookup for scaled NVFP4
+values slows 408.43→455.50 µs; matrix-projection convolution is neutral at T=6
+and slower at T=8 despite exact outputs and state. Neither is in production.
+
+All five selected real-model checks also pass with the shared-normalization and
+paired-attention candidates under Metal validation. A subsequent recurrence
+geometry sweep finds two-column slices faster at T=8 (193.22→191.92 µs, exact
+outputs and states); T=4/6 retain their previous geometry. The final kernel/
+compiler selection passes 241 checks, including 18 attention cached-pair boundary
+cases and filled-state continuation for the T=8 slice change.
+
+MLX's allocator uses untracked shared buffers. An isolated MPK experiment tried
+untracked read-only file mappings and read-only ICB resource declarations. Its
+whole-layer results were mixed: NVFP4 T=1 minima differed by less than 1 µs,
+while BF16 T=4 regressed about 1 µs. Distinct mappings also exposed repeatable
+run-order/cache effects in the NVFP4 samples. The runtime experiment was removed
+and the original native module rebuilt; no hazard-tracking change is retained.
+
+The V3 query normalization/RoPE calculation was repeated by every key group.
+Sharing one prepared query per threadgroup and selecting a single-block body
+for the compiler's one-block-per-threadgroup grid saves another ~1 µs: paired
+minima are NVFP4 408.79→407.65 / 427.29→426.48 and BF16 attention
+149.95→148.60 / 162.93→161.64 at context 128/1024. All captures are exact.
+The general grid-stride body remains available; the separate query workspace
+keeps query reads independent of the later softmax fold writes.
+
+The compact scale region now also covers aligned, interleaved 24-byte NVFP4
+scale runs. For K=12288, each lane-row payload stays 192 bytes instead of being
+padded to 224 bytes with inline scales. The block includes the existing 16-byte
+over-fetch margin. Old packs remain readable; obtaining this layout requires
+repacking with `--scale-placement block`. A byte-preserving repack measures
+T=1/4/6/8 408.85/450.77/452.54/454.92→406.77/446.21/450.10/450.23 µs/layer.
+Distinct weight mappings cause clear run-order/cache effects in the original
+samples, so all samples are retained and subsequent MLX gates use the new pack.
+Widening the narrow-scale-load specialization provides no consistent extra gain
+and is not included. Ragged scale runs keep their previous policy.
+
+Packing round trips pass all 36 contracts. Exact inline-versus-block matrix
+outputs pass R=8/16, K-splits 1/2/8 and partial row blocks, along with the
+independent ULP oracle. The long K=12288 unsplit reduction has ~2.65e-6 relative
+error on the original N=272 fixture even with the inline layout; this exceeds
+an extra 2e-6 assertion used by shorter-reduction tests but is only 0.0014 ULP
+at RMS scale. Existing tests and their thresholds are unchanged. Dedicated
+long-stripe tests check the declared ULP contract and exact layout equivalence.
+
+Rejected follow-ups: caching NVFP4 scale words increases T=1 latency by ~1.3 µs;
+forcing different BF16 output-projection paths costs ~7–11 µs at T=4; sharing
+normalization inside the BF16 matrix kernel costs ~24–26 µs at T=6/8 even with
+exact outputs. None of these experiments is selected.
+
+
+The refreshed same-input gate now passes all eight BF16 attention configurations
+in every pair: T=1/4/6/8 at context 128 measures MPK
+147.79/161.62/164.57/164.29 versus MLX 152.30/162.98/167.66/173.67 µs;
+at context 1024, 160.62/184.39/195.44/200.93 versus
+191.72/228.36/246.64/268.30. Numerical gates pass throughout.
+GDN still trails at T=4/6/8 by ~2–6 µs; T=1 is close enough that the long-context
+refresh does not win every pair. NVFP4 T=1 and short-context T=4 remain ~14–15 µs
+behind MLX, while T=6/8 win consistently. The long-context T=4 minimum wins,
+but one paired sample does not. These stack means do not establish every
+individual checkpoint layer's latency.
+
+Exact archive metadata shows the simplified T=1 GDN recurrence/norm at 59
+registers (previously 70), zero scratch and 6,384 code bytes. T=4 recurrence is
+54 registers / 11,106 bytes; T=6/8 is 50 / 10,726, all with zero scratch.
+Shared-normalization BF16 projections use 79–81 registers and 8–8.25 KB shared
+storage, without scratch. The new V3 attention reports 44 registers / 5,856
+bytes for D=128 and 64 / 9,662 for D=256. Compact NVFP4 row projections report
+55–59 registers, 4,956–6,218 bytes and zero scratch. These remain resource
+metadata, not decoded M5 instructions. Raw reports are `compact_query_native`.
+
+All five selected real-model checks pass again under Metal validation after the
+query-sharing, T=8 geometry and packing changes. The final additional 17 checks
+pass exact compact-layout equivalence (including the N=272 error fixture),
+partial/full/empty active lengths, cache updates and specialized V3 geometry.
+The known #123 exclusion remains unchanged. The selected NVFP4 golden fixture
+uses its original inline pack; compact packing additionally passes full fixed-T
+MLX layer gates and the exact packing/kernel comparisons above.

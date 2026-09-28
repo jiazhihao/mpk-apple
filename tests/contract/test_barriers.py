@@ -103,6 +103,7 @@ def test_attention_kernel_follows_the_profile(tmp_path):
     v3 = [o for o in prog_v3.ops if prog_v3.kernels[o.kernel].function == "gqa_decode_v3"]
     assert len(v3) == 1 and not [o for o in prog_v3.ops if o.name == "gqa_merge"] and v3[0].meta["attention"] == "v3"
     assert v3[0].grid == (8 * 2, 1, 1) and v3[0].threadgroup == (8 * 32, 1, 1) and sorted(b for b, _, _ in v3[0].bindings) == [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 15]   # D = 32: 8 SIMD-groups
+    assert prog_v3.kernels[v3[0].kernel].macros["SINGLE_BLOCK"] == "1"
     assert [o for o in prog_v3.ops if o.name == "gqa_decode"] == v3
     # D=32 has no matrix variant: auto retains v3 at every row count; v2 / v1 remain explicit
     pa = Profile.from_dict("d", {**base, "engine": {"family": "Apple10", "lane_order": "interleaved16", "attention": "auto"}})
@@ -214,9 +215,9 @@ def test_fused_gdn_norm_waits_for_gate_and_preserves_state_writes(tmp_path, monk
             assert "gdn_prepare" not in names
             core = next(op for op in prog.ops if op.name == "gdn_mixer")
             constants = prog.kernels[core.kernel].macros
-            assert constants["LOCAL_PREPARE"] == "1"
+            assert constants["LOCAL_PREPARE"] == constants["SINGLE_PASS"] == "1"
             assert core.meta["writes"] == [2, 3, 7]
-            groups, sl = (16, 4) if t == 4 else (32, 2 if t == 6 else 4)
+            groups, sl = (16, 4) if t == 4 else (32, 2 if t in (6, 8) else 4)
             assert core.grid == (16 * (128 // sl) // groups, 1, 1)
             assert core.threadgroup == (32 * groups, 1, 1)
             norm = next(op for op in prog.ops if op.name == "gdn_norm")
@@ -231,7 +232,7 @@ def test_fused_gdn_norm_waits_for_gate_and_preserves_state_writes(tmp_path, monk
     assert fb[2].endswith("conv_state") and 8 not in fb
     assert fb[3].endswith("rec_state")
     constants = prog.kernels[fused.kernel].macros
-    assert constants["FUSED_NORM"] == constants["LOCAL_PREPARE"] == "1"
+    assert constants["FUSED_NORM"] == constants["LOCAL_PREPARE"] == constants["SINGLE_PASS"] == "1"
     assert constants["TP"] == f"{t}u"
     assert constants["STATIC_GDN_P_HK"] == "8u"
     assert constants["STATIC_GDN_P_IN_STRIDE"] != constants["STATIC_GDN_NP_IN_STRIDE"]
@@ -270,6 +271,13 @@ def test_projection_convolution_owns_state_and_is_local_to_one_compilation(tmp_p
         prog = emit_program(graph, pack=pack, profile=profile, t=t, tail=None, speculative=speculative)
         projections = [op for op in prog.ops if prog.kernels[op.kernel].macros.get("PROJ_CONV") == "1"]
         cores = [op for op in prog.ops if prog.kernels[op.kernel].macros.get("PRECONVOLVED") == "1"]
+        if t == 4:
+            shared = [op for op in prog.ops if prog.kernels[op.kernel].macros.get("SHARED_NORM") == "1"]
+            assert shared
+            for op in shared:
+                bindings = {i: name for i, name, _ in op.bindings}
+                assert {2, 5, 6} <= bindings.keys() and not bindings[2].endswith(".xp")
+                assert prog.kernels[op.kernel].function == "gemv_bf16_small"
         if t != 1 or speculative:
             assert not projections and not cores
             continue

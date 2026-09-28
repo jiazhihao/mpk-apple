@@ -430,6 +430,23 @@ def test_gemm_tile_block_scale_placement(dev, fmt, k, ksplit):
     assert chk.ok() and chk.max_rel_err < 2e-6, chk
 
 
+@pytest.mark.parametrize("ksplit", [1, 2, 8])
+@pytest.mark.parametrize("rows", [8, 16])
+@pytest.mark.parametrize("n", [269, 272])
+def test_nvfp4_24_byte_scale_region_matches_inline(dev, ksplit, rows, n):
+    """Moving scales preserves every output bit, including a partial row block.
+    The longer reduction also meets the independent kernel ULP contract.
+    """
+    outputs = []
+    for placement in ("inline", "block"):
+        out, ref = _run(dev, "nvfp4", n, 12288, 8, 8, "interleaved16",
+                        rows=rows, ksplit=ksplit, placement=placement)
+        chk = check_against_oracle(out, ref)
+        assert chk.ok(), chk
+        outputs.append(out)
+    assert np.array_equal(*outputs)
+
+
 @pytest.mark.parametrize("fmt", ["nvfp4", "fp8_e4m3"])
 def test_gemm_silu_mul_perm_out(dev, fmt):
     """The silu·mul epilogue writing its output in the consumer tile's x' order (PERM_OUT): the same bits as x_permute

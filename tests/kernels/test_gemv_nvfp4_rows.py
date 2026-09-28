@@ -9,7 +9,7 @@ from monolith.formats.fp import bf16_to_f32, f32_to_bf16
 from tests.kernels.test_gemm_tile import Gemm, _rbf, dev
 
 
-@pytest.mark.parametrize("k,rows,placement", [(4096, 8, "block"), (4096, 16, "block"), (12288, 16, "inline")])
+@pytest.mark.parametrize("k,rows,placement", [(4096, 8, "block"), (4096, 16, "block"), (12288, 16, "inline"), (12288, 16, "block"), (12288, 8, "block")])
 @pytest.mark.parametrize("epilogue", [None, "residual", "silu_mul"])
 @pytest.mark.parametrize("out_bf16", [False, True])
 def test_nvfp4_rows_fusions(dev, k, rows, placement, epilogue, out_bf16):

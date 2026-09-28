@@ -18,6 +18,10 @@ kernel void gemv_bf16_small(device const uint4* w [[buffer(0)]], device const fl
                       device float* y [[buffer(3)]],
 #endif
                       constant GemmParams& p [[buffer(4)]],
+#if SHARED_NORM
+                      device const float* stat [[buffer(5)]], device const float* norm_w [[buffer(6)]],
+#endif
+
 #if EPILOGUE == 1
                       device const ushort* residual [[buffer(7)]],
 #endif
@@ -40,6 +44,9 @@ kernel void gemv_bf16_small(device const uint4* w [[buffer(0)]], device const fl
   const uint T_act = p.t_active;
 #endif
 
+#if SHARED_NORM
+  if (T_act == 0u || T_act > 4u) return;
+#endif
 #define VECTORS 4
 #define KLANES 16u
 #define RPS (32u/KLANES)
@@ -53,7 +60,34 @@ kernel void gemv_bf16_small(device const uint4* w [[buffer(0)]], device const fl
   const uint klane = lane%KLANES;
   const uint row=p.tile0*TN+block*R+rr, rrow=block*R+rr;
   device const bfloat4 *w4=(device const bfloat4*)w+(ulong)min(row,p.tile0*TN+p.n_rows-1u)*(K/4u);
-  device const bfloat4 *x4=(device const bfloat4*)xp;
+  // Share one normalized input tile across all weight rows in this block.
+#if SHARED_NORM
+  threadgroup bfloat4 local_x[4u * K / 4u];
+  for (uint nv = 0; nv < 4u; nv++) {
+    const uint active_v = min(nv, T_act - 1u);
+    float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+    for (uint b = lane; b < STAT_PARTS; b += 512u) {
+      float v[16];
+      for (uint u = 0; u < 16; u++)
+        v[u] = b + 32u * u < STAT_PARTS ? stat[active_v * STAT_PARTS + b + 32u * u] : 0.f;
+      for (uint u = 0; u < 16; u += 4) { s0 += v[u]; s1 += v[u+1]; s2 += v[u+2]; s3 += v[u+3]; }
+    }
+    const float rn = rsqrt(simd_sum((s0 + s1) + (s2 + s3)) / float(K) + EPS);
+    for (uint i = gid % (KLANES * R); i < K / 4u; i += KLANES * R) {
+      const uint phys = i * 4u, ln = (phys % (32u * WPW)) / WPW, j = phys / (32u * WPW);
+      const uint col = ln * KL + j * WPW + phys % WPW;
+      const float4 raw = float4(((device const bfloat4*)xp)[col / 4u + active_v * (K / 4u)]);
+      const float4 nw = *(device const float4*)(norm_w + col);
+      bfloat4 val;
+      for (uint e = 0; e < 4; e++) val[e] = bfloat(round_bf16(raw[e] * rn * nw[e]));
+      local_x[nv * (K / 4u) + packed_slot4(i)] = val;
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  threadgroup const bfloat4 *x4 = local_x;
+#else
+  device const bfloat4 *x4 = (device const bfloat4*)xp;
+#endif
   for (uint vc = 0; vc < T_act; vc += VECTORS) {
     float result[VECTORS] = {0};
     for (uint base = 0; base < K/4u; base += KLANES*8u) {

@@ -27,9 +27,10 @@ def dev():
 
 
 class Cfg:
-    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0, adaptive=False):
+    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0, adaptive=False, single_block=False):
         self.heads, self.kv, self.d, self.rot, self.ctx_max, self.t_max = heads, kv, d, rot, ctx_max, t_max
         self.mma, self.step_state, self.lm_mode = mma, step_state, lm_mode
+        self.single_block = single_block
         self.adaptive = adaptive
         self.v2, self.n_tg, self.steal = v2, n_tg, steal                # v2: the partial granularity is 32 keys (the numpy model's chunk)
         self.v3, self.nsg3 = v3, nsg3 or kernels.gqa_v3_simdgroups(d)   # v3: one dispatch, a threadgroup of nsg3 SIMD-groups per query row
@@ -66,7 +67,7 @@ class Harness:
             lib = nt.Library(dev, source, macros, kernels.MSL_TENSOR_OPS)
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_mma"), nt.Pipeline(lib, "gqa_merge")
         elif cfg.v3:
-            lib = nt.Library(dev, kernels.gqa_source(v3=True), kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3))
+            lib = nt.Library(dev, kernels.gqa_source(v3=True), dict(kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3), SINGLE_BLOCK=str(int(cfg.single_block))))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v3"), None
             assert self.p_dec.max_threads_per_threadgroup >= cfg.nsg3 * 32
         elif cfg.v2:
@@ -114,7 +115,7 @@ class Harness:
         if getattr(c, "specialize", False) and not getattr(self, "specialized", False):
             source = kernels.gqa_source(v2=c.v2, v3=c.v3, mma=c.mma)
             if c.v3:
-                macros = kernels.gqa_v3_macros(c.d, nsg=c.nsg3)
+                macros = dict(kernels.gqa_v3_macros(c.d, nsg=c.nsg3), SINGLE_BLOCK=str(int(c.single_block)))
             elif c.v2:
                 macros = kernels.gqa_v2_macros(c.d, rmax=c.rows_max, rg=c.rb)
             else:
@@ -601,6 +602,7 @@ def test_static_geometry_keeps_position_and_active_length_dynamic(dev, kind, d, 
                    mma=kind in ("mma", "adaptive"), adaptive=kind == "adaptive",
                    step_state=kind in ("mma", "adaptive")) for _ in range(2)]
     configs[1].specialize = True
+    configs[1].single_block = kind == "v3"
     qn, kn = [rng.uniform(.8, 1.2, d).astype(np.float32) for _ in range(2)]
     hs = [Harness(dev, c, qn, kn) for c in configs]
     prefix = [rbf(rng.normal(0, .2, (512, 2, d))) for _ in range(2)]
@@ -614,3 +616,28 @@ def test_static_geometry_keeps_position_and_active_length_dynamic(dev, kind, d, 
         np.testing.assert_array_equal(*out)
         for a, b in zip(hs[0].caches(), hs[1].caches()):
             np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("nsg", [16, 32])
+@pytest.mark.parametrize("position", [31, 32, 63, 64, 65, 127, 128, 129, 1023])
+@pytest.mark.parametrize("single_block", [False, True])
+def test_v3_cached_key_pair_boundaries(dev, nsg, position, single_block):
+    """Pair batching, the unpaired cached tail and new causal keys meet the
+    unchanged independent kernel contract, including exactly one or no pair."""
+    cfg = Cfg(4, 2, 128, 64, 2048, 4, v3=True, nsg3=nsg, single_block=single_block)
+    rng = np.random.default_rng(79 + position)
+    qn, kn = _norms(rng, cfg.d)
+    h = Harness(dev, cfg, qn, kn)
+    kc = np.zeros((cfg.ctx_max, cfg.kv, cfg.d), np.float32)
+    vc = np.zeros_like(kc)
+    kc[:position] = rbf(rng.normal(0, .5, kc[:position].shape))
+    vc[:position] = rbf(rng.normal(0, .5, vc[:position].shape))
+    h.set_caches(kc, vc)
+    proj = _random_proj(rng, cfg, 3)
+    got = h.step(proj, position)
+    ref = ref_step(h, bf16_to_f32(proj), position, kc, vc)
+    cos, max_abs, scale = _bars(got, ref)
+    assert cos > 0.99999 and max_abs <= 2 * _ulp(scale), (cos, max_abs, scale)
+    got_k, got_v = h.caches()
+    assert np.array_equal(got_v[:position + 3], vc[:position + 3])
+    assert np.abs(got_k[:position + 3] - kc[:position + 3]).max() <= 1e-2 * max(np.abs(kc[:position + 3]).max(), 1e-6)

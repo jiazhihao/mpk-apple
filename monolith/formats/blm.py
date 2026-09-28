@@ -161,15 +161,17 @@ def pack_blm(payload: np.ndarray, scales: Optional[np.ndarray], layout: PackLayo
         raise ValueError(f"pack_blm: scales must be [N, 32, S], got {scales.shape}")
     if layout.scale_placement not in ("inline", "block"):
         raise ValueError(f"pack_blm: scale placement must be 'inline' or 'block', got {layout.scale_placement!r}")
-    # the block placement only where it pays: an inline unit without padding (INT4 affine at K = 4096: 64 + 16) or a
-    # ragged stripe whose tail half-word holds the scales for free stays inline, and so does a lane whose scales
-    # span two words of the region (K = 5120 / 12288 for NVFP4: measured slower on the tile than the padded unit,
-    # decode-kernels.md §9) — block placement means one 16-byte scale load per lane-row. A 4- or 8-byte payload
-    # (interleaved order) becomes a sub-word unit: lanes share a word, the unit is the payload alone.
+    # Keep ragged tails and unpadded units inline. Short scale runs fit one
+    # word. Interleaved NVFP4's aligned 24-byte runs also save traffic on M5:
+    # the current row/tile kernels amortize their second scale word across
+    # the longer stripe (K=12288). Ragged 10-byte runs still remain inline.
     sub_word_ok = layout.scale_placement == "block" and p_bytes in SUB_WORD_PAYLOADS and layout.lane_order == "interleaved16"
     unit_if_block = (p_bytes if sub_word_ok else _pad16(p_bytes)) + s_bytes
+    scale_words = max(-(-((lane * s_bytes) % 16 + s_bytes) // 16) for lane in range(LANES))
+    aligned_nvfp4_run = (format == "nvfp4" and layout.lane_order == "interleaved16"
+                         and s_bytes == 24 and p_bytes % 16 == 0)
     block_scales = (layout.scale_placement == "block" and s_bytes > 0 and unit_if_block < _pad16(p_bytes + s_bytes)
-                    and max(-(-((lane * s_bytes) % 16 + s_bytes) // 16) for lane in range(LANES)) == 1)
+                    and (scale_words == 1 or aligned_nvfp4_run))
     sub_word = sub_word_ok and (s_bytes == 0 or block_scales)
     unit = p_bytes if sub_word else (_pad16(p_bytes) if block_scales else _pad16(p_bytes + s_bytes))
     r = layout.rows

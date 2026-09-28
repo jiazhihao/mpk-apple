@@ -583,7 +583,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
                   and hi == 4 and tn == 16)
     nvfp4_rows = _nvfp4_rows(info) and hi == 1
     bf16_rows = _bf16_rows(info) and hi == 1
-    direct_norm = bf16_rows and stat is not None
+    direct_norm = (bf16_rows or small_bf16) and stat is not None
     conv_macros, conv_bindings = _projection_convolution(ctx, op, info, hi, t_src)
     tmac = dict(ctx.t_macros(hi, t_src), **conv_macros)
     if predicated:
@@ -594,7 +594,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     key = (xb, stat.name if stat is not None else None, tm, wpw, tk, lo, hi, t_src)
     xp = ctx.perm_scratch.get(key)
     if direct_norm:
-        tmac.update(DIRECT_NORM="1", STAT_PARTS=f"{ctx.stat_parts.get(stat.name, 1)}u",
+        tmac.update(DIRECT_NORM="1", SHARED_NORM=str(int(small_bf16)), STAT_PARTS=f"{ctx.stat_parts.get(stat.name, 1)}u",
                     EPS=f"{float(op.attrs.get('eps', 1e-6))}f")
     elif xp is None:
         xp = ctx.scratch(f"{y.name}.xp", tm * kdim * 2)
@@ -817,7 +817,7 @@ def _gqa_v3(ctx: _Ctx, op: Op) -> None:
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
-    macros = dict(kernels.gqa_v3_macros(d, lm_mode=int(a.get("lm_mode", 0)), chain_i=int(a.get("chain_i", 0))), STEP_STATE="1")
+    macros = dict(kernels.gqa_v3_macros(d, lm_mode=int(a.get("lm_mode", 0)), chain_i=int(a.get("chain_i", 0))), STEP_STATE="1", SINGLE_BLOCK="1")
     fused = _fused_permute(ctx, out)                              # o_proj's tile reads the output: written in its order
     if fused:
         macros = dict(macros, **fused[1])
@@ -908,10 +908,10 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     local_groups = 16 if ctx.t == 4 else 32
     if local_prepare:
         # Multi-token recurrence can overlap the gate projection. Smaller slices
-        # at T=6 provide more independent work without duplicating device state.
-        sl = 2 if ctx.t == 6 else 4
+        # at T=6/8 provide more independent work without duplicating device state.
+        sl = 2 if ctx.t in (6, 8) else 4
         prepared_blocks = hv * (dv // sl)
-        macros.update(LOCAL_PREPARE="1", LOCAL_GROUPS=f"{local_groups}u", SL=f"{sl}u", TP=f"{min(8, ctx.t)}u")
+        macros.update(LOCAL_PREPARE="1", SINGLE_PASS="1", LOCAL_GROUPS=f"{local_groups}u", SL=f"{sl}u", TP=f"{min(8, ctx.t)}u")
     main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
     preconvolved = not commit and main.name in ctx.preconvolved
     if preconvolved:

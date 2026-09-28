@@ -27,8 +27,9 @@ def test_block_placement_round_trip_and_bytes(fmt, k, lane_order):
     p16 = -(-i_in.payload_bytes // 16) * 16
     s = i_in.scale_bytes
     two_words = s and max(-(-((lane * s) % 16 + s) // 16) for lane in range(LANES)) > 1
-    if s and (p16 + s >= i_in.unit_bytes or two_words):
-        assert i_bl.scale_placement == "inline" and d_bl == d_in          # nothing to save (INT4's 64 + 16, a ragged tail half-word), or two scale words per lane
+    aligned_nvfp4_run = fmt == "nvfp4" and lane_order == "interleaved16" and s == 24 and i_in.payload_bytes % 16 == 0
+    if s and (p16 + s >= i_in.unit_bytes or (two_words and not aligned_nvfp4_run)):
+        assert i_bl.scale_placement == "inline" and d_bl == d_in          # nothing to save, or an unselected multi-word scale run
     elif s:
         assert i_bl.scale_placement == "block" and i_bl.unit_bytes == -(-i_bl.payload_bytes // 16) * 16 and i_bl.nbytes < i_in.nbytes
         # the lane's scales sit where the kernel's SCALE_WORD / SCALE_SOFF arithmetic says
@@ -57,6 +58,10 @@ def test_block_placement_streams_the_weights_bytes():
     assert i_bl.scale_words == 1 and i_bl.scale_region_bytes == 4096
     _, i5, _ = pack_spec(random_spec("nvfp4", 64, 5120, rng), PackLayout(rows=16, scale_placement="block"))
     assert i5.scale_placement == "inline" and i5.block_bytes == 16 * 32 * 96           # 10 scale bytes per lane would span two words: inline stays
+    _, i12, _ = pack_spec(random_spec("nvfp4", 64, 12288, rng),
+                          PackLayout(rows=16, lane_order="interleaved16", scale_placement="block"))
+    assert i12.scale_placement == "block" and i12.unit_bytes == 192
+    assert i12.scale_words == 2 and i12.block_bytes == 16 * 32 * (192 + 24) + 16
     _, i8, _ = pack_spec(random_spec("int8", 64, 4096, rng), PackLayout(rows=16, scale_placement="block"))
     assert i8.scale_placement == "block" and i8.block_bytes == 16 * 32 * 128 + 16 * 32 * 8   # 8 scale bytes per lane: one word
     with pytest.raises(ValueError):

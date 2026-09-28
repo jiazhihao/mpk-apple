@@ -63,6 +63,12 @@
 #if PRECONVOLVED && (!PREPARED || COMMIT)
 #error "preconvolved rows require a prepared forward recurrence"
 #endif
+#ifndef SINGLE_PASS
+#define SINGLE_PASS 0
+#endif
+#if SINGLE_PASS && (!LOCAL_PREPARE || COMMIT)
+#error "single-pass recurrence requires local preparation and one state slice per SIMD group"
+#endif
 #define PREP_STRIDE (2u * DK + DV + 2u)
 #ifndef SL
 #define SL 8u
@@ -304,10 +310,22 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
   // conv channels are indexed relative to the q|k|v columns (q at q_off, k at q_off + key_dim, v at q_off + 2·key_dim):
   // the projection may carry other rows ahead of them
   device const ushort* pq = proj + p.q_off;
+#if SINGLE_PASS
+  // The emitter launches every state slice, with compiled T <= TP. No grid or
+  // token-pass replay is needed; partial active lengths still use live state.
+  const uint b = sg;
+  if (b < n_blocks) {
+#else
   for (uint b = sg; b < n_blocks; b += p.n_sg) {
+#endif
     const uint h = b / NSG, grp = b % NSG;
     const uint kh = h / rep;
+#if SINGLE_PASS
+    const uint t0 = 0;
+    if (T > 0) {
+#else
     for (uint t0 = 0; t0 < T; t0 += TP) {
+#endif
       const uint n = min(TP, T - t0);
 #if LOCAL_PREPARE
       // A threadgroup owns a whole head or a disjoint subset of its columns.
@@ -409,7 +427,7 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
           for (uint j = 0; j < SL; j++) rec_out[((ulong)(h * DK + lane + 32u * i)) * DV + s * SL + j] = S[i][j];
         }
       }
-#if LOCAL_PREPARE && !FUSED_NORM
+#if LOCAL_PREPARE && !FUSED_NORM && !SINGLE_PASS
       if (t0 + TP < T) threadgroup_barrier(mem_flags::mem_threadgroup);
 #endif
 #if FUSED_NORM
