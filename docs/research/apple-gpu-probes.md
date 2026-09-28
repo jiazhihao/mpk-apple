@@ -69,6 +69,7 @@ number is in the first column. The M5 Pro column is read against a nominal 307 G
 | ALU-bound op hidden inside a bus-bound op, no barrier, both at full geometry (`p11` §3b, `p12` §5) | 86–114 % hidden — i.e. fully hidden within noise — in either encode order, up to 87 % of the partner's length | with the lane-contiguous streamer (215 GB/s): 106–108 % up to 63 % of the partner, 73 % at 125 %. With the **saturating** streamer (3 runs): **ALU op encoded first → 102–126 % hidden up to 44 % of the partner, 84–93 % at 85 %**; bus op encoded first → only a ≤ 22 % op hides (100–122 %), larger ones 1–29 % | |
 | … same pair with cores split by hand (`p11` §3) | 29–32 ms vs 27 ms serial — *slower* | 21.2–23.3 ms vs 17.8 ms serial — *slower* | |
 | Two bus-bound ops overlapped (`p11` §4, `p12` §6) | no consistent gain (−3 %…+10 %, within noise) | none: 216 → 212–217 GB/s (`p11`); 292–296 → 295–297 (`p12`) | |
+| A last-level cache the GPU re-reads from (a streaming pass over S MB repeated back to back, 2026-09-27, `slc_probe`) | not measured | **4–16 MB re-read at 400–540 GB/s** (8 MB: 29.5 → 21.1 µs, 16 MB: 59.9 → 30.9), 32 MB at the bus (120 → 107), 64 MB no gain (235 → 231): a ~16–24 MB cache. A prefetch of the next GEMV's 9.4 MB slab beside the latency-bound attention (8 µs) cost +27 µs per layer at full crew and more at smaller crews — the slab does not fit the attention's window, and the barrier before the GEMV waits for the prefetch — so D14 stands **[M]** | |
 
 ---
 
