@@ -41,6 +41,12 @@
 #if FUSED_NORM && (!PREPARED || SPB != 1 || COMMIT)
 #error "fused GDN normalization needs one prepared state slice per SIMD group"
 #endif
+#ifndef LOCAL_PREPARE
+#define LOCAL_PREPARE 0
+#endif
+#if LOCAL_PREPARE && (!FUSED_NORM || !PREPARED || COMMIT)
+#error "local preparation needs a whole-head fused recurrence"
+#endif
 #ifndef PREPARED
 #define PREPARED 0
 #endif
@@ -141,31 +147,15 @@ static inline float conv_at(device const ushort* proj, uint stride, device const
   return round_bf16(silu_f(round_bf16(acc)));
 }
 
-// Compute the convolution and normalization once per (token, value head),
-// rather than once per state-column block. The recurrence keeps the same FP32 order.
-kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
-                        device ushort* conv_state [[buffer(2)]], device const ushort* conv_w [[buffer(4)]],
-                        device const float* neg_exp_a_log [[buffer(5)]], device const float* dt_bias [[buffer(6)]],
-                        device float* prepared [[buffer(8)]], constant GdnParams& p [[buffer(9)]],
-#if STEP_STATE
-                        device const StepState* st [[buffer(15)]],
-#endif
-                        uint sg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
-#if STEP_STATE
-  if (st->done) return;
-  const uint T = st->t_this_step;
-#else
-  const uint T = p.t_active;
-#endif
-  const uint group = sg / 3u, kind = sg % 3u;
-  const uint t = group / p.hv, h = group % p.hv, kh = h / (p.hv / p.hk);
-  if (t >= T) return;
-#if SLOTS == 2u
-  device ushort* conv_dst = conv_state + ((st->step & 1u) ^ 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
-  conv_state += (st->step & 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
-#endif
+// The same arithmetic feeds either a device workspace or the whole head's
+// threadgroup workspace. Only the last token writes the opposite state slot.
+template<typename Output>
+static inline void prepare_token(device const ushort* proj, device const ushort* proj_ab,
+                                 device const ushort* conv_state, device ushort* conv_dst,
+                                 device const ushort* conv_w, device const float* neg_exp_a_log,
+                                 device const float* dt_bias, constant GdnParams& p,
+                                 uint t, uint T, uint h, uint kh, uint kind, uint lane, Output dst) {
   device const ushort* pq = proj + p.q_off;
-  device float* dst = prepared + (t * p.hv + h) * PREP_STRIDE;
   if (kind < 2u) {
     float vec[KR], ss = 0.0f;
     const uint base = kind * p.key_dim + kh * DK;
@@ -202,12 +192,42 @@ kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const us
 #endif
 }
 
+// Compute the convolution and normalization once per (token, value head),
+// rather than once per state-column block. The recurrence keeps the same FP32 order.
+kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
+                        device ushort* conv_state [[buffer(2)]], device const ushort* conv_w [[buffer(4)]],
+                        device const float* neg_exp_a_log [[buffer(5)]], device const float* dt_bias [[buffer(6)]],
+                        device float* prepared [[buffer(8)]], constant GdnParams& p [[buffer(9)]],
+#if STEP_STATE
+                        device const StepState* st [[buffer(15)]],
+#endif
+                        uint sg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+#if STEP_STATE
+  if (st->done) return;
+  const uint T = st->t_this_step;
+#else
+  const uint T = p.t_active;
+#endif
+  const uint group = sg / 3u, kind = sg % 3u;
+  const uint t = group / p.hv, h = group % p.hv, kh = h / (p.hv / p.hk);
+  if (t >= T) return;
+#if SLOTS == 2u
+  device ushort* conv_dst = conv_state + ((st->step & 1u) ^ 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
+  conv_state += (st->step & 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
+#else
+  device ushort* conv_dst = conv_state;
+#endif
+  device float* dst = prepared + (t * p.hv + h) * PREP_STRIDE;
+  prepare_token(proj, proj_ab, conv_state, conv_dst, conv_w, neg_exp_a_log, dt_bias,
+                p, t, T, h, kh, kind, lane, dst);
+}
+
 kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
                       device ushort* conv_state [[buffer(2)]], device float* rec_state [[buffer(3)]],
                       device const ushort* conv_w [[buffer(4)]], device const float* neg_exp_a_log [[buffer(5)]],
                       device const float* dt_bias [[buffer(6)]], device float* o_part [[buffer(7)]],
 
-#if PREPARED
+#if PREPARED && !LOCAL_PREPARE
                       device const float* prepared [[buffer(8)]],
 #endif
                       constant GdnParams& p [[buffer(9)]],
@@ -225,6 +245,9 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
   // One whole head per threadgroup: state slices publish each token for its
   // gated RMSNorm, preserving the standalone norm's lane and summation order.
   threadgroup float readout[TP][DV];
+#if LOCAL_PREPARE
+  threadgroup float local_prep[TP * PREP_STRIDE];
+#endif
 #endif
   const uint sg = gid / sw;
   const uint rep = p.hv / p.hk;
@@ -265,6 +288,14 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
     const uint kh = h / rep;
     for (uint t0 = 0; t0 < T; t0 += TP) {
       const uint n = min(TP, T - t0);
+#if LOCAL_PREPARE
+      // All SIMD groups in this threadgroup own the same head. Each job
+      // prepares one token's q, k or v, then all state slices share it.
+      for (uint job = grp; job < 3u * n; job += NSG)
+        prepare_token(proj, proj_ab, conv_in, conv_out, conv_w, neg_exp_a_log, dt_bias,
+                      p, t0 + job / 3u, T, h, kh, job % 3u, lane, local_prep + (job / 3u) * PREP_STRIDE);
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+#endif
       // 1. conv + SiLU of this lane's channels for the pass's tokens
       float qv[TREG][KR], kv[TREG][KR], vv[TREG][VR];
       float beta[TREG], eg[TREG];
@@ -312,7 +343,11 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
         for (uint t = 0; t < TP; t++) {
           if (t >= n) break;
 #if PREPARED
+#if LOCAL_PREPARE
+          threadgroup const float* src = local_prep + t * PREP_STRIDE;
+#else
           device const float* src = prepared + ((t0 + t) * p.hv + h) * PREP_STRIDE;
+#endif
           for (uint i = 0; i < KR; i++) {
             qv[0][i] = src[lane + 32u * i]; kv[0][i] = src[DK + lane + 32u * i];
           }

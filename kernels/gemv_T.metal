@@ -168,17 +168,17 @@ static inline uint4 sub_word(uint4 q, uint lane) {
 #define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
 #define SCALE_SOFF(ln) 0u
 #endif
-// A short affine run contains only one or two uint scale/bias pairs. Load
-// exactly that run instead of a uint4 followed by lane-dependent extraction.
-#if SCALE_PLACEMENT && SCALE_BIAS && SCALE_UNIT_BYTES == 4 && SCALE_RUN <= 8
-#define NARROW_AFFINE_SCALES 1
+// Load a short, uint-aligned scale run directly instead of a uint4 followed
+// by lane-dependent extraction (affine pairs or byte-sized FP4 scales).
+#if SCALE_PLACEMENT && SCALE_RUN <= 8 && ((SCALE_BIAS && SCALE_UNIT_BYTES == 4) || (SCALE_UNIT_BYTES == 1 && SCALE_RUN % 4 == 0))
+#define NARROW_SCALE_RUN 1
 #define SCALE_REG_OFFSET(ln) 0u
-static inline uint affine_scale_word(device const uint4* wb, uint ln, uint r, uint g) {
+static inline uint narrow_scale_word(device const uint4* wb, uint ln, uint r, uint g) {
   return reinterpret_cast<device const uint*>(wb + SCALE_BASE)[
       (r * (32u / SCALE_LANE_DIVISOR) + ln / SCALE_LANE_DIVISOR) * (SCALE_RUN / 4u) + g];
 }
 #else
-#define NARROW_AFFINE_SCALES 0
+#define NARROW_SCALE_RUN 0
 #define SCALE_REG_OFFSET(ln) SCALE_SOFF(ln)
 #endif
 #if SCALE_PLACEMENT
@@ -327,10 +327,10 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
       float acc[RG][T];
       for (uint i = 0; i < RG; i++) for (uint t = 0; t < T; t++) acc[i][t] = 0.0f;
 #if SCALE_GROUP > 0
-#if NARROW_AFFINE_SCALES
+#if NARROW_SCALE_RUN
       uint scw[RG][SCALE_RUN / 4u];
       for (uint i = 0; i < RG; i++) for (uint g = 0; g < SCALE_RUN / 4u; g++)
-        scw[i][g] = affine_scale_word(wb, lane, r0 + i, g);
+        scw[i][g] = narrow_scale_word(wb, lane, r0 + i, g);
 #else
       uint scw[RG][SCALE_WORDS * 4];
       for (uint i = 0; i < RG; i++) for (uint s = 0; s < SCALE_WORDS; s++) {

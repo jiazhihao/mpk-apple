@@ -36,13 +36,15 @@ def _module(hidden, hk, hv, dk, dv, seed):
 
 
 class Harness:
-    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False, perm_out=None, fused_norm=False, specialize=False):
+    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False, perm_out=None, fused_norm=False, specialize=False, local_prepare=False):
         """The engine's configuration: two state slots by step parity read from StepState (a single slot races when
         several value heads share a key head's conv window — the kernel's note)."""
         from monolith.core import StepStateLayout
 
         self.dev, self.m, self.ab_separate = dev, m, ab_separate
         self.prepared, self.fused_norm = prepared, fused_norm
+        self.local_prepare = local_prepare
+        assert not local_prepare or fused_norm
         self.layout = StepStateLayout(t_max=max(8, t_max), gamma_max=7)
         macros = dict(kernels.gdn_macros(m.dk, m.dv, conv_width=CW, t=t_max, slice_cols=slice_cols, slices_per_block=slices_per_block,
                                          tokens_per_pass=tokens_per_pass, slots=2), STEP_STATE="1")
@@ -53,11 +55,13 @@ class Harness:
         if fused_norm:
             assert prepared and slice_cols == 4 and slices_per_block == 1
             macros["FUSED_NORM"] = "1"
+        if local_prepare:
+            macros["LOCAL_PREPARE"] = "1"
         self.source = kernels.gdn_source().replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1)
         self.macros, self.specialize = macros, specialize
         lib = nt.Library(dev, self.source, macros)
         self.pso, self.pso_norm = nt.Pipeline(lib, "gdn_mixer"), nt.Pipeline(lib, "gdn_norm")
-        if prepared:
+        if prepared and not local_prepare:
             self.pso_prepare = nt.Pipeline(lib, "gdn_prepare")
             self.prep = nt.Buffer(dev, t_max * m.v_heads * (2 * m.dk + m.dv + 2) * 4)
         self.o_part = nt.Buffer(dev, kernels.gdn_workspace(t_max, m.v_heads, m.dv))
@@ -109,7 +113,7 @@ class Harness:
                 constants.update(norm_constants)
             lib = nt.Library(self.dev, source, dict(self.macros, **constants))
             self.pso, self.pso_norm = nt.Pipeline(lib, "gdn_mixer"), nt.Pipeline(lib, "gdn_norm")
-            if self.prepared:
+            if self.prepared and not self.local_prepare:
                 self.pso_prepare = nt.Pipeline(lib, "gdn_prepare")
             self.specialize = False
         out = nt.Buffer(self.dev, t * vd * 2); out.fill(0)
@@ -125,7 +129,7 @@ class Harness:
         if self.fused_norm:
             d.bytes(11, params).buffer(12, self.aux[3]).buffer(13, mb).buffer(14, out).grid(hv).threadgroup(32 * m.dv // 4)
             ds = [d]
-        if self.prepared:
+        if self.prepared and not self.local_prepare:
             dp = (nt.Dispatch().pipeline(self.pso_prepare).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state)
                   .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(8, self.prep)
                   .bytes(9, params).buffer(15, self.st).grid(3 * t * hv).threadgroup(32).barrier())
@@ -307,8 +311,9 @@ def test_norm_writes_consumer_permutation(dev, wpw, tk):
 
 
 @pytest.mark.parametrize("active", [0, 1, 4, 6, 8])
-@pytest.mark.parametrize("tp,ab_separate,perm_out", [(8, False, None), (3, True, (8, 64))])
-def test_fused_norm_matches_separate_passes(dev, active, tp, ab_separate, perm_out):
+@pytest.mark.parametrize("tp,ab_separate,perm_out", [(8, False, None), (3, True, (8, 64)), (1, False, None)])
+@pytest.mark.parametrize("local_prepare", [False, True])
+def test_fused_norm_matches_separate_passes(dev, active, tp, ab_separate, perm_out, local_prepare):
     """Exact fusion equivalence with filled state, continuation, inactive rows,
     separate scalar projection, output permutation and multiple token passes."""
     torch = pytest.importorskip("torch")
@@ -316,7 +321,7 @@ def test_fused_norm_matches_separate_passes(dev, active, tp, ab_separate, perm_o
     state = {"l.conv_state": torch.from_numpy(rng.normal(0, .2, (m.conv_dim, CW - 1)).astype(np.float32)).to(torch.bfloat16),
              "l.rec_state": torch.from_numpy(rng.normal(0, .1, (16, 128, 128)).astype(np.float32))}
     hs = [Harness(dev, m, 8, prepared=True, slice_cols=4, slices_per_block=1, tokens_per_pass=tp,
-                  ab_separate=ab_separate, perm_out=perm_out, fused_norm=fused) for fused in (False, True)]
+                  ab_separate=ab_separate, perm_out=perm_out, fused_norm=fused, local_prepare=local_prepare and fused) for fused in (False, True)]
     for h in hs:
         h.set_state(state)
     for _ in range(2):
@@ -333,14 +338,14 @@ def test_fused_norm_matches_separate_passes(dev, active, tp, ab_separate, perm_o
     assert before == (h.conv_state.read(0, 2 * h.conv_bytes), h.rec_state.read(0, 2 * h.rec_bytes))
 
 
-@pytest.mark.parametrize("prepared,fused,separate", [(False, False, False), (True, False, True), (True, True, False)])
-def test_static_geometry_preserves_live_state_and_partial_steps(dev, prepared, fused, separate):
+@pytest.mark.parametrize("prepared,fused,separate,local", [(False, False, False, False), (True, False, True, False), (True, True, False, False), (True, True, True, True)])
+def test_static_geometry_preserves_live_state_and_partial_steps(dev, prepared, fused, separate, local):
     torch = pytest.importorskip("torch")
     m, rng = _module(64, 8, 16, 128, 128, seed=91)
     state = {"l.conv_state": torch.from_numpy(rng.normal(0, .2, (m.conv_dim, CW - 1)).astype(np.float32)).to(torch.bfloat16),
              "l.rec_state": torch.from_numpy(rng.normal(0, .1, (16, 128, 128)).astype(np.float32))}
     hs = [Harness(dev, m, 8, prepared=prepared, fused_norm=fused, ab_separate=separate,
-                  slice_cols=4, slices_per_block=1, tokens_per_pass=8, specialize=flag) for flag in (False, True)]
+                  slice_cols=4, slices_per_block=1, tokens_per_pass=8, specialize=flag, local_prepare=local) for flag in (False, True)]
     for h in hs:
         h.set_state(state)
     for active, done in [(1, False), (8, False), (3, False), (0, False), (8, True)]:

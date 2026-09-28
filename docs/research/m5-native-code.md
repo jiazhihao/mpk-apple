@@ -595,3 +595,67 @@ versus MLX 172.90/183.19/183.05/188.77 µs. Full-attention BF16 layers still los
 at context 128 for T=1 (157.31/151.62) and T=4 (165.57/162.63); the other six
 measured configurations win every pair. Exact 32-token INT4 generations after
 five- and nineteen-token prompts also pass under Metal validation.
+
+
+## Whole-head GDN preparation and narrow byte-scale loads
+
+The GDN recurrence now prepares q/k/v inside its whole-head threadgroup and
+shares those values through threadgroup memory. This removes the preparation
+dispatch and its device workspace, and extends the prepared recurrence/norm path
+to T=1 for the measured 128-dimensional head geometry. Preparation uses the same
+helper and arithmetic as the standalone path. The final token writes the opposite
+convolution-state slot; the combined dispatch declares both state writes. Commit
+replay retains the existing separate path.
+
+Seven alternating pairs of 48 steps against f1fc251, using shared buffers and
+immediate captures of all layer outputs and both states:
+
+| T | Before µs/layer | After µs/layer |
+|---:|---:|---:|
+| 1 | 189.77 | 180.29 |
+| 4 | 195.19 | 192.55 |
+| 6 | 195.59 | 194.62 |
+| 8 | 197.45 | 196.18 |
+
+All captured bytes match. T=1 native allocation falls from 90 registers for the
+recurrence plus 20 for normalization to 65 for the combined kernel, with zero
+scratch. Shared memory is 2,056 bytes at T=1, scaling to 16,448 at T=8. The T=4
+combined kernel uses 67 registers and 8,224 shared bytes. These are resource
+measurements, not decoded instruction listings. Merging the main and gate
+projections was also retested: it loses at T=1/4 and gives only small mixed gains
+at T=6/8, so is not retained.
+
+The short aligned scale loader now also handles byte-scale runs of four or eight
+bytes. NVFP4 shared-buffer A/B (five alternating pairs, 24 steps) improves
+435.36→432.45 µs at T=1, 475.46→470.51 at T=4 and 480.28→475.65 at T=8, with exact
+layer outputs. T=1 QKV scratch decreases 48→32 bytes and fused gate/up scratch
+80→48; QKV registers fall 70→69. Matrix kernels remain at 126 registers, and some
+scratch allocations increase despite the timing improvement. Scratch alone is
+not a performance ranking or proof of register spills.
+
+Public Metal pipeline capture of MLX 0.32.2 identifies NVFP4 T=1 `qmv_fast`
+(49 registers, 3,992 native bytes) and its two-row variant (30, 2,218), and T=4
+`qmv_wide` with four vectors and 16 K lanes (62, 2,372). All three report zero
+scratch and threadgroup memory. The corresponding MLX source streams one quant
+group per iteration; MPK's scalar path keeps lane scale arrays and its matrix
+path decodes into cooperative tiles. This motivates testing the lifetime and
+indexing of temporary arrays, without assuming the metadata proves spills.
+
+The full NVFP4 gate before these byte-scale changes still loses at T=1 for both
+contexts (435.30/390.99 and 459.28/408.50 µs, MPK/MLX), and at T=4
+(476.56/432.20 and 499.28/491.99). T=6/8 win all measured pairs. The latency target
+remains open; streaming means do not establish that every individual layer wins.
+
+
+Validation for this follow-up: 73 GDN kernel/barrier cases pass, including exact
+filled-state continuation, partial/zero/done steps, separate scalar projection,
+output permutation and TP=1/3/8. A further 285 projection and real-model cases
+pass with 3 skips under Metal validation, including greedy generation, layer
+oracles, sampling and speculative rollback. The existing #123 long-prompt reuse
+case is not treated as fixed. Four additional K=2048 byte-scale boundary cases pass under Metal validation. Hygiene and whitespace checks pass.
+
+A subsequent isolated T=1 NVFP4 A/B rejected fully unrolling the payload loop
+(434.84→523.35 µs) and loading scales directly per quantization group
+(434.84→492.29 µs). Unrolling only the two-group loop gives a small mixed change
+(433.92 µs minimum) and is not retained. All outputs match. One earlier run
+overlapped validation and was discarded; these are the isolated rerun values.

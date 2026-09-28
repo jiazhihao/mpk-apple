@@ -831,14 +831,16 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     if ctx.shape(cs)[0] != 2 or ctx.shape(rs)[0] != 2:
         raise ValueError(f"gdn_mixer: the states need two slots (StateEntry.checkpoints = 2), got {ctx.shape(cs)} / {ctx.shape(rs)}")
     macros = _gdn_macros(ctx, a, commit)
-    prepared = not commit and ctx.t > 1 and ctx.accelerator == "on"
+    prepared = not commit and ctx.accelerator == "on" and (ctx.t > 1 or (dk == dv == 128 and hv >= 16))
     # Four adjacent state columns amortize the prepared q/k loads while keeping
     # the recurrence's FP32 accumulation order and enough independent work.
     prepared_blocks = hv * (dv // 4)
     if prepared:
         macros.update(PREPARED="1", SPB="1u", SL="4u", TP="8u")
-    fuse_norm = (prepared and ctx.t in (4, 6, 8) and dk == dv == 128 and hv >= 16
+    fuse_norm = (prepared and ctx.t in (1, 4, 6, 8) and dk == dv == 128 and hv >= 16
                  and len(o_part.consumers) == 1 and o_part.consumers[0].kind == "gdn_norm")
+    if fuse_norm:
+        macros.update(LOCAL_PREPARE="1", TP=f"{min(8, ctx.t)}u")
     main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
     prm = ctx.params("gdn", kernels.gdn_params(
         hv=hv, hk=hk, t_active=ctx.t, q_off=ps["in_proj_qkv"][1], k_off=ps["in_proj_qkv"][1] + kd, v_off=ps["in_proj_qkv"][1] + 2 * kd,
@@ -849,7 +851,7 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     if prepared:
         grid, tg = (-(-prepared_blocks // 4), 1, 1), (128, 1, 1)
     prep_binding = []
-    if prepared:
+    if prepared and not fuse_norm:
         prep = ctx.scratch("gdn.prepared", ctx.t * hv * (2 * dk + dv + 2) * 4, shared=True)
         kp = ctx.kernel("gdn", kernels.gdn_source(), "gdn_prepare", macros, static_params=[("gdn", "p", prm)])
         ctx.add(kp, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (4, *ctx.windows[conv_w.name]),
@@ -895,7 +897,7 @@ def _gdn_norm(ctx: _Ctx, op: Op) -> None:
                           static_params=[("gdn", "p", mix_prm), ("gdn", "np", prm)])
         ctx.add(kmix, bindings + [(11, prm, 0), (12, *ctx.windows[norm_w.name]), (13, *ctx.buf(z)),
                                   (14, *((fused[0], 0) if fused else ctx.buf(out)))],
-                (hv, 1, 1), (32 * dv // 4, 1, 1), "gdn_mixer_norm", writes=[3, 14], perm_out=bool(fused))
+                (hv, 1, 1), (32 * dv // 4, 1, 1), "gdn_mixer_norm", writes=[2, 3, 14], perm_out=bool(fused))
         return
     knorm = ctx.kernel("gdn", kernels.gdn_source(), "gdn_norm", macros, static_params=[("gdn", "p", prm)])
     ctx.add(knorm, [(0, *ctx.buf(o_part)), (1, *ctx.buf(z)), (2, *ctx.windows[norm_w.name]), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],

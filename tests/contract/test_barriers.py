@@ -207,22 +207,21 @@ def test_fused_gdn_norm_waits_for_gate_and_preserves_state_writes(tmp_path, monk
         "engine": {"family": "Apple10", "lane_order": "interleaved16", "accelerator": "on"}})
     prog = compile_program(m, PackFile(tmp_path / "pack"), profile, t=t)
     names = [op.name for op in prog.ops]
-    if t not in (4, 6, 8):
+    if t not in (1, 4, 6, 8):
         assert "gdn_mixer_norm" not in names
         assert "gdn_mixer" in names and "gdn_norm" in names
         return
     assert "gdn_mixer" not in names and "gdn_norm" not in names
     fused = next(op for op in prog.ops if op.name == "gdn_mixer_norm")
-    prep = next(op for op in prog.ops if op.name == "gdn_prepare")
+    assert "gdn_prepare" not in names
     assert fused.grid == (16, 1, 1) and fused.threadgroup == (1024, 1, 1)
-    assert fused.barrier_before and fused.meta["writes"] == [3, 14]
-    assert prep.meta["writes"] == [2, 8]
+    assert fused.barrier_before and fused.meta["writes"] == [2, 3, 14]
     fb = {i: name for i, name, _ in fused.bindings}
-    pb = {i: name for i, name, _ in prep.bindings}
-    assert fb[2] == pb[2] and fb[8] == pb[8]
+    assert fb[2].endswith("conv_state") and 8 not in fb
     assert fb[3].endswith("rec_state")
     constants = prog.kernels[fused.kernel].macros
-    assert constants["FUSED_NORM"] == "1"
+    assert constants["FUSED_NORM"] == constants["LOCAL_PREPARE"] == "1"
+    assert constants["TP"] == f"{t}u"
     assert constants["STATIC_GDN_P_HK"] == "8u"
     assert constants["STATIC_GDN_P_IN_STRIDE"] != constants["STATIC_GDN_NP_IN_STRIDE"]
     assert "STATIC_GDN_P_T_ACTIVE" not in constants
