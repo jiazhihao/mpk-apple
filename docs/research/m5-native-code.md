@@ -415,3 +415,91 @@ The real-model prefill layer oracle, twice-repeated 48-token greedy golden,
 sampling reproducibility check and speculative rollback golden also pass with
 Metal validation (four tests). The previously reported long-prompt session-reuse
 case in #123 was not part of this run and remains unresolved.
+
+
+## Loading only the affine scale pairs a lane needs
+
+The shared-scale address change exposed another code-generation cost: a lane's
+four- or eight-byte affine scale run was still loaded through a 16-byte vector
+and indexed using its position inside that vector. GEMV and matrix fill now load
+only those one or two uint scale/bias pairs, with zero-based register indexing.
+Inline scales, other scale formats and larger runs retain the previous loader.
+The pack format, decoded values and accumulation order are unchanged.
+
+Exact production native code confirms smaller allocation and code, without
+scratch changes:
+
+| Specialization | Registers before → after | Main bytes before → after |
+|---|---:|---:|
+| T=1 QKV | 84 → 80 | 4,908 → 4,756 |
+| T=1 gate/up | 95 → 90 | 6,530 → 6,350 |
+| T=4 QKV | 71 → 67 | 3,808 → 3,652 |
+| T=4 output projection | 69 → 65 | 5,104 → 4,954 |
+| T=4 gate/up | 85 → 85 | 8,406 → 8,268 |
+
+All have zero scratch before and after. Seven alternating production A/B pairs,
+32 steps each, against 4afe870 improve every paired sample:
+
+| T | Context | Before µs/layer | After µs/layer |
+|---:|---:|---:|---:|
+| 1 | 128 | 59.04 | 58.35 |
+| 1 | 1024 | 71.54 | 70.94 |
+| 4 | 128 | 76.72 | 74.71 |
+| 4 | 1024 | 101.98 | 101.47 |
+| 6 | 128 | 82.71 | 81.94 |
+| 8 | 128 | 83.73 | 83.16 |
+| 8 | 1024 | 108.36 | 107.92 |
+
+All 28 layer outputs are byte-identical. Separate runs of 32 generated tokens
+after five- and nineteen-token prompts also match exactly under Metal validation.
+GEMV, matrix and fused-epilogue kernel suites pass (304 passed, three skipped),
+plus ten added checks of K=1536/3072 scale-group boundaries. These include BF16
+and F16 scale pairs, shared and unshared layouts, row tails and both scale
+placements. An early matrix-only prototype was essentially tied at long context;
+the production table above is the retained implementation's paired comparison.
+
+The refreshed MLX gate (seven pairs, 48 steps) is still open:
+
+| T | Context | MPK µs/layer | MLX µs/layer | Faster in every pair |
+|---:|---:|---:|---:|---|
+| 1 | 128 | 58.40 | 58.05 | False |
+| 1 | 1024 | 71.03 | 67.91 | False |
+| 4 | 128 | 75.11 | 71.27 | False |
+| 4 | 1024 | 100.63 | 94.63 | False |
+| 6 | 128 | 81.17 | 87.38 | True |
+| 6 | 1024 | 104.77 | 120.06 | True |
+| 8 | 128 | 82.16 | 103.18 | True |
+| 8 | 1024 | 107.24 | 146.53 | True |
+
+Raw samples/native metadata are the `narrow_affine_scales_ab`,
+`fixed_narrow_affine_scales` and `narrow_affine_scales_native` 20260928 files.
+Native archives were compiled without shader validation; correctness checks
+used validation separately.
+
+Other experiments since the preceding checkpoint were rejected: merging the GDN
+main and gate projections costs 1.2–2.6 µs; contiguous key ownership or transposed
+recurrent state had no consistent win; head-major/32-key-blocked KV caches did
+not improve matrix attention. A minimal four-vector INT4 SIMD projection was
+still slower than the matrix path. None is included in the production kernels.
+
+
+A follow-up control shares weights, state and activation allocations between the
+scale-load variants. It also includes a separately constructed identical-source
+baseline. Both baseline controls remain slower than the narrow loads in every
+measured configuration; control-to-control differences reach 0.58 µs, so the
+smallest gains should not be interpreted more precisely than that allocation /
+pipeline-construction spread. Outputs were captured immediately after each
+variant ran, before a shared output could be overwritten. Shared-buffer
+minimum latencies (baseline / narrow / identical-source control), in µs/layer:
+
+| T | Context | Baseline | Narrow | Control |
+|---:|---:|---:|---:|---:|
+| 1 | 128 | 59.03 | 58.26 | 58.66 |
+| 1 | 1024 | 71.57 | 71.00 | 71.23 |
+| 4 | 128 | 75.86 | 75.12 | 76.00 |
+| 4 | 1024 | 101.81 | 101.48 | 101.78 |
+| 6 | 128 | 81.97 | 81.54 | 82.09 |
+| 8 | 128 | 83.45 | 82.63 | 83.64 |
+| 8 | 1024 | 108.48 | 107.83 | 107.90 |
+
+Raw shared-buffer samples are `narrow_affine_scales_shared_ab_20260928.jsonl`.

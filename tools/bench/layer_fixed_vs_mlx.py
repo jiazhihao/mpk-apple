@@ -26,7 +26,7 @@ def kv_prefix(layer, ctx, heads, dim):
                  for scale in (.5, .1))
 
 
-def our_stack(sess, indices, t, ctx, x, random_prefix=False):
+def our_stack(sess, indices, t, ctx, x, random_prefix=False, *, buffers=None):
     from monolith.core.ir import Graph
     from monolith.core.dtypes import DType
     from monolith.core.shapes import T
@@ -51,7 +51,7 @@ def our_stack(sess, indices, t, ctx, x, random_prefix=False):
     for p in DEFAULT_PASSES:
         p(g)
     prog = emit_program(g, pack=sess.pack, profile=sess.profile, t=t, tuner=sess.tuner, tail=None, attention=sess.attention)
-    eng = Engine(prog, sess.dev)
+    eng = Engine(prog, sess.dev, buffers=buffers)
     if random_prefix:
         from monolith.packs.transforms import rope_head_perm
         for i in indices:

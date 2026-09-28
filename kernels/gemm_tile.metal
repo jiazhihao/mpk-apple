@@ -179,6 +179,19 @@ static inline uint unit_word(uint lane, uint r, uint j) {
 #define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
 #define SCALE_SOFF(ln) 0u
 #endif
+// A short affine run contains only one or two uint scale/bias pairs. Load
+// exactly that run instead of a uint4 followed by lane-dependent extraction.
+#if SCALE_PLACEMENT && SCALE_BIAS && SCALE_UNIT_BYTES == 4 && SCALE_RUN <= 8
+#define NARROW_AFFINE_SCALES 1
+#define SCALE_REG_OFFSET(ln) 0u
+static inline uint affine_scale_word(device const uint4* wb, uint ln, uint r, uint g) {
+  return reinterpret_cast<device const uint*>(wb + SCALE_BASE)[
+      (r * (32u / SCALE_LANE_DIVISOR) + ln / SCALE_LANE_DIVISOR) * (SCALE_RUN / 4u) + g];
+}
+#else
+#define NARROW_AFFINE_SCALES 0
+#define SCALE_REG_OFFSET(ln) SCALE_SOFF(ln)
+#endif
 #if SCALE_PLACEMENT
 #define BLOCK_WORDS (R * 32u * UNIT_WORDS + SCALE_REGION_WORDS)       // a block: its payload words then its scale region
 #else
@@ -285,6 +298,12 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
 #pragma clang loop unroll(full)
         for (uint i = 0; i < NW; i++) {
+#if NARROW_AFFINE_SCALES
+          uint scw[SCALE_RUN / 4u];
+#pragma clang loop unroll(full)
+          for (uint sc = 0; sc < SCALE_RUN / 4u; sc++)
+            scw[sc] = affine_scale_word(wb, ln0 + i, r, sc);
+#else
 #if SCALE_CACHE
           if (j == 0u) {
 #pragma clang loop unroll(full)
@@ -310,13 +329,14 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
             scw[4 * sc] = v4.x; scw[4 * sc + 1] = v4.y; scw[4 * sc + 2] = v4.z; scw[4 * sc + 3] = v4.w;
           }
 #endif
+#endif
           const uint ln = ln0 + i;                                       // (LANE_OFF is a function of ln)
 #pragma clang loop unroll(full)
           for (uint ch = 0; ch < ((CT < WPW) ? 1u : (WPW / 16u)); ch++) {
             const uint g = (LANE_OFF + j * WPW + e0 + 16u * ch) / SCALE_GROUP;
-            scv[i * (WPW / 16u) + ch] = decode_scale(scw + SCALE_UOFF, SCALE_SOFF(ln) + g);
+            scv[i * (WPW / 16u) + ch] = decode_scale(scw + SCALE_UOFF, SCALE_REG_OFFSET(ln) + g);
 #if SCALE_BIAS
-            bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, SCALE_SOFF(ln) + g);
+            bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, SCALE_REG_OFFSET(ln) + g);
 #endif
           }
         }

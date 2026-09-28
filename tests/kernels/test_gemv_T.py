@@ -77,7 +77,7 @@ def test_nvfp4_decode_variants_are_exact(dev, variant, rows, t):
     assert chk.ok() and chk.max_rel_err < 1e-6, chk         # the decodes are bit-exact; only accumulation order differs
 
 
-@pytest.mark.parametrize("fmt,K", [("nvfp4", 4096), ("nvfp4", 5120), ("nvfp4", 12288), ("int8", 4096), ("int8", 5120), ("int4_affine", 4096), ("int4_affine", 1024), ("nvfp4", 3584)])
+@pytest.mark.parametrize("fmt,K", [("nvfp4", 4096), ("nvfp4", 5120), ("nvfp4", 12288), ("int8", 4096), ("int8", 5120), ("int4_affine", 4096), ("int4_affine", 1024), ("int4_affine", 1536), ("int4_affine", 3072), ("nvfp4", 3584)])
 @pytest.mark.parametrize("lane_order", ["interleaved16", "contiguous"])
 @pytest.mark.parametrize("rows,t", [(16, 1), (8, 4)])
 def test_gemv_block_scale_placement(dev, fmt, K, lane_order, rows, t):
