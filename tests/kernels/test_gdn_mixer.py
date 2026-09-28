@@ -36,7 +36,7 @@ def _module(hidden, hk, hv, dk, dv, seed):
 
 
 class Harness:
-    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False):
+    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False, perm_out=None):
         """The engine's configuration: two state slots by step parity read from StepState (a single slot races when
         several value heads share a key head's conv window — the kernel's note)."""
         from monolith.core import StepStateLayout
@@ -46,6 +46,8 @@ class Harness:
         self.layout = StepStateLayout(t_max=max(8, t_max), gamma_max=7)
         macros = dict(kernels.gdn_macros(m.dk, m.dv, conv_width=CW, t=t_max, slice_cols=slice_cols, slices_per_block=slices_per_block,
                                          tokens_per_pass=tokens_per_pass, slots=2), STEP_STATE="1")
+        if perm_out is not None:
+            macros.update(kernels.perm_out_macros(m.value_dim, *perm_out))
         if prepared:
             macros["PREPARED"] = "1"
         lib = nt.Library(dev, kernels.gdn_source().replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1), macros)
@@ -108,7 +110,7 @@ class Harness:
         if self.prepared:
             dp = (nt.Dispatch().pipeline(self.pso_prepare).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state)
                   .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(8, self.prep)
-                  .bytes(9, params).buffer(15, self.st).grid(t * hv).threadgroup(32).barrier())
+                  .bytes(9, params).buffer(15, self.st).grid(3 * t * hv).threadgroup(32).barrier())
             d.buffer(8, self.prep)
             ds.insert(0, dp)
         r = nt.Queue(self.dev).run(ds)
@@ -272,3 +274,15 @@ def test_state_slots_and_commit_pass(dev):
     got2 = run(proj2, {"step": 1, "t_this_step": 1})
     c0, r0 = slot(0)
     _check(got2, ref2, r0, s_two["l.rec_state"].numpy(), c0, s_two["l.conv_state"].float().numpy())
+
+
+@pytest.mark.parametrize("wpw,tk", [(8, 64), (32, 64), (32, 128)])
+def test_norm_writes_consumer_permutation(dev, wpw, tk):
+    torch = pytest.importorskip("torch")
+    m, rng = _module(64, 16, 16, 128, 128, seed=25)
+    proj = _proj(rng, torch, 4, m.in_proj.n)
+    natural = Harness(dev, m, 4, prepared=True).step(proj, t_active=3)
+    permuted = Harness(dev, m, 4, prepared=True, perm_out=(wpw, tk)).step(proj, t_active=3)
+    columns = kernels.x_permute_columns(m.value_dim, wpw, tk)
+    assert np.array_equal(permuted, natural[:, columns])
+    assert np.all(permuted[3:] == 0)

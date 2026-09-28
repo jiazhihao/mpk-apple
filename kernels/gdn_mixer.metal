@@ -121,6 +121,20 @@ static inline float pick(thread const float* arr, uint i) {         // arr[i] wi
   return r;
 }
 
+// A prepared token only needs the convolution window ending at that token.
+static inline float conv_at(device const ushort* proj, uint stride, device const ushort* state,
+                            device const ushort* weight, uint channel, uint token) {
+  float acc = 0.0f;
+#pragma clang loop unroll(full)
+  for (uint tap = 0; tap < CW; tap++) {
+    const uint pos = token + tap;
+    const float x = pos < CW - 1u ? bf16f(state[channel * (CW - 1u) + pos])
+                                        : bf16f(proj[(pos - (CW - 1u)) * stride + channel]);
+    acc = fma(bf16f(weight[channel * CW + tap]), x, acc);
+  }
+  return round_bf16(silu_f(round_bf16(acc)));
+}
+
 // Compute the convolution and normalization once per (token, value head),
 // rather than once per state-column block. The recurrence keeps the same FP32 order.
 kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
@@ -137,31 +151,32 @@ kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const us
 #else
   const uint T = p.t_active;
 #endif
-  const uint t = sg / p.hv, h = sg % p.hv, kh = h / (p.hv / p.hk);
+  const uint group = sg / 3u, kind = sg % 3u;
+  const uint t = group / p.hv, h = group % p.hv, kh = h / (p.hv / p.hk);
   if (t >= T) return;
 #if SLOTS == 2u
   conv_state += (st->step & 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
 #endif
-  float qv[KR], kv[KR], vv[VR], y[1];
   device const ushort* pq = proj + p.q_off;
-  for (uint i = 0; i < KR; i++) {
-    conv_channel(pq, p.in_stride, conv_state, conv_w, kh * DK + lane + 32u * i, t, 1, y);
-    qv[i] = y[0];
-    conv_channel(pq, p.in_stride, conv_state, conv_w, p.key_dim + kh * DK + lane + 32u * i, t, 1, y);
-    kv[i] = y[0];
-  }
-  for (uint i = 0; i < VR; i++) {
-    conv_channel(pq, p.in_stride, conv_state, conv_w, 2u * p.key_dim + h * DV + lane + 32u * i, t, 1, y);
-    vv[i] = y[0];
-  }
-  float sq = 0.0f, sk = 0.0f;
-  for (uint i = 0; i < KR; i++) { sq = fma(qv[i], qv[i], sq); sk = fma(kv[i], kv[i], sk); }
-  sq = simd_sum(sq); sk = simd_sum(sk);
-  const float rq = rsqrt(sq + 1e-6f), rk = rsqrt(sk + 1e-6f), scale = sqrt(float(DK));
   device float* dst = prepared + (t * p.hv + h) * PREP_STRIDE;
-  for (uint i = 0; i < KR; i++) { dst[lane + 32u * i] = (qv[i] * rq) / scale; dst[DK + lane + 32u * i] = kv[i] * rk; }
-  for (uint i = 0; i < VR; i++) dst[2u * DK + lane + 32u * i] = vv[i];
-  if (lane == 0) {
+  if (kind < 2u) {
+    float vec[KR], ss = 0.0f;
+    const uint base = kind * p.key_dim + kh * DK;
+    for (uint i = 0; i < KR; i++) {
+      vec[i] = conv_at(pq, p.in_stride, conv_state, conv_w, base + lane + 32u * i, t);
+      ss = fma(vec[i], vec[i], ss);
+    }
+    const float inv = rsqrt(simd_sum(ss) + 1e-6f);
+    for (uint i = 0; i < KR; i++) {
+      float v = vec[i] * inv;
+      if (kind == 0u) v /= sqrt(float(DK));
+      dst[kind * DK + lane + 32u * i] = v;
+    }
+  } else {
+    for (uint i = 0; i < VR; i++)
+      dst[2u * DK + lane + 32u * i] = conv_at(pq, p.in_stride, conv_state, conv_w, 2u * p.key_dim + h * DV + lane + 32u * i, t);
+  }
+  if (kind == 2u && lane == 0) {
     device const ushort* ab = p.ab_separate ? proj_ab : proj;
     const uint stride = p.ab_separate ? p.ab_stride : p.in_stride;
     const float a = bf16f(ab[t * stride + p.a_off + h]), b = bf16f(ab[t * stride + p.b_off + h]);
@@ -341,6 +356,10 @@ kernel void gdn_norm(device const float* o_part [[buffer(0)]], device const usho
     y = round_bf16(norm_w[v] * y);
     const float z = bf16f(proj[t * p.in_stride + p.z_off + h * DV + v]);
     y = round_bf16(y * silu_f(z));
+#if PERM_OUT
+    out[t * p.out_stride + perm_dest(h * DV + v)] = bf16bits(y);
+#else
     out[t * p.out_stride + h * DV + v] = bf16bits(y);
+#endif
   }
 }

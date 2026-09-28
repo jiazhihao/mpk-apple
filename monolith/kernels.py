@@ -529,7 +529,7 @@ def gqa_workspace(kv_heads: int, n_chunks_max: int, rows_max: int, head_dim: int
 # ---- Gated DeltaNet ----------------------------------------------------------------------------------------------
 
 def gdn_source() -> str:
-    return PRELUDE + template("gdn_mixer.metal")
+    return PRELUDE + PERM_OUT_MSL + template("gdn_mixer.metal")
 
 
 def gdn_macros(dk: int, dv: int, *, conv_width: int, t: int, slice_cols: int = 8, slices_per_block: int = 4,

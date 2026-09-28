@@ -821,7 +821,7 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
         kp = ctx.kernel("gdn", kernels.gdn_source(), "gdn_prepare", macros)
         ctx.add(kp, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (4, *ctx.windows[conv_w.name]),
                      (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (8, prep, 0), (9, prm, 0), (15, st, 0)],
-                (ctx.t * hv, 1, 1), (32, 1, 1), "gdn_prepare", writes=[8])
+                (3 * ctx.t * hv, 1, 1), (32, 1, 1), "gdn_prepare", writes=[8])
         prep_binding = [(8, prep, 0)]
     # the commit pass writes only the states: its output value is a placeholder (lower_round gives it a 4-byte one)
     ctx.add(kmix, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (3, *ctx.buf(rs)), (4, *ctx.windows[conv_w.name]),
@@ -838,13 +838,16 @@ def _gdn_norm(ctx: _Ctx, op: Op) -> None:
     attrs = dict(a, k_heads=1, dk=32, conv_width=2)                  # the norm kernel only needs DV (and the shared macros)
     core = op.inputs[0].producer
     macros = _gdn_macros(ctx, core.attrs if core is not None else attrs, False)
+    fused = _fused_permute(ctx, out)
+    if fused:
+        macros = dict(macros, **fused[1])
     knorm = ctx.kernel("gdn", kernels.gdn_source(), "gdn_norm", macros)
     prm = ctx.params("gdn_norm", kernels.gdn_params(
         hv=hv, hk=1, t_active=ctx.t, q_off=0, k_off=0, v_off=0, z_off=0, a_off=0, b_off=0, in_stride=ctx.shape(z)[1], ab_stride=ctx.shape(z)[1],
         ab_separate=False, out_stride=hv * dv, n_sg=ctx.n_sg, key_dim=0, eps=float(a["eps"])))
     st = ctx.program.step_state
-    ctx.add(knorm, [(0, *ctx.buf(o_part)), (1, *ctx.buf(z)), (2, *ctx.windows[norm_w.name]), (3, *ctx.buf(out)), (4, prm, 0), (15, st, 0)],
-            (ctx.t * hv, 1, 1), (32, 1, 1), op.kind, writes=[3])
+    ctx.add(knorm, [(0, *ctx.buf(o_part)), (1, *ctx.buf(z)), (2, *ctx.windows[norm_w.name]), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
+            (ctx.t * hv, 1, 1), (32, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
 
 
 def _argmax(ctx: _Ctx, op: Op) -> None:
