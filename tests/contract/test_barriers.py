@@ -157,13 +157,14 @@ def test_attention_kernel_follows_the_profile(tmp_path):
 
 
 @pytest.mark.parametrize("d", [128, 256])
-def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d):
+@pytest.mark.parametrize("kv", [4, 8])
+def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d, kv):
     from test_nn_lowering import CFG
     from monolith import kernels
     import struct
 
     monkeypatch.setitem(CFG["text_config"], "head_dim", d)
-    monkeypatch.setitem(CFG["text_config"], "num_key_value_heads", 8)
+    monkeypatch.setitem(CFG["text_config"], "num_key_value_heads", kv)
     _checkpoint(tmp_path)
     m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=8192)
     pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
@@ -174,11 +175,15 @@ def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d):
     assert "gqa_decode_mma" not in [k.function for k in one.kernels.values()]
     prog = compile_program(m, pf, profile, t=4)
     core = next(o for o in prog.ops if prog.kernels[o.kernel].function == "gqa_decode_mma")
-    assert core.threadgroup == (256, 1, 1)
+    adaptive = d == 128 and kv == 4
+    assert core.threadgroup == (128 if adaptive else 256, 1, 1)
+    assert (prog.kernels[core.kernel].macros.get("ADAPTIVE_CHUNK") == "1") == adaptive
+    merge = next(o for o in prog.ops if prog.kernels[o.kernel].function == "gqa_merge")
+    assert (prog.kernels[merge.kernel].macros.get("ADAPTIVE_CHUNK") == "1") == adaptive
     assert prog.kernels[core.kernel].language_version == kernels.MSL_TENSOR_OPS
     bindings = {i: b for i, b, _ in core.bindings}
     params = struct.unpack("<IIIIIIIIIIIIffIIIIII", prog.buffers[bindings[9]].init)
     chunks, rows = params[15:17]
-    assert chunks == 8192 // (32 if d == 256 else 64)
-    assert prog.buffers[bindings[7]].nbytes >= 8 * chunks * rows * d * 4
-    assert prog.buffers[bindings[8]].nbytes >= 8 * chunks * rows * 2 * 4
+    assert chunks == 8192 // (32 if d == 256 or adaptive else 64)
+    assert prog.buffers[bindings[7]].nbytes >= kv * chunks * rows * d * 4
+    assert prog.buffers[bindings[8]].nbytes >= kv * chunks * rows * 2 * 4

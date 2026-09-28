@@ -429,7 +429,8 @@ def gqa_source(v2: bool = False, steal: bool = False, v3: bool = False, mma: boo
     ``mma`` uses MSL 4 tensor operations and the v1 merge; compile with MSL_TENSOR_OPS."""
     src = PRELUDE + PERM_OUT_MSL + template("gqa_common.metal") + "\n"
     if mma:
-        return src + template("gqa_decode.metal") + "\n" + template("gqa_decode_mma.metal")
+        return (src + template("gqa_decode.metal") + "\n#if ADAPTIVE_CHUNK\n" + template("gqa_decode_mma_adaptive.metal") +
+                "\n#else\n" + template("gqa_decode_mma.metal") + "\n#endif\n")
     if steal:
         src += template("common/steal.metal") + "\n"                                   # the claim protocol (#44), v1 only
     return src + template("gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))

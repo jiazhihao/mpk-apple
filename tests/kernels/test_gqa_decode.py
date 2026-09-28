@@ -27,9 +27,10 @@ def dev():
 
 
 class Cfg:
-    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0):
+    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0, adaptive=False):
         self.heads, self.kv, self.d, self.rot, self.ctx_max, self.t_max = heads, kv, d, rot, ctx_max, t_max
         self.mma, self.step_state, self.lm_mode = mma, step_state, lm_mode
+        self.adaptive = adaptive
         self.v2, self.n_tg, self.steal = v2, n_tg, steal                # v2: the partial granularity is 32 keys (the numpy model's chunk)
         self.v3, self.nsg3 = v3, nsg3 or kernels.gqa_v3_simdgroups(d)   # v3: one dispatch, a threadgroup of nsg3 SIMD-groups per query row
         if v2 or (mma and d == 256):
@@ -42,6 +43,8 @@ class Cfg:
         self.n1 = hd + 2 * kd + (hd if gate else 0)
         self.rows_max = self.rep * t_max
         self.n_chunks_max = kernels.gqa_chunks_max(ctx_max, kv, chunk, 12 * dev.info().gpu_cores) if False else kernels.gqa_chunks_max(ctx_max, kv, chunk)
+        if adaptive:
+            self.n_chunks_max = -(-ctx_max // 32)
         self.scaling = d ** -0.5
 
 
@@ -52,6 +55,8 @@ class Harness:
         self.dev, self.cfg = dev, cfg
         if cfg.mma:
             macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(cfg.d, cfg.rep)))
+            if cfg.adaptive:
+                macros["ADAPTIVE_CHUNK"] = "1"
             source = kernels.gqa_source(mma=True)
             if cfg.step_state:
                 from monolith.core import StepStateLayout
@@ -539,3 +544,29 @@ def test_mma_step_state_and_strided_grid(dev, mode, heads):
 @pytest.mark.parametrize("ctx", [256, 4096])
 def test_mma_wide_heads(dev, ctx):
     test_v3_matches_kernel_contract(dev, Cfg(8, 2, 256, 64, ctx, 8, gate=True, mma=True))
+
+
+@pytest.mark.parametrize("position", [0, 60, 128, 248, 249, 256, 1024])
+@pytest.mark.parametrize("t", [1, 4, 8])
+def test_adaptive_mma_matches_fixed_chunk_and_cache(dev, position, t):
+    """Cross chunk and branch boundaries with live prefixes, inactive rows, and a crew that reuses scratch."""
+    rng = np.random.default_rng(211 + position + t)
+    qn, kn = _norms(rng, 128)
+    chunk = 32 if position + t <= 256 else 64
+    gate = t != 4
+    fixed = Harness(dev, Cfg(4, 2, 128, 64, 1152, 8, chunk=chunk, gate=gate, mma=True), qn, kn)
+    cfg = Cfg(4, 2, 128, 64, 1152, 8, gate=gate, mma=True, adaptive=True, step_state=True)
+    adaptive = Harness(dev, cfg, qn, kn)
+    caches = [rbf(rng.standard_normal((cfg.ctx_max, cfg.kv, cfg.d)).astype(np.float32) * .1) for _ in range(2)]
+    fixed.set_caches(*caches)
+    adaptive.set_caches(*caches)
+    proj = _random_proj(rng, cfg, 8)
+    expected = fixed.step(proj, position, t_active=t, dispatch_sg=3)
+    got = adaptive.step(proj, position, t_active=t, dispatch_sg=3)
+    assert np.array_equal(got, expected)
+    assert np.all(got[t:] == 0)
+    assert all(np.array_equal(a, b) for a, b in zip(fixed.caches(), adaptive.caches()))
+    before = adaptive.caches()
+    for state in [dict(position=position, t_this_step=t, done=1), dict(position=position, t_this_step=0)]:
+        assert np.all(adaptive.step(proj, position, dispatch_sg=3, state=state) == 0)
+        assert all(np.array_equal(a, b) for a, b in zip(before, adaptive.caches()))

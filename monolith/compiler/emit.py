@@ -622,6 +622,10 @@ def _gqa_mma_chunk(d: int) -> int:
     return 32 if d == 256 else 64
 
 
+def _gqa_mma_adaptive(a: Dict[str, Any], t: int) -> bool:
+    return a["head_dim"] == 128 and a["heads"] // a["kv_heads"] == 2 and t == 4 and not a.get("lm_mode", 0)
+
+
 def _gqa(ctx: _Ctx, op: Op) -> None:
     """The attention core: partials per (kv head, chunk, row) into the op's two output values (a shared workspace
     across the layers; the barrier pass orders its reuse)."""
@@ -639,12 +643,15 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     if kind == "mma":
         n_sg, chunk = ctx.cores * 4, _gqa_mma_chunk(d)
         macros = dict(macros, FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(d, heads // kv)), CH=str(chunk))
+        if _gqa_mma_adaptive(a, ctx.rows_of(op)[0]):
+            macros["ADAPTIVE_CHUNK"] = "1"
     kd = ctx.kernel("gqa", _gqa_src(ctx, v2, mma=kind == "mma"), "gqa_decode_mma" if kind == "mma" else "gqa_decode_v2" if v2 else "gqa_decode", macros,
                     kernels.MSL_TENSOR_OPS if kind == "mma" else 0)
     rep = heads // kv
     t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
     rows_max = rep * t_c
-    n_chunks_max = _gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, chunk, n_sg, fixed=kind == "mma")   # the merge derives the same count
+    capacity_chunk = 32 if macros.get("ADAPTIVE_CHUNK") == "1" else chunk
+    n_chunks_max = _gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, capacity_chunk, n_sg, fixed=kind == "mma")   # the merge derives the same count
     prm = ctx.params("gqa", kernels.gqa_params(
         heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
         v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
@@ -696,11 +703,14 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     if kind == "mma":
         n_sg, chunk = ctx.cores * 4, _gqa_mma_chunk(d)
         macros = dict(macros, FIXED_CHUNK="1", CH=str(chunk))
+        if _gqa_mma_adaptive(a, ctx.rows_of(op)[0]):
+            macros["ADAPTIVE_CHUNK"] = "1"
     fused = _fused_permute(ctx, out)                              # o_proj's tile reads the merge's output: written in its order
     if fused:
         macros = dict(macros, **fused[1])
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros)
-    n_chunks_max = (_gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, chunk, n_sg, fixed=kind == "mma") if core is not None
+    capacity_chunk = 32 if macros.get("ADAPTIVE_CHUNK") == "1" else chunk
+    n_chunks_max = (_gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, capacity_chunk, n_sg, fixed=kind == "mma") if core is not None
                     else ctx.shape(part_o)[1] // (kv * rep * d))
     t_c, _ = ctx.rows_of(op)
     prm = ctx.params("gqa_merge", kernels.gqa_params(
@@ -830,12 +840,12 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
         kp = ctx.kernel("gdn", kernels.gdn_source(), "gdn_prepare", macros)
         ctx.add(kp, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (4, *ctx.windows[conv_w.name]),
                      (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (8, prep, 0), (9, prm, 0), (15, st, 0)],
-                (3 * ctx.t * hv, 1, 1), (32, 1, 1), "gdn_prepare", writes=[8])
+                (3 * ctx.t * hv, 1, 1), (32, 1, 1), "gdn_prepare", writes=[2, 8])
         prep_binding = [(8, prep, 0)]
     # the commit pass writes only the states: its output value is a placeholder (lower_round gives it a 4-byte one)
     ctx.add(kmix, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (3, *ctx.buf(rs)), (4, *ctx.windows[conv_w.name]),
                    (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, *ctx.buf(o_part)), (9, prm, 0), (15, st, 0)] + prep_binding,
-            grid, tg, op.kind, writes=[2, 3] if commit else [2, 3, 7])
+            grid, tg, op.kind, writes=[2, 3] if commit else ([3, 7] if prepared else [2, 3, 7]))
 
 
 def _gdn_norm(ctx: _Ctx, op: Op) -> None:

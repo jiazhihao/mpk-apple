@@ -300,3 +300,68 @@ at a time, matching MLX's smaller allocation but adding barriers. It regressed
 T=1 by about 1 µs and T=4 short-context by about 4 µs. Transposing the full buffer
 also regressed. Neither change is retained: smaller allocation alone is not a
 latency result.
+
+
+## Four-token attention and GDN convolution-state ownership
+
+For D=128, two query heads per KV head and compiled T=4, matrix attention now
+uses eight query rows. It processes 32 keys per tile up to 256 active context
+positions, then 64. Core and merge select the same chunk size; workspace capacity
+covers the smaller chunks. Separate query and score arrays remove their reuse
+barrier, and the final scratch barrier runs only when a threadgroup has another
+block. Other geometries and compiled token counts retain the previous path.
+
+Seven alternating pairs, 32 steps each, against ac19b06:
+
+| T | Context | Before µs/layer | After µs/layer |
+|---:|---:|---:|---:|
+| 4 | 32 | 78.38 | 74.89 |
+| 4 | 128 | 81.45 | 76.68 |
+| 4 | 252 | 82.46 | 77.51 |
+| 4 | 512 | 85.28 | 84.64 |
+| 4 | 1024 | 103.68 | 102.61 |
+
+This trades more native code/scratch for less padded matrix work: the exact
+exported core retains 72 registers, changes main code 8,418 → 17,128 bytes,
+scratch 112 → 208 bytes and threadgroup storage 22,528 → 21,504 bytes.
+These metadata fields do not establish spills, occupancy or instruction counts.
+Earlier mixed 8/16-query variants and extending selection to T=6/8 had regressions
+and were rejected. Metal validation passed 71 attention and compiler contract
+tests, including runtime lengths, context boundaries, gates, inactive rows,
+cache contents and persistent-group scratch reuse. Matching fixed-chunk kernels
+produce byte-identical outputs.
+
+Prepared GDN's final-token preparation groups now copy the final convolution
+window into the opposite state slot. Query/key writes have one owner per key
+head; value writes have one per value head. The recurrence no longer carries
+those address calculations. The emitter declares the preparation's state writes,
+so existing producer/consumer barriers cover the transfer. Single-slot and commit
+paths keep their previous ownership.
+
+The exact native recurrence drops from 69 to 60 registers and 5,886 to 1,848
+main-code bytes, with zero scratch. Preparation rises from 47 to 48 registers
+and 8,762 to 10,298 bytes, also without scratch. Seven alternating pairs across
+18 distinct GDN layers improve T=4 201.11 → 198.97 µs, T=6 202.74 → 201.43 µs,
+and T=8 204.70 → 202.79 µs. Every pair wins; all layer outputs, convolution
+state and recurrent state are byte-identical. Forty kernel/contract/real-model
+rollback tests passed with Metal validation; the new write-ownership contract
+also passes. A run overlapping unrelated native compilation was discarded;
+the committed timing samples come from the clean repeat.
+
+Fresh paired MLX checks still fail the overall target:
+
+| Layer kind | T | Context | MPK µs/layer | MLX µs/layer |
+|---|---:|---:|---:|---:|
+| INT4 attention | 4 | 128 | 76.10 | 71.67 |
+| INT4 attention | 4 | 1024 | 101.29 | 95.14 |
+| BF16 GDN | 4 | 128 | 198.66 | 182.98 |
+| BF16 GDN | 6 | 128 | 200.99 | 183.15 |
+| BF16 GDN | 8 | 128 | 203.59 | 188.38 |
+
+These use seven repetitions of 48 steps and the same seeded BF16 inputs and
+prefix. Minimum same-input per-layer cosine exceeds 0.99994. As elsewhere,
+streaming stack means do not prove every individual layer wins; #113 and the
+independently observed session-reuse correctness issue #123 remain open.
+Raw samples and native metadata are the `adaptive_attention`, `gdn_conv_store`,
+`fixed_adaptive_attention`, `fixed_gdn_conv_store`, and `adaptive_and_conv_native`
+20260928 result files.

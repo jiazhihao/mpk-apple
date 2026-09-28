@@ -210,6 +210,13 @@ def test_accelerator_plan_in_the_round_program(pair):
     assert [o.meta.get("t_variant") for o in only] == [8] and only[0].meta["t_range"] == [0, 8] and only[0].meta["accelerator"]
     assert cost_prog.kernels[only[0].kernel].macros["T_LO"] == "0"
     prog = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="threshold", verify_threshold=0.5)
+    # Preparation now writes the opposite convolution slot; recurrence and rollback must
+    # bind that same state and observe the preparation dispatch's writes.
+    prepare = next(o for o in prog.ops if o.name == "gdn_prepare")
+    mixer = next(o for o in prog.ops if o.name == "gdn_mixer")
+    commit = next(o for o in prog.ops if o.name == "gdn_commit")
+    assert 2 in prepare.meta["writes"] and 2 not in mixer.meta["writes"] and 2 in commit.meta["writes"]
+    assert prepare.bindings[2] == mixer.bindings[2] == commit.bindings[2] and mixer.barrier_before
     gate_up = [o for o in prog.ops if o.name == "gemv:layers.1.mlp.gate_up.gate_proj+up_proj"]
     assert [o.meta.get("t_variant") for o in gate_up] == [1, 8] and [o.meta["t_range"] for o in gate_up] == [[0, 1], [1, 8]]
     shader, tile = gate_up

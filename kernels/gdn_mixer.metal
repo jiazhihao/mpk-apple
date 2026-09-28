@@ -138,7 +138,7 @@ static inline float conv_at(device const ushort* proj, uint stride, device const
 // Compute the convolution and normalization once per (token, value head),
 // rather than once per state-column block. The recurrence keeps the same FP32 order.
 kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
-                        device const ushort* conv_state [[buffer(2)]], device const ushort* conv_w [[buffer(4)]],
+                        device ushort* conv_state [[buffer(2)]], device const ushort* conv_w [[buffer(4)]],
                         device const float* neg_exp_a_log [[buffer(5)]], device const float* dt_bias [[buffer(6)]],
                         device float* prepared [[buffer(8)]], constant GdnParams& p [[buffer(9)]],
 #if STEP_STATE
@@ -155,6 +155,7 @@ kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const us
   const uint t = group / p.hv, h = group % p.hv, kh = h / (p.hv / p.hk);
   if (t >= T) return;
 #if SLOTS == 2u
+  device ushort* conv_dst = conv_state + ((st->step & 1u) ^ 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
   conv_state += (st->step & 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
 #endif
   device const ushort* pq = proj + p.q_off;
@@ -183,6 +184,16 @@ kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const us
     dst[2u * DK + DV] = round_bf16(1.0f / (1.0f + exp(-b)));
     dst[2u * DK + DV + 1u] = exp(neg_exp_a_log[h] * softplus_f(a + dt_bias[h]));
   }
+#if SLOTS == 2u
+  // The last token's preparation owns the final window. Readers use the other
+  // slot, so q/k/v groups can write independently without a cross-group race.
+  // Keeping these address calculations out of the recurrence reduces its live registers.
+  if (t + 1u == T && (kind == 2u || h % (p.hv / p.hk) == 0u)) {
+    const uint base = kind < 2u ? kind * p.key_dim + kh * DK : 2u * p.key_dim + h * DV;
+    for (uint i = 0; i < (kind < 2u ? KR : VR); i++)
+      conv_state_update(pq, p.in_stride, conv_state, conv_dst, base + lane + 32u * i, T);
+  }
+#endif
 }
 
 kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
@@ -321,6 +332,7 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
     }
     // the new conv state: the last CW-1 inputs of the step (q/k channels once per key head, v channels per head),
     // written by the head's first slice group
+#if !PREPARED || SLOTS != 2u
     if (grp == 0u) {
       if (h % rep == 0u) {
         for (uint i = 0; i < KR; i++) {
@@ -330,6 +342,7 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
       }
       for (uint i = 0; i < VR; i++) conv_state_update(pq, p.in_stride, conv_in, conv_out, 2u * p.key_dim + h * DV + lane + 32u * i, T);
     }
+#endif
   }
 }
 
