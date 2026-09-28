@@ -7,7 +7,8 @@ from tests.kernels.test_gemm_tile import Gemm, dev
 
 
 @pytest.mark.parametrize('fmt,function,tokens', [
-    ('nvfp4', 'gemv_nvfp4_rows', 1), ('nvfp4', 'gemm_tile', 4), ('bf16', 'gemm_tile', 6),
+    ('nvfp4', 'gemv_nvfp4_rows', 1), ('nvfp4', 'gemm_tile', 4),
+    ('bf16', 'gemv_bf16_rows', 1), ('bf16', 'gemm_tile', 6),
 ])
 @pytest.mark.parametrize('scale', [1., .375, -1.])
 @pytest.mark.parametrize('epilogue', [None, 'residual', 'silu_mul'])

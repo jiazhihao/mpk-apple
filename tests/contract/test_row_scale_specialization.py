@@ -90,5 +90,10 @@ def test_nvfp4_fixed_and_dynamic_statistic_layouts(tmp_path):
             assert macros['TK'] == '128u'
             assert p.buffers['stat'].nbytes == 4 * 6 * 4
         perm = next(op for op in p.ops if op.name.startswith('x_permute:'))
-        assert perm.threadgroup == (128, 1, 1)
-        assert p.kernels[perm.kernel].macros['PERM_GROUPS'] == '4u'
+        groups, simdgroups = (4, 16) if dynamic else (1, 64) if tokens == 1 else (2, 128)
+        assert perm.threadgroup == (32 * groups, 1, 1)
+        assert perm.grid == (8 * simdgroups // groups, 1, 1)
+        pm = p.kernels[perm.kernel].macros
+        assert pm['PERM_GROUPS'] == f'{groups}u'
+        assert pm['PERM_SG'] == f'{simdgroups}u'
+        assert pm['PERM_UNROLL'] == ('4u' if dynamic else '1u')

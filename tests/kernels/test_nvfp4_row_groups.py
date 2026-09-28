@@ -32,8 +32,10 @@ def test_one_row_groups_and_statistic_layout(dev, placement, epilogue, row_range
 
 @pytest.mark.parametrize('parts', [1, 65, 517])
 @pytest.mark.parametrize('active,done', [(0, 0), (1, 0), (3, 0), (4, 0), (7, 0), (4, 1)])
-def test_shared_permute_norm_preserves_runtime_rows(dev, parts, active, done):
-    g = Gemm(dev, 'nvfp4', 96, 4096, 8, placement='block')
+@pytest.mark.parametrize('k', [4096, 12288])
+@pytest.mark.parametrize('groups,simdgroups,unroll', [(4, 16, 4), (1, 64, 1), (2, 128, 1)])
+def test_shared_permute_norm_preserves_runtime_rows(dev, parts, active, done, k, groups, simdgroups, unroll):
+    g = Gemm(dev, 'nvfp4', 96, k, 8, placement='block')
     rng = np.random.default_rng(61)
     x = f32_to_bf16(rng.normal(0, .1, (8, g.k)).astype(np.float32))
     norm = (rng.uniform(.01, 2, (8, parts)).astype(np.float32), parts,
@@ -41,6 +43,6 @@ def test_shared_permute_norm_preserves_runtime_rows(dev, parts, active, done):
     state = (StepStateLayout(t_max=8, gamma_max=7), {'t_this_step': active, 'done': done})
     kwargs = dict(norm=norm, step_state=state, ksplit=4, out_bf16=True)
     old, _ = g.run(x, **kwargs)
-    shared, _ = g.run(x, perm_groups=4, **kwargs)
+    shared, _ = g.run(x, perm_groups=groups, perm_simdgroups=simdgroups, perm_unroll=unroll, **kwargs)
     np.testing.assert_array_equal(shared, old)
     assert not np.any(shared[0 if done else active:])

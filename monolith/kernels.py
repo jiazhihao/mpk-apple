@@ -80,6 +80,8 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
              "SCALE_PLACEMENT": "1", "SCALE_RUN": f"{s}u", "SCALE_UNIT_BYTES": f"{unit_bytes}u",
              "SCALE_LANE_DIVISOR": f"{info.scale_lane_divisor}u",
              "SCALE_REGION_WORDS": f"{info.scale_region_bytes // 16}u"}
+        if info.scale_order == "payload":
+            g["SCALE_PAYLOAD_ORDER"] = "1"
     else:
         g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": str(p // 16), "SCALE_UOFF": str((p % 16) // 4),
              "SCALE_WORDS": str(-(-(p + s) // 16) - p // 16 if s else 0)}
@@ -340,17 +342,24 @@ def x_permute_params(k: int, t_active: int, tm: int, wpw: int, tk: int = GEMM_TK
     return struct.pack("<IIIIIIfI", k, t_active, tm, wpw, tk, stat_parts, eps, 0)
 
 
-def x_permute_macros(norm: bool = False, *, groups: int = 1) -> Dict[str, str]:
-    if groups not in (1, 2, 4, 8, 16):
-        raise ValueError("x_permute groups must divide the 16 SIMD-groups per row")
-    return {"PERM_NORM": "1" if norm else "0", "PERM_SG": f"{GEMM_PERM_SG}u", "PERM_GROUPS": f"{groups}u"}
+def _check_permute_geometry(groups: int, simdgroups: int) -> None:
+    if simdgroups not in (16, 32, 64, 128, 256) or groups not in (1, 2, 4, 8, 16) or simdgroups % groups:
+        raise ValueError("x_permute needs 16–256 power-of-two SIMD-groups per row and 1–16 per threadgroup")
 
 
-def x_permute_grid(tm: int, *, groups: int = 1) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
+def x_permute_macros(norm: bool = False, *, groups: int = 1, simdgroups: int = GEMM_PERM_SG,
+                     unroll: int = 4) -> Dict[str, str]:
+    _check_permute_geometry(groups, simdgroups)
+    if unroll not in (1, 2, 4):
+        raise ValueError("x_permute gather unroll must be 1, 2 or 4")
+    return {"PERM_NORM": "1" if norm else "0", "PERM_SG": f"{simdgroups}u",
+            "PERM_GROUPS": f"{groups}u", "PERM_UNROLL": f"{unroll}u"}
+
+
+def x_permute_grid(tm: int, *, groups: int = 1, simdgroups: int = GEMM_PERM_SG) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
     """Pack ``groups`` SIMD-groups of the same token row into each threadgroup."""
-    if groups not in (1, 2, 4, 8, 16):
-        raise ValueError("x_permute groups must divide the 16 SIMD-groups per row")
-    return (tm * GEMM_PERM_SG // groups, 1, 1), (32 * groups, 1, 1)
+    _check_permute_geometry(groups, simdgroups)
+    return (tm * simdgroups // groups, 1, 1), (32 * groups, 1, 1)
 
 
 def x_permute_columns(k: int, wpw: int, tk: int = GEMM_TK) -> "np.ndarray":

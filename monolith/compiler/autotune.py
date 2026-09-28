@@ -34,6 +34,8 @@ def gemv_key(info: PackInfo, t: int, epilogue: Optional[str], norm_fed: bool, st
     key = f"gemv|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|T{t}|{epilogue or 'plain'}|{'norm' if norm_fed else 'raw'}"
     if info.scale_lane_divisor != 1:
         key += f"|shared-scales{info.scale_lane_divisor}"
+    if info.scale_order != "lane":
+        key += f"|scale-order-{info.scale_order}"
     if norm_fed and stat_parts != 64:
         key += f"|P{stat_parts}"                                     # the producer's partial count: the fused norm folds it per SIMD-group
     return key
@@ -99,7 +101,8 @@ class Autotuner:
         rng = np.random.default_rng(0)
         spec = random_spec(info.format, info.n, info.k, rng)
         data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order,
-                                                          scale_placement=info.scale_placement, share_scales=info.scale_lane_divisor > 1))
+                                                          scale_placement=info.scale_placement, share_scales=info.scale_lane_divisor > 1,
+                                                          scale_order=info.scale_order))
         copies = max(1, int((256 << 20) // max(len(data), 1)))           # ≥ 256 MB streamed per timing
         wbuf = nt.Buffer(self.dev, len(data) * copies)
         for c in range(copies):
@@ -179,6 +182,8 @@ class Autotuner:
         key = f"gemm3|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|TM{tm}|{epilogue or 'plain'}"
         if info.scale_lane_divisor != 1:
             key += f"|shared-scales{info.scale_lane_divisor}"
+        if info.scale_order != "lane":
+            key += f"|scale-order-{info.scale_order}"
         tile = kernels.gemm_macros(info, tm=tm)
         key += f"|tile{tile['TN']}x{tile['TK']}"
         if tile.get("COMPACT_PARTIALS") == "1":
@@ -192,7 +197,8 @@ class Autotuner:
         rng = np.random.default_rng(0)
         spec = random_spec(info.format, info.n, info.k, rng)
         data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=info.rows, lane_order=info.lane_order,
-                                                          scale_placement=info.scale_placement, share_scales=info.scale_lane_divisor > 1))
+                                                          scale_placement=info.scale_placement, share_scales=info.scale_lane_divisor > 1,
+                                                          scale_order=info.scale_order))
         copies = max(1, int((256 << 20) // max(len(data), 1)))
         wbuf = nt.Buffer(self.dev, len(data) * copies)
         for c in range(copies):

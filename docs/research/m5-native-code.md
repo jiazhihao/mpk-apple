@@ -1263,3 +1263,111 @@ under Metal shader validation. This includes per-layer oracles, greedy goldens,
 sampling reproducibility and rollback. The existing #123 long-prompt exclusion
 is unchanged. The combined row-group suite passes 263 checks after the scratch-key
 fix, with three existing skips; the ten scale/compiler contracts also pass.
+
+
+## Remaining streaming gaps: normalization dispatches
+
+[M] Extending the constant-row-scale specialization to the two-row BF16
+single-token projection preserves all captured output bytes. Nine alternating
+pairs improve the mixed 24-layer stack from 165.41→165.04 µs at context 128 and
+168.78→168.02 µs at context 1024. A fresh independent MLX comparison measures
+164.73/167.27 and 167.97/169.61 µs respectively (Monolith/MLX); both numerical
+gates pass, and Monolith wins every pair. All 36 loaded/constant-scale kernel
+cases pass under Metal shader validation, including the new BF16 row path.
+
+The remaining NVFP4 experiments keep the same fixed token counts and checkpoint
+weights. A prototype scale region in physical payload order preserves bytes and
+saves about 1.7 µs at T=1/4. Independent MLX numerical checks pass, but T=1 still
+loses 393.05/391.57 and 411.08/409.52 µs at short/long context; T=4 short is
+433.82/433.54 µs. This is an explicitly experimental, version-99 pack, rejected
+by the normal reader; its wrapper implements only the measured row/matrix paths.
+It is **not** a supported pack format or a production result.
+
+Pairing gate/up rows within a SIMD-group removes their shared-memory barrier
+but regresses 395.11→395.80–400.08 µs despite byte-identical outputs. Direct FP16
+sign-bit construction in the FP4 decoder is also exact but regresses
+395.74→433.79 µs; changing only the FP8 scale sign is neutral. These source-level
+simplifications are rejected rather than assumed to reduce native work.
+
+The more useful lever is the small input-normalization dispatch. Increasing its
+SIMD-groups per token from 16 to 64 and reducing gather unrolling from four to
+one improves T=1 by ~2.8 µs with byte-identical outputs. At T=4, 64 groups measure
+433.87→430.21 µs and 128 groups in pairs measure 429.70 µs. The output layout
+and reduction order remain unchanged. Four-key attention batches separately
+save ~1.4 µs at long context but almost nothing at short context; eight-key
+batches add no useful gain, while sixteen-key batches regress. Attention batch
+changes remain candidates pending independent numerical/model validation.
+
+Raw samples: `bf16_t1_uniform_ab`, `bf16_uniform_t1_mlx`,
+`nvfp4_payload_scales_ab`, `nvfp4_payload_scales_matrix_ab`, `payload_scales_mlx`,
+`nvfp4_gate_paired_ab`, `nvfp4_signbits_ab`, `nvfp4_permute_width_ab`,
+`nvfp4_permute_groups_ab`, `nvfp4_permute_t4_ab`, and `nvfp4_attention_batch_ab`
+under `tools/bench/results/apple-m5-pro-20c_*_20260928.jsonl`.
+
+
+### Supported scale layout and ordinary-reader gate
+
+The accepted layout is now opt-in through `--scale-placement block --scale-order
+payload`, with manifest version 3, explicit reader guards, complete CPU unpacking,
+and readers for the row, matrix, legacy GEMV and embedding paths. Other formats,
+ragged/sub-word stripes and inline scales retain lane order. Old manifests remain
+readable. Autotuning keys and synthetic packs include scale order. The whole
+checkpoint was rebuilt with the normal packer, with unchanged codes/scale values.
+
+The selected normalization geometry is 64 SIMD-groups per row in single-group
+threadgroups at fixed T=1, and 128 in pairs at fixed T=4; gathers use unroll one.
+Dynamic programs retain their previous policy. The producer/consumer scratch key
+is unchanged because the output layout does not change. All 180 expanded
+normalization/scale/compiler/barrier checks pass under shader validation;
+58 packing/reader checks and 60 initial scale-layout GPU checks also pass.
+
+Fresh ordinary-reader, ordinary-autotuner comparisons (nine alternating pairs,
+48 fixed steps, 36 distinct checkpoint layers):
+
+| T | Context | Monolith µs/layer | MLX µs/layer |
+|---|---|---:|---:|
+| 1 | 128 | 390.23 | 390.81 |
+| 1 | 1024 | 409.02 | 409.55 |
+| 4 | 128 | 428.10 | 430.41 |
+| 4 | 1024 | 450.77 | 490.36 |
+| 6 | 128 | 433.59 | 649.94 |
+| 6 | 1024 | 472.57 | 727.73 |
+| 8 | 128 | 436.03 | 824.19 |
+| 8 | 1024 | 478.03 | 921.02 |
+
+All eight minima beat MLX; all independent layer numerical checks pass. T=1 is
+still a narrow minimum-time win, not an every-pair or noise-free claim. Raw
+`nvfp4_payload_production_mlx` retains host stalls and every timing pair. No
+attention-batch arithmetic change is selected: the four-key candidate helps long
+context but does not establish a robust short-context gain. The final individual
+sweep and real-model checks are recorded below when complete.
+
+All six selected real-model checks pass under Metal validation, including both
+legacy and payload-order NVFP4 packs, per-layer prefill oracles, greedy token
+goldens, BF16 sampling reproducibility and rejected-step rollback. The existing
+#123 long-prompt exclusion remains unchanged. The expanded contract/tile suite
+passes 227 checks after making the old cached 256-column geometry test explicit
+and separately asserting the measured 128-column default. All three alternate
+matrix-tile payload-reader checks pass, bringing that GPU suite to 63 checks.
+
+
+### Native explanation of the final changes
+
+[M] The fixed T=1 input-normalization kernel shrinks from 2,500 to 1,558 native
+code bytes. Its register field remains 35, local scratch stays zero, and shared
+memory falls 4→0 bytes. The active row now spans 64 independent threadgroups
+instead of four; measured latency improves without a register-count reduction.
+This points to dispatch parallelism and shorter gather code, rather than spills.
+
+Payload-order scales reduce the NVFP4 input projection from 66→61 registers and
+4,166→3,934 native code bytes; gate/up falls 66→61 and 4,778→4,540. Coalesced
+scale addressing both simplifies generated code and improves paired latency.
+The rejected sign-bit rewrite goes in the opposite direction: the original
+input projection grows 66→72 registers and 4,166→5,834 bytes, consistent with
+its measured ~38 µs/layer regression. These are native archive/resource
+observations, not decoded M5 instruction counts or a direct occupancy measure.
+
+BF16 constant scales shrink gate/up from 2,778→2,714 bytes and 41→39 registers.
+The fused convolution projection shrinks 2,718→2,664 bytes while registers rise
+37→39: again, resource counts alone do not determine speed. Every sampled
+specialization reports zero local scratch. Raw evidence: `native_normalization`.

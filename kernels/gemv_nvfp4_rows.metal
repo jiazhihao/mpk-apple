@@ -70,7 +70,11 @@ kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const fl
    uint2 q=reinterpret_cast<device const uint2*>(wb)[64u*rr*UNIT_WORDS+base/16u+lane];
    float wv[32];decode_word(uint4(q.x,q.y,0,0),wv);
 #if SCALE_PLACEMENT
+#if SCALE_PAYLOAD_ORDER
+   const uint off=rr*32u*SCALE_RUN+base/16u+lane;
+#else
    const uint off=(rr*32u+ln)*SCALE_RUN+local_g;
+#endif
    uint sw=reinterpret_cast<device const uint*>(wb+SCALE_BASE)[off/4u];
    const float scale=decode_scale(&sw,off%4u);
 #else

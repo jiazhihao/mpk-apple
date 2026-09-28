@@ -171,9 +171,32 @@ static inline uint4 sub_word(uint4 q, uint lane) {
 #define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
 #define SCALE_SOFF(ln) 0u
 #endif
+// Reconstruct a lane's scale words for the legacy GEMV/gather interfaces.
+// Matrix and row-specialized kernels read coalesced scale pairs directly.
+#if SCALE_PAYLOAD_ORDER
+#undef SCALE_SOFF
+#define SCALE_SOFF(ln) 0u
+static inline uint4 payload_scale_word(device const uint4* wb, uint ln, uint r, uint s) {
+  uint4 result = uint4(0);
+#pragma clang loop unroll(full)
+  for (uint b = 0; b < 16u; b++) {
+    const uint g = s * 16u + b;
+    if (g < SCALE_RUN) {
+      const uint off = r * 32u * SCALE_RUN + (g / 2u) * 64u + ln * 2u + g % 2u;
+      const uint v = reinterpret_cast<device const uchar*>(wb + SCALE_BASE)[off];
+      result[b / 4u] |= v << ((b % 4u) * 8u);
+    }
+  }
+  return result;
+}
+#define LOAD_SCALE_WORD(wb, ln, r, s) payload_scale_word((wb), (ln), (r), (s))
+#else
+#define LOAD_SCALE_WORD(wb, ln, r, s) ((wb)[SCALE_WORD((ln), (r), (s))])
+#endif
+
 // Load a short, uint-aligned scale run directly instead of a uint4 followed
 // by lane-dependent extraction (affine pairs or byte-sized FP4 scales).
-#if SCALE_PLACEMENT && SCALE_RUN <= 8 && ((SCALE_BIAS && SCALE_UNIT_BYTES == 4) || (SCALE_UNIT_BYTES == 1 && SCALE_RUN % 4 == 0))
+#if !SCALE_PAYLOAD_ORDER && SCALE_PLACEMENT && SCALE_RUN <= 8 && ((SCALE_BIAS && SCALE_UNIT_BYTES == 4) || (SCALE_UNIT_BYTES == 1 && SCALE_RUN % 4 == 0))
 #define NARROW_SCALE_RUN 1
 #define SCALE_REG_OFFSET(ln) 0u
 static inline uint narrow_scale_word(device const uint4* wb, uint ln, uint r, uint g) {
@@ -349,7 +372,7 @@ kernel void gemv_T(device const uint4* w [[buffer(0)]], device const float* row_
 #else
       uint scw[RG][SCALE_WORDS * 4];
       for (uint i = 0; i < RG; i++) for (uint s = 0; s < SCALE_WORDS; s++) {
-        uint4 q = wb[SCALE_WORD(lane, r0 + i, s)];
+        uint4 q = LOAD_SCALE_WORD(wb, lane, r0 + i, s);
         scw[i][4 * s] = q.x; scw[i][4 * s + 1] = q.y; scw[i][4 * s + 2] = q.z; scw[i][4 * s + 3] = q.w;
       }
 #endif

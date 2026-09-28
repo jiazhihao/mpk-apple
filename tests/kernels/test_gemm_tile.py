@@ -144,12 +144,13 @@ def _rbf(a):
 class Gemm:
     """One packed matrix and the dispatch plumbing for the tile's variants (mirrors the fused-GEMV harness)."""
 
-    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16", function="gemm_tile", placement="inline"):
+    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16", function="gemm_tile", placement="inline", scale_order="lane"):
         self.dev, self.n, self.k, self.tm, self.fmt = dev, n, k, tm, fmt
         self.function = function
         rng = np.random.default_rng(seed)
         self.spec = random_spec(fmt, n, k, rng)
-        self.data, self.info, self.row_scales = pack_spec(self.spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
+        self.data, self.info, self.row_scales = pack_spec(self.spec, PackLayout(rows=rows, lane_order=lane_order,
+            scale_placement=placement, scale_order=scale_order))
         f = FORMATS.get(fmt)
         rs = self.row_scales.astype(np.float64)[:, None]
         self.w = _rbf((f.dequantize(self.spec) / rs).astype(np.float32)).astype(np.float64) * rs      # the BF16 operand × the tensor scale
@@ -158,7 +159,7 @@ class Gemm:
 
     def run(self, x_bf16, *, t_active=None, norm=None, epilogue=None, residual=None, stat_out=False, out_bf16=None,
             round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None, ksplit=1, conv=None,
-            fixed_active=False, perm_groups=1):
+            fixed_active=False, perm_groups=1, perm_simdgroups=kernels.GEMM_PERM_SG, perm_unroll=4):
         """``norm`` = (stat [T, parts] float32, parts, norm_w [K]); ``row_range`` = (start, count) in slab rows;
         ``step_state`` = (layout, values) with ``t_range`` = (lo, hi) for a predicated variant."""
         t_act = self.tm if t_active is None else t_active
@@ -166,7 +167,8 @@ class Gemm:
             out_bf16 = epilogue is not None
         macros = kernels.gemm_macros(self.info, tm=self.tm, out_bf16=out_bf16, epilogue=epilogue, stat_out=stat_out, round_before_residual=round_residual, ksplit=ksplit)
         tk = int(macros["TK"].rstrip("u"))
-        pmacros = dict(kernels.x_permute_macros(norm is not None, groups=perm_groups))
+        pmacros = dict(kernels.x_permute_macros(norm is not None, groups=perm_groups,
+                                               simdgroups=perm_simdgroups, unroll=perm_unroll))
         src = kernels.gemm_source(self.fmt)
         if step_state is not None:
             layout, values = step_state
@@ -210,7 +212,7 @@ class Gemm:
         parts = norm[1] if norm else 1
         d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(self.dev, x_bf16.tobytes())).buffer(3, xp)
               .bytes(4, kernels.x_permute_params(self.k, t_act, self.tm, self.wpw, tk, parts, EPS))
-              .grid(self.tm * kernels.GEMM_PERM_SG // perm_groups).threadgroup(32 * perm_groups).barrier())
+              .grid(self.tm * perm_simdgroups // perm_groups).threadgroup(32 * perm_groups).barrier())
         if norm:
             d0.buffer(1, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes())).buffer(2, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
         d1 = (nt.Dispatch().pipeline(pso).buffer(0, self.wbuf).buffer(1, self.rsbuf).buffer(2, xp).buffer(3, y)

@@ -349,6 +349,12 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   narrow stripes are stored once in the block region (K = 1024: 64 scale bytes per row instead of 128).
   Payload order and dequantization stay unchanged; the reader accepts version 1 with a divisor of 1.
   `PackLayout.share_scales=False` / `pack_weights.py --no-share-scales` retains the original layout for comparisons.
+  Manifest version 3 additionally supports `scale_order: payload` for aligned, interleaved NVFP4 block scales:
+  `[row][word][lane][two scale bytes]`. The weight codes, scale bytes, row scales and block sizes do not change;
+  adjacent physical weight groups read adjacent scales. Matrix/row kernels read pairs directly, while legacy
+  GEMV and embedding kernels reconstruct a lane's scale words. `pack_weights.py --scale-placement block
+  --scale-order payload` opts in; ineligible slabs retain their existing order. Versions 1 and 2 remain readable,
+  and a payload-order marker in an older manifest is rejected. Autotuning distinguishes the scale layouts.
   Next: MXFP4, GGUF K-quants.
 * **State.** KV cache per attention layer (BF16 in v1; FP8/INT8 later — at long context KV traffic overtakes the
   weights); GDN recurrent state FP32 `[48,128,128]` + conv state, each with `γ+1` checkpoint slots for speculative

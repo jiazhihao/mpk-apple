@@ -25,6 +25,11 @@ The reported microseconds per layer are the directly measured stack latency divi
 by the number of selected layers; they are **not individual-layer measurements**.
 Attention and GDN stacks can be selected independently for hybrid models.
 
+For the measured M5 NVFP4 layout, repack the same checkpoint with
+`tools/pack_weights.py --model <checkpoint> --out <pack> --scale-placement block --scale-order payload`.
+The v3 manifest records the physical scale order; the original codes and dequantized weights are unchanged.
+Existing packs remain readable and retain their recorded layout. Include the pack path and layout in reports.
+
 ```bash
 python tools/bench/layer_fixed_vs_mlx.py \
   --model ~/models/mlx-community-Qwen3-0.6B-4bit --pack /tmp/pack-06b \

@@ -26,8 +26,10 @@ def test_ksplit_macro_follows_the_slab():
     rng = np.random.default_rng(0)
     _, info, _ = pack_spec(random_spec("nvfp4", 64, 4096, rng), PackLayout(rows=16))     # 16 K tiles, 4 words per lane, 4 lane groups
     for s in (2, 4):
-        m = kernels.gemm_macros(info, tm=8, out_bf16=True, epilogue="residual", ksplit=s)
+        m = kernels.gemm_macros(info, tm=8, tn=16, tk=256, out_bf16=True, epilogue="residual", ksplit=s)
         assert m["KSPLIT"] == f"{s}u" and m.get("SCALE_CACHE") == "1"                   # whole lane groups per slice: the cache stays
+    selected = kernels.gemm_macros(info, tm=8, ksplit=4)
+    assert selected['TK'] == '128u' and 'SCALE_CACHE' not in selected               # measured narrow NVFP4 default
     assert "KSPLIT" not in kernels.gemm_macros(info, tm=8, ksplit=1)
     _, info, _ = pack_spec(random_spec("nvfp4", 64, 12288, rng), PackLayout(rows=16))   # 48 K tiles; 2 scale words per lane: no cache
     m = kernels.gemm_macros(info, tm=8, ksplit=4)

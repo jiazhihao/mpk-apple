@@ -85,7 +85,7 @@ kernel void gemv_bf16_rows(device const bfloat4* w [[buffer(0)]], device const f
 #endif
 #pragma clang loop unroll(full)
  for(uint r=0;r<BF_ROWS;r++){
-  acc[r]=simd_sum(acc[r])*row_scale[min(row0+r,p.tile0*TN+p.n_rows-1u)]*p.out_scale;
+  acc[r]=simd_sum(acc[r])*GEMM_ROW_SCALE(min(row0+r,p.tile0*TN+p.n_rows-1u))*p.out_scale;
 #if EPILOGUE == 2
   if(lane==0) vals[r0+r]=acc[r];
 #endif

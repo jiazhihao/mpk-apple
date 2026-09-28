@@ -303,6 +303,13 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
 #pragma clang loop unroll(full)
         for (uint i = 0; i < NW; i++) {
+#if SCALE_PAYLOAD_ORDER
+          const uint off = r * 32u * SCALE_RUN + j * 64u + (ln0 + i) * 2u;
+          uint sw = reinterpret_cast<device const ushort*>(wb + SCALE_BASE)[off / 2u];
+#pragma clang loop unroll(full)
+          for (uint ch = 0; ch < ((CT < WPW) ? 1u : (WPW / 16u)); ch++)
+            scv[i * (WPW / 16u) + ch] = decode_scale(&sw, e0 / 16u + ch);
+#else
 #if NARROW_SCALE_RUN
           uint scw[SCALE_RUN / 4u];
 #pragma clang loop unroll(full)
@@ -344,6 +351,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
             bv[i * (WPW / 16u) + ch] = decode_bias(scw + SCALE_UOFF, SCALE_REG_OFFSET(ln) + g);
 #endif
           }
+#endif // SCALE_PAYLOAD_ORDER
         }
 #endif
 #pragma clang loop unroll(full)
@@ -493,7 +501,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #ifndef PERM_SG
 #define PERM_SG 4u
 #endif
+#ifndef PERM_UNROLL
 #define PERM_UNROLL 4u
+#endif
 #ifndef PERM_FOLD_LOADS
 #define PERM_FOLD_LOADS 16u          // the norm fold's loads requested per round (divides by 4)
 #endif

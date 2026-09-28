@@ -25,6 +25,11 @@ two adjacent 32-column stripes share one 64-column group's BF16/F16 pair: 64 sca
 Manifest version 2 records this divisor; version 1 keeps the original lane-duplicated layout. Payload order and
 dequantization are unchanged. ``PackLayout.share_scales=False`` retains duplicate runs for controlled comparisons.
 
+Manifest version 3 can store aligned NVFP4 block scales with ``scale_order="payload"``:
+``[row][payload word][lane][two scale bytes]``. The permutation changes no values or block sizes. Matrix and row
+kernels load adjacent physical groups' scales together; the legacy GEMV/gather reconstruct lane-local words.
+Request it through PackLayout; unsupported formats, inline scales and ragged/sub-word stripes retain lane order.
+
 Sub-word units (with the block placement, interleaved order): a stripe whose payload is 4 or 8 bytes (K = 256 or
 512 for NVFP4, K = 256 for the byte formats) is not padded to a word — ``lanes_per_word`` lanes share one 16-byte
 word (``[row][lane][P]``: word ``row·32/LPW + lane/LPW``, the lane's part ``lane % LPW``) and its scales, the
@@ -78,8 +83,16 @@ class PackInfo:
     scale_unit_bytes: int = 0 # bytes per block-scale entry as the pack was written (0 = the format's; a pack from an older format layout is refused)
     scale_dtype: str = ""    # the block-scale entries' dtype where a format keeps more than one (int4_affine: "bf16" or "f16" pairs; "" = the format's default)
     scale_lane_divisor: int = 1  # adjacent lanes sharing one stored scale run; older packs store every lane separately
+    scale_order: str = "lane"  # payload order: [row][word][lane][two NVFP4 scale bytes]
 
     def __post_init__(self) -> None:
+        if self.scale_order not in ("lane", "payload"):
+            raise ValueError("scale_order must be 'lane' or 'payload'")
+        if self.scale_order == "payload" and (self.format != "nvfp4" or self.scale_placement != "block"
+                or self.lane_order != "interleaved16" or self.k % 1024 or self.scale_group != 16
+                or self.scale_unit_bytes != 1 or self.scale_lane_divisor != 1
+                or self.scale_bytes != self.k // 512 or self.unit_bytes != self.payload_bytes):
+            raise ValueError("payload scale order requires aligned interleaved NVFP4 block scales")
         d = self.scale_lane_divisor
         if d not in (1, 2, 4, 8, 16, 32):
             raise ValueError("scale_lane_divisor must be a power of two dividing 32")
@@ -136,13 +149,16 @@ class PackInfo:
             return base + (lane * self.rows + row) * self.unit_bytes + word * 16
         return base + ((row * self.words_per_unit + word) * LANES + lane) * 16
 
-    def scale_offset(self, block: int, row: int, lane: int) -> int:
-        """Byte offset of lane-row ``(row, lane)``'s first scale byte (``block`` placement) — the kernels' ``SCALE_WORD``
-        and ``SCALE_SOFF`` arithmetic."""
+    def scale_offset(self, block: int, row: int, lane: int, group: int = 0) -> int:
+        """Byte offset of a lane-local scale group. Payload order interleaves pairs, so a lane's run is not contiguous."""
         if self.scale_placement != "block":
             raise ValueError("scale_offset: inline scales live inside the unit")
+        if self.scale_order == "payload":
+            return (block * self.block_bytes + self.rows * LANES * self.unit_bytes
+                    + row * LANES * self.scale_bytes + (group // 2) * 64 + lane * 2 + group % 2)
         return (block * self.block_bytes + self.rows * LANES * self.unit_bytes +
-                (row * (LANES // self.scale_lane_divisor) + lane // self.scale_lane_divisor) * self.scale_bytes)
+                (row * (LANES // self.scale_lane_divisor) + lane // self.scale_lane_divisor) * self.scale_bytes
+                + group * self.scale_unit_bytes)
 
 
 def _pad16(x: int) -> int:
@@ -199,15 +215,19 @@ def pack_blm(payload: np.ndarray, scales: Optional[np.ndarray], layout: PackLayo
         shared = np.asarray(scales).reshape(n, LANES // divisor, divisor, s_bytes)
         if not np.all(shared == shared[:, :, :1, :]):
             raise ValueError("adjacent lanes disagree on a shared scale group")
+    scale_order = ("payload" if layout.scale_order == "payload" and block_scales and format == "nvfp4"
+                   and layout.lane_order == "interleaved16" and k % 1024 == 0 and unit == p_bytes else "lane")
     info = PackInfo(format, n, k, r, unit, p_bytes, s_bytes, layout.lane_order, n_blocks, float(tensor_scale),
                     scale_group, "block" if block_scales else "inline",
-                    int(getattr(FORMATS.get(format), "scale_unit_bytes", 1)) if s_bytes else 0, scale_dtype if s_bytes else "", divisor)
+                    int(getattr(FORMATS.get(format), "scale_unit_bytes", 1)) if s_bytes else 0, scale_dtype if s_bytes else "", divisor, scale_order)
     payload_region = np.ascontiguousarray(data).reshape(n_blocks, r * LANES * unit)
     if not block_scales:
         return payload_region.tobytes(), info
     stored_lanes = LANES // divisor
     sc = np.zeros((n_blocks * r, stored_lanes, s_bytes), dtype=np.uint8)
     sc[:n] = np.ascontiguousarray(scales[:, ::divisor], dtype=np.uint8)
+    if scale_order == "payload":
+        sc = sc.reshape(n_blocks * r, LANES, s_bytes // 2, 2).transpose(0, 2, 1, 3)
     region = np.zeros((n_blocks, info.scale_region_bytes), dtype=np.uint8)
     region[:, : r * stored_lanes * s_bytes] = sc.reshape(n_blocks, r * stored_lanes * s_bytes)
     out = np.concatenate([payload_region, region], axis=1)                 # [b, block_bytes]
@@ -237,6 +257,8 @@ def unpack_blm(data: bytes, info: PackInfo) -> Tuple[np.ndarray, Optional[np.nda
         s = info.scale_bytes
         stored_lanes = LANES // info.scale_lane_divisor
         region = per_block[:, r * LANES * u: r * LANES * u + r * stored_lanes * s]
+        if info.scale_order == "payload":
+            region = region.reshape(info.n_blocks * r, s // 2, LANES, 2).transpose(0, 2, 1, 3)
         scales = np.ascontiguousarray(np.repeat(region.reshape(info.n_blocks * r, stored_lanes, s)[: info.n],
                                                info.scale_lane_divisor, axis=1))
     elif info.scale_bytes:

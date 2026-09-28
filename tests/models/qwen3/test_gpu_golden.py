@@ -26,8 +26,8 @@ CKPT = "nvidia-Qwen3-8B-NVFP4"
 pytestmark = pytest.mark.skipif(not is_available(), reason="monolith.runtime._native is not built")
 
 
-@pytest.fixture(scope="module")
-def session(tmp_path_factory):
+@pytest.fixture(scope="module", params=["inline", "payload"])
+def session(tmp_path_factory, request):
     ckpt = require_checkpoint(CKPT)
     from monolith.generate import Session
     from monolith.models.qwen3 import Qwen3Model
@@ -35,7 +35,8 @@ def session(tmp_path_factory):
 
     out = tmp_path_factory.mktemp("pack")
     model = Qwen3Model.from_checkpoint(str(ckpt), max_context=256)
-    pack_model(model, str(ckpt), str(out), PackLayout())
+    layout = PackLayout() if request.param == "inline" else PackLayout(scale_placement="block", scale_order="payload")
+    pack_model(model, str(ckpt), str(out), layout)
     return Session(model, str(out), eos=-1)
 
 

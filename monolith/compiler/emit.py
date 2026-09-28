@@ -603,6 +603,11 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         tmac["T_LO"], tmac["T_HI"] = str(lo), str(hi)
     kdim = ctx.shape(x)[1]
     perm_groups = 4 if info.format == "nvfp4" and info.k >= 4096 and hi <= 4 else 1
+    perm_simdgroups, perm_unroll = kernels.GEMM_PERM_SG, 4
+    if info.format == "nvfp4" and info.k >= 4096 and hi in (1, 4) and not ctx.dynamic_t:
+        # Spread the small norm/gather dispatch over more cores. One gather
+        # per iteration avoids register/guard overhead on the shorter slices.
+        perm_groups, perm_simdgroups, perm_unroll = (1, 64, 1) if hi == 1 else (2, 128, 1)
     # the permuted (and normalized) input, shared by the siblings reading the same input at the same T range
     xb = ctx.buf(x)
     key = (xb, stat.name if stat is not None else None, tm, wpw, tk, lo, hi, t_src)
@@ -614,7 +619,8 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         xp = ctx.scratch(f"{y.name}.xp", tm * kdim * 2)
         ctx.perm_scratch[key] = xp
         pk = ctx.kernel(f"x_permute|{info.format}", kernels.gemm_source(info.format), "x_permute",
-                        dict(macros, **kernels.x_permute_macros(stat is not None, groups=perm_groups), **tmac), language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
+                        dict(macros, **kernels.x_permute_macros(stat is not None, groups=perm_groups,
+                             simdgroups=perm_simdgroups, unroll=perm_unroll), **tmac), language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
         eps = float(op.attrs.get("eps", 1e-6))
         parts = ctx.stat_parts.get(stat.name, 1) if stat is not None else 1
         prm = ctx.params("x_permute", kernels.x_permute_params(kdim, hi, tm, wpw, tk, parts, eps))
@@ -623,7 +629,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
             bindings += [(1, *ctx.buf(stat)), (2, *ctx.windows[nw.name])]
         # not a member of the variant group: the barrier pass joins a group's members without a check (they are
         # alternatives), and the tile must wait for this permute — its own identity gives the tile the barrier
-        ctx.add(pk, bindings, *kernels.x_permute_grid(tm, groups=perm_groups), f"x_permute:{y.name}", writes=[3], kind="x_permute", t_variant=hi,
+        ctx.add(pk, bindings, *kernels.x_permute_grid(tm, groups=perm_groups, simdgroups=perm_simdgroups), f"x_permute:{y.name}", writes=[3], kind="x_permute", t_variant=hi,
                 t_range=[lo, hi] if predicated else None, normed=stat is not None)
     choice = ctx.tuner.tune_gemm(info, tm, epilogue) if ctx.tuner is not None else None
     mode = choice.grid_mode if choice else "crew"
@@ -644,7 +650,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         tmac = dict(tmac, **fused[1])
     function = ("gemv_nvfp4_rows" if nvfp4_rows else "gemv_bf16_rows" if bf16_rows else
                 "gemv_bf16_small" if small_bf16 else "gemm_tile")
-    if nvfp4_rows or (function == "gemm_tile" and info.format in ("nvfp4", "bf16")):
+    if nvfp4_rows or bf16_rows or (function == "gemm_tile" and info.format in ("nvfp4", "bf16")):
         scale_bits = ctx.slab_row_scale_bits(w.name)
         if scale_bits is not None:
             tmac["ROW_SCALE_BITS"] = f"{scale_bits}u"

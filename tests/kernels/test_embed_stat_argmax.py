@@ -112,8 +112,9 @@ def test_argmax(dev, vocab):
 
 
 @pytest.mark.parametrize("fmt,K,placement", [("int4_affine", K, "inline"), ("int8", K, "inline"), ("int4_affine", 3584, "inline"),   # 3584: ragged stripes
-                                             ("int4_affine", K, "block"), ("int8", K, "block"), ("nvfp4", 4096, "block"), ("nvfp4", 5120, "block")])
-def test_embed_dequantizes_a_quantized_table(dev, fmt, K, placement):
+                                             ("int4_affine", K, "block"), ("int8", K, "block"), ("nvfp4", 4096, "block"), ("nvfp4", 5120, "block"), ("nvfp4", 12288, "block")])
+@pytest.mark.parametrize("scale_order", ["lane", "payload"])
+def test_embed_dequantizes_a_quantized_table(dev, fmt, K, placement, scale_order):
     """A gather from a quantized packed slab (an MLX 4-bit embedding tied to the head): every row equals the
     format's dequantization rounded to BF16 — with the scales inline or in the block's region (#101)."""
     from monolith.bench import random_spec
@@ -124,7 +125,7 @@ def test_embed_dequantizes_a_quantized_table(dev, fmt, K, placement):
     spec = random_spec(fmt, vocab, K, rng)
     if "weight_scale_2" in spec.params:
         spec.params["weight_scale_2"] = 1.0                                   # a gathered table has no per-tensor scale (MLX's nvfp4 layout)
-    data, info, _ = pack_spec(spec, PackLayout(rows=16, scale_placement=placement))
+    data, info, _ = pack_spec(spec, PackLayout(rows=16, scale_placement=placement, scale_order=scale_order))
     ref = to_bf16(FORMATS.get(fmt).dequantize(spec))
     tokens = np.array([0, 69, 17, 42], dtype=np.int32)
     pso = nt.Pipeline(nt.Library(dev, kernels.embed_source(fmt), kernels.embed_macros(info)), "embed")
@@ -134,4 +135,3 @@ def test_embed_dequantizes_a_quantized_table(dev, fmt, K, placement):
     _run(dev, d)
     out = np.frombuffer(h.read(0, t * K * 2), dtype=np.uint16).reshape(t, K)
     assert np.array_equal(out, ref[tokens])
-
