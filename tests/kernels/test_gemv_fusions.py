@@ -38,7 +38,7 @@ class Gemv:
         self.wbuf, self.rsbuf = nt.Buffer(dev, self.data), nt.Buffer(dev, self.row_scales.tobytes())
         self.n_sg = 12 * dev.info().gpu_cores
 
-    def run(self, x_bf16, *, norm=None, epilogue=None, residual=None, stat_out=False, t_active=None, out_bf16=None, rsplit=1, rg=None):
+    def run(self, x_bf16, *, norm=None, epilogue=None, residual=None, stat_out=False, t_active=None, out_bf16=None, rsplit=1, rg=None, extra_macros=None):
         """``x_bf16`` uint16 [T, K]; ``norm`` = (stat float32 array, parts, norm_w float32 [K]); returns
         ``(y, stat_out)`` with y float32 [T, N] (or [T, N/2] for silu_mul); ``rsplit`` work items per block (the
         statistic then has n_blocks · rsplit partials per token)."""
@@ -46,6 +46,7 @@ class Gemv:
         if out_bf16 is None:
             out_bf16 = epilogue is not None
         macros = kernels.gemv_macros(self.info, t=t, norm=norm is not None, epilogue=epilogue, stat_out=stat_out, out_bf16=out_bf16, rsplit=rsplit, rg=rg)
+        macros.update(extra_macros or {})
         pso = nt.Pipeline(nt.Library(self.dev, kernels.gemv_source(self.fmt), macros), "gemv_T")
         n_out = n // 2 if epilogue == "silu_mul" else n
         y = nt.Buffer(self.dev, t * n_out * 4); y.fill(0)
@@ -209,8 +210,9 @@ def test_autotuner_picks_and_caches(dev, tmp_path):
     g = tuner.tune_gdn(4, 4, 128, 128, 4, 1)
     assert g.ms > 0 and g.macros["SL"] in ("4u", "8u", "16u")
     m = tuner.tune_gemm(info, 8, "residual")                                # the tensor-ops tile: the crew geometries or the K-split
-    assert m.ms > 0 and m.grid_mode in ("crew", "crew2", "ksplit2", "ksplit4") and m.ms <= m.default_ms * 1.001
+    assert m.ms > 0 and m.ms <= m.default_ms * 1.001
     tried = {mode for _, mode in tuner.choices[next(k for k in tuner.choices if k.startswith("gemm3|"))]["variants"]}
+    assert m.grid_mode in tried
     assert {"crew", "crew2", "ksplit2", "ksplit4"} <= tried                                                                   # bf16: no scales, no cacheless twins
     assert tried <= {"crew", "crew2", "ksplit2", "ksplit4", "ksplit8", "ksplit16"}                                             # finer where the K tiles allow
     tuner.save("test-chip")

@@ -1,3 +1,6 @@
+#ifndef EOS_TEST
+#define EOS_TEST (p.eos >= 0 && tok == p.eos)
+#endif
 // The DSpark round's small ops (design §5.8; issue #24). The compiler prepends the program's StepState struct.
 //
 // tap_concat:    x[t] = [tap_0[t] | tap_1[t] | … | tap_{N_SRC-1}[t]] for the rows the drafter injects this step —
@@ -172,7 +175,7 @@ kernel void accept_scan(device const int* token [[buffer(0)]], device StepState*
     head++;
     committed++;
     last = tok;
-    if (p.eos >= 0 && tok == p.eos) { stop = true; break; }   // nothing after the first EOS is committed
+    if (EOS_TEST) { stop = true; break; }   // nothing after the first EOS is committed
   }
   if (p.log_cap) log[st->step % p.log_cap] = (committed << 16) | (L << 8) | acc;
   st->ring_head = head;

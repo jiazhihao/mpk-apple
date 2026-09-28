@@ -89,3 +89,26 @@ Recorded as it happens, with the time and the files touched, so the porting guid
 * Reference: DeepSpec's `Qwen3DSparkModel` loaded by direct construction (its `from_pretrained` re-serializes the
   config and drops the DSpark fields; TorchSpec's checkpoint omits `block_size`). ~1.5 hours including reading the
   reference.
+
+## Llama-compatible package — 2026-09-28
+
+Llama 3.2 1B/3B (MLX affine INT4) and SmolLM2 1.7B (BF16) share one
+`LlamaForCausalLM` package. The package adds config guards, rotary scaling and a
+library-composed tree; checkpoint tensor names already match the standard reader.
+See [checkpoints, memory measurements and reproduction](../llama-models.md).
+
+The prerequisite engine change is separate: optional Q/K normalization, opt-in
+BF16 intermediate rounding, and finite stop-token sets. Defaults retain the
+existing Qwen conventions. Bring-up exposed two numerical details: computing RoPE
+powers directly with NumPy's FP32 vector routine can differ from the HF CPU
+routine by an ULP, and fusing BF16 normalization, SiLU and residual additions
+without intermediate rounding exceeds SmolLM2's final-layer error bound. The BF16
+package path enables those boundaries; affine checkpoints keep fused arithmetic.
+
+Validation includes all prefill layers, final logits, repeated 48-token runs and
+allocation checks at 4,096-token capacity. Llama's streams equal the HF goldens;
+SmolLM2 differs first at an exact logit tie and is additionally checked at every
+teacher-forced continuation position, as allowed by design §5.9. Kernel tests
+cover each precision path and stopping on every member of the EOS set, including
+stopping inside an accepted speculative chain. This port does not establish an
+MLX latency result for these models.

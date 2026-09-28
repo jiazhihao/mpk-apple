@@ -34,6 +34,12 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
   `Qwen3_5RMSNormGated`, `torch_recurrent_gated_delta_rule`, `Qwen3_5GatedDeltaNet`, `Qwen3_5Attention`,
   `apply_rotary_pos_emb`); written against that file, no code copied verbatim.
 
+- `monolith/models/llama/rope.py` — the frequency-dependent Llama 3 scaling rule
+  follows `src/transformers/modeling_rope_utils.py::_compute_llama3_parameters`
+  @ `v5.17.0` (Apache-2.0), implemented with NumPy for the standalone packer and
+  checked against the installed HF reference. The model package composes the
+  existing layer library; its checkpoint convention is `LlamaForCausalLM`.
+
 ## MLX (ml-explore/mlx, MIT)
 
 - `kernels/gemv_bf16_small.metal` — adapted from `mlx/backend/metal/kernels/gemv.h`

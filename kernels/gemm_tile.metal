@@ -1,4 +1,4 @@
-// gemm_tile: y[t][row] = sum_k dequant(W[row][k]) * x[t][k] for T <= TM tokens through the M5 neural accelerators
+// gemm_tile: y[t][row] = sum_k dequant(W[row][k]) * x[t][k], tiled in TM-token blocks through the M5 neural accelerators
 // (mpp::tensor_ops::matmul2d — design §5.6 / §5.12, plan M9, #50), reading the same block-lane-major pack as gemv_T.
 //
 // The Python side prepends `#include <metal_stdlib>`, the MPP header and a FORMAT SNIPPET (WEIGHTS_PER_WORD,
@@ -29,7 +29,7 @@
 // against 480 SIMD-groups: decode-kernels.md §6). Macros: K, R (rows per pack block, divides TN), TM (token
 // rows: 8 leaves half of the accelerator's 16-row minimum unused, so 16 costs the same), TN, TK, LANE_ORDER,
 // UNIT_WORDS, PAYLOAD_WORDS, SCALE_W0, SCALE_UOFF, SCALE_WORDS (kernels.unit_geometry), Q_OUTER, SCALE_CACHE, OUT_BF16,
-// plus the snippet's. Requires K % (32*WPW) == 0 and K % TK == 0, T_act <= TM (rows beyond t_active are zero in x'
+// plus the snippet's. Requires K % (32*WPW) == 0 and K % TK == 0; grid.y covers ceil(T_act / TM) (padding is zero in x'
 // and are not written). Measured on the M5 Pro at 17408 x 5120: NVFP4 177 GB/s, FP8 253, INT4 204 at 8 or 16 tokens
 // — 0.9-1.1x a T = 1 GEMV pass — against p14's staged tile (119 / 186); at 32 tokens the un-overlapped fill and
 // the activation traffic leave it below the staged tile (a multi-SIMD-group staged variant is the follow-up).
@@ -223,8 +223,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #if STEP_STATE
                       device const StepState* st [[buffer(15)]],
 #endif
-                      uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
-  const uint sg = gid / sw;
+                      uint3 gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]],
+                      uint3 group [[threadgroup_position_in_grid]]) {
+  const uint sg = gid.x / sw;
 #if KSPLIT > 1
   const uint slice = sg % KSPLIT, sg_tile = sg / KSPLIT, n_tg = p.n_sg / KSPLIT;   // a threadgroup is the KSPLIT SIMD-groups of one tile
   threadgroup float part[KSPLIT - 1][PART_LANES][PART_CAP];                            // the partial tiles of slices 1 … KSPLIT-1
@@ -233,13 +234,27 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #endif
 #if STEP_STATE
   if (st->done) return;                                                     // uniform over the threadgroup: no barrier is skipped
-  const uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step)));
+  uint T_act = (T_SRC == 1) ? st->n_inject : ((T_SRC == 3) ? st->n_chain : ((T_SRC == 4) ? st->n_inject + st->n_chain : ((T_SRC == 2) ? T_STATIC_ROWS : st->t_this_step)));
   if (T_act == 0u) return;                                                  // no rows this step (an LM drafter's chain in a prefill chunk)
 #ifdef T_HI
   if (T_act > T_HI || T_act <= T_LO) return;
 #endif
 #else
-  const uint T_act = p.t_active;
+  uint T_act = p.t_active;
+#endif
+  // Each grid.y plane processes at most TM tokens. Predication above uses the
+  // full step length; all following addressing and guards are local to this tile.
+  const uint token0 = group.y * TM;
+  if (token0 >= T_act) return;
+  T_act = min(T_act - token0, uint(TM));
+  xp += (ulong)token0 * K;
+  const uint output_cols = (EPILOGUE == 2) ? p.n_rows / 2u : p.n_rows;
+  y += (ulong)token0 * output_cols;
+#if EPILOGUE == 1
+  residual += (ulong)token0 * output_cols;
+#endif
+#if STAT_OUT
+  stat_out += (ulong)token0 * p.n_blocks;
 #endif
   matmul2d<desc, execution_simdgroup> op;
   tA_t tA(xp, dextents<int, 2>(int(K), int(TM)));
@@ -276,7 +291,10 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #pragma clang loop unroll(full)
       for (uint s = 0; s < NS_B; s++) {
         const uint n = c1b + 8u * s;                                     // row inside the tile
-        const uint b = tile * NB + n / R, r = n % R;                     // its pack block and row
+        // A final TN-row tile can extend beyond the last packed block. Those
+        // outputs are masked below, but their cooperative loads must stay valid.
+        const uint last_block = (p.tile0 * TN + p.n_rows - 1u) / R;
+        const uint b = min(tile * NB + n / R, last_block), r = n % R;
         device const uint4* wb = w + (ulong)b * BLOCK_WORDS;
         const uint c0 = CT * mq;                                         // this thread's first tile column
         const uint lw0 = c0 / WPW, e0 = c0 % WPW;                        // its first word inside the tile and code offset
@@ -440,7 +458,7 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
           for (uint qq = 0; qq < 4u; qq++) pv[qq] = simd_shuffle_xor(v[qq], ushort(PAIR_XOR));
           const bool gate_lane = (lane & PAIR_XOR) == 0u;               // rows [0, CHUNK) of the block
 #pragma clang loop unroll(full)
-          for (uint qq = 0; qq < 4u; qq++) v[qq] = silu_f(v[qq]) * pv[qq];
+          for (uint qq = 0; qq < 4u; qq++) v[qq] = silu_mul(v[qq], pv[qq]);
           const uint orow0 = bb * CHUNK + (n % R), n_out = p.n_rows / 2u;
           const bool writer = gate_lane && m < T_act;
 #else
@@ -585,7 +603,7 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
     for (uint u = 0; u < PERM_UNROLL; u++) {
       if (i + 32u * u >= k1) continue;
 #if PERM_NORM
-      const float f = round_bf16(as_type<float>(uint(v[u]) << 16) * r * norm_w[src[u]]);
+      const float f = round_bf16(norm_scale(as_type<float>(uint(v[u]) << 16), r, norm_w[src[u]]));
       v[u] = ushort(as_type<uint>(f) >> 16);
 #endif
       out[i + 32u * u] = v[u];

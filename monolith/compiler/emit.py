@@ -66,7 +66,7 @@ class _Ctx:
                                                                           # per-T variants whose whole range lies below it are not emitted
     tuner: Any = None                                                     # compiler.autotune.Autotuner or None
     shared: Dict[str, str] = field(default_factory=dict)                  # shared scratch name -> buffer (sized to the largest request)
-    eos: int = -1
+    eos: Union[int, Sequence[int]] = -1
     ring_capacity: int = 4096
     ctx_cap_target: int = 0                                               # the target's KV rows (0 = no attention: unbounded)
     ctx_cap: int = 0                                                      # positions a sequence may occupy: the target's rows, and the drafter's less its block
@@ -271,9 +271,14 @@ def _rmsnorm_stat(ctx: _Ctx, op: Op) -> None:
     ctx.add(k, [(0, *ctx.buf(h)), (1, *ctx.buf(stat)), (2, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind, writes=[1])
 
 
+def _norm_precision(stat: Optional[Value]) -> Dict[str, str]:
+    return {"NORM_ROUND": "1"} if (stat is not None and stat.producer is not None
+        and stat.producer.attrs.get("round_before_scale")) else {}
+
+
 def _norm_apply(ctx: _Ctx, h: Value, stat: Value, nw: Value, eps: float, out: Tuple[str, int], t_c: int, t_src: int,
                 name: str = "norm_apply") -> None:
-    k = ctx.kernel("norm_apply", kernels.norm_apply_source(), "norm_apply", ctx.t_macros(t_c, t_src))
+    k = ctx.kernel("norm_apply", kernels.norm_apply_source(), "norm_apply", dict(ctx.t_macros(t_c, t_src), **_norm_precision(stat)))
     kdim = ctx.shape(h)[1]
     prm = ctx.params("norm_apply", kernels.norm_apply_params(kdim, t_c, ctx.stat_parts.get(stat.name, 1), eps))
     ctx.add(k, [(0, *ctx.buf(h)), (1, *ctx.buf(stat)), (2, *ctx.windows[nw.name]), (3, *out), (4, prm, 0)], (t_c, 1, 1), (32, 1, 1), name, writes=[3])
@@ -374,6 +379,9 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
         rg = int(choice.macros["RG"]) if choice else None
         macros = dict(kernels.gemv_macros(info, t=tv, rg=rg, epilogue=epilogue, out_bf16=True, stat_out=stat_out is not None, rsplit=rsplit,
                                           norm=fuse_norm, round_before_residual=bool(op.attrs.get("round_residual"))), **ctx.t_macros(tv, t_src))
+        macros.update(_norm_precision(stat))
+        if op.attrs.get("round_silu"):
+            macros["SILU_ROUND"] = "1"
         if len(variants) > 1 or tile_range is not None:
             macros["T_LO"], macros["T_HI"] = str(lo), str(tv)
         n_sg, grid, tg = ctx.geometry(choice.grid_mode if choice else "crew", n_blocks)
@@ -407,9 +415,7 @@ def gemm_tm(t: int) -> int:
         return 8
     if t <= 16:
         return 16
-    if t <= 32:
-        return 32
-    raise ValueError(f"gemm_tile: T = {t} exceeds the largest tile (32 rows)")
+    return 32                                  # larger programs tile their token axis in grid.y
 
 
 def _bf16_rows(info: PackInfo) -> bool:
@@ -449,7 +455,7 @@ def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variant
             raise ValueError("the row range does not start on a tile")
     except ValueError:
         return variants, None                                          # the shape or the range is not the tile's: the shader path
-    if ctx.tuner is not None and rr is None:
+    if ctx.tuner is not None and rr is None and t_c <= 32:
         # the tuner has timed both paths on this shape: the tile at TM rows and the shader at the range's top T — where the
         # shader wins (K = 1024 slabs at T ≤ 8: the tile's fill has too few K steps to amortize; decode-kernels.md §11)
         # the T variants stay on it. A row range keeps the profile's rule (its tile share is the whole op's).
@@ -522,7 +528,7 @@ def _fused_permute(ctx: _Ctx, v: Value) -> Optional[Tuple[str, Dict[str, str]]]:
     key = (ctx.buf(v), None, tm, wpw, tk, lo, hi, t_src)
     xp = ctx.perm_scratch.get(key)
     if xp is None:
-        xp = ctx.scratch(f"{c.outputs[0].name}.xp", tm * kdim * 2)
+        xp = ctx.scratch(f"{c.outputs[0].name}.xp", -(-hi // tm) * tm * kdim * 2)
         ctx.perm_scratch[key] = xp
     return xp, macros
 
@@ -584,6 +590,7 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         _size_stat(ctx, stat_out)
     lo, hi = t_range
     tm = gemm_tm(hi)
+    padded_rows = -(-hi // tm) * tm
     predicated = t_src != STATIC_ROWS
     f = FORMATS.get(info.format)
     wpw = int(f.weights_per_word)
@@ -596,7 +603,9 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     bf16_rows = _bf16_rows(info) and hi == 1
     direct_norm = (bf16_rows or small_bf16) and stat is not None
     conv_macros, conv_bindings = _projection_convolution(ctx, op, info, hi, t_src)
-    tmac = dict(ctx.t_macros(hi, t_src), **conv_macros)
+    tmac = dict(ctx.t_macros(hi, t_src), **conv_macros, **_norm_precision(stat))
+    if op.attrs.get("round_silu"):
+        tmac["SILU_ROUND"] = "1"
     if nv_row1:
         tmac.update(NV_ROWS="1u", NV_SG=f"{nv_groups}u", NV_UNROLL="4")
     if predicated:
@@ -616,20 +625,20 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         tmac.update(DIRECT_NORM="1", SHARED_NORM=str(int(small_bf16)), STAT_PARTS=f"{ctx.stat_parts.get(stat.name, 1)}u",
                     EPS=f"{float(op.attrs.get('eps', 1e-6))}f")
     elif xp is None:
-        xp = ctx.scratch(f"{y.name}.xp", tm * kdim * 2)
+        xp = ctx.scratch(f"{y.name}.xp", padded_rows * kdim * 2)
         ctx.perm_scratch[key] = xp
         pk = ctx.kernel(f"x_permute|{info.format}", kernels.gemm_source(info.format), "x_permute",
                         dict(macros, **kernels.x_permute_macros(stat is not None, groups=perm_groups,
                              simdgroups=perm_simdgroups, unroll=perm_unroll), **tmac), language_version=kernels.MSL_TENSOR_OPS)   # one source, both kernels
         eps = float(op.attrs.get("eps", 1e-6))
         parts = ctx.stat_parts.get(stat.name, 1) if stat is not None else 1
-        prm = ctx.params("x_permute", kernels.x_permute_params(kdim, hi, tm, wpw, tk, parts, eps))
+        prm = ctx.params("x_permute", kernels.x_permute_params(kdim, hi, padded_rows, wpw, tk, parts, eps))
         bindings = [(0, *xb), (3, xp, 0), (4, prm, 0)]
         if stat is not None:
             bindings += [(1, *ctx.buf(stat)), (2, *ctx.windows[nw.name])]
         # not a member of the variant group: the barrier pass joins a group's members without a check (they are
         # alternatives), and the tile must wait for this permute — its own identity gives the tile the barrier
-        ctx.add(pk, bindings, *kernels.x_permute_grid(tm, groups=perm_groups, simdgroups=perm_simdgroups), f"x_permute:{y.name}", writes=[3], kind="x_permute", t_variant=hi,
+        ctx.add(pk, bindings, *kernels.x_permute_grid(padded_rows, groups=perm_groups, simdgroups=perm_simdgroups), f"x_permute:{y.name}", writes=[3], kind="x_permute", t_variant=hi,
                 t_range=[lo, hi] if predicated else None, normed=stat is not None)
     choice = ctx.tuner.tune_gemm(info, tm, epilogue) if ctx.tuner is not None else None
     mode = choice.grid_mode if choice else "crew"
@@ -669,6 +678,8 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
         else:
             n_sg, grid, tg = n_blocks * info.rows // 2, (n_blocks, 1, 1), (16 * info.rows, 1, 1)
         mode = f"{info.format}_rows{1 if nv_row1 else 2}"
+    if hi > tm:
+        grid = (grid[0], padded_rows // tm, grid[2])
     prm = ctx.params("gemm", kernels.gemm_params(n_rows, n_tiles, n_sg, hi, tile0=block0 * info.rows // tn, n_blocks=n_blocks))
     k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), function, dict(macros, **tmac),
                    language_version=kernels.MSL_TENSOR_OPS,
@@ -722,15 +733,16 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     """(macros, n_sg field, chunk for the workspace)."""
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     rep = heads // kv
+    norm = {} if a.get("qk_norm", True) else {"QK_NORM": "0"}
     if v2:
         # v2's threadgroups: attention_v2_threadgroups per core — from the core count, not the crew (n_sg already carries the
         # profile's threadgroups_per_core: dividing it by 12 doubled v2's grid on a two-threadgroup profile)
-        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=min(4, rep * ctx.t)), STEP_STATE="1"), ctx.cores * ctx.attn_v2_tg, kernels.GQA_V2_CHUNK_MIN
+        return dict(kernels.gqa_v2_macros(d, rmax=rep * ctx.t, rg=min(4, rep * ctx.t)), STEP_STATE="1", **norm), ctx.cores * ctx.attn_v2_tg, kernels.GQA_V2_CHUNK_MIN
     chunk = int(a.get("chunk", 64))
     lm_mode, chain_i = int(a.get("lm_mode", 0)), int(a.get("chain_i", 0))
     if v2 and lm_mode:
         raise ValueError("gqa_decode: an LM drafter's attention runs on the v1 core (the v2 core has no LM modes)")
-    return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows, lm_mode=lm_mode, chain_i=chain_i), STEP_STATE="1"), ctx.n_sg, chunk
+    return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows, lm_mode=lm_mode, chain_i=chain_i), STEP_STATE="1", **norm), ctx.n_sg, chunk
 
 
 def _gqa_mma_chunk(d: int) -> int:
@@ -855,6 +867,8 @@ def _gqa_v3(ctx: _Ctx, op: Op) -> None:
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
     macros = dict(kernels.gqa_v3_macros(d, lm_mode=int(a.get("lm_mode", 0)), chain_i=int(a.get("chain_i", 0))), STEP_STATE="1", SINGLE_BLOCK="1")
+    if not a.get("qk_norm", True):
+        macros["QK_NORM"] = "0"
     fused = _fused_permute(ctx, out)                              # o_proj's tile reads the output: written in its order
     if fused:
         macros = dict(macros, **fused[1])
@@ -1109,7 +1123,7 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
         mode, thr = 1, float(op.attrs.get("threshold", 0.0))
     else:
         mode, thr = 0, (float(op.attrs.get("threshold", 0.0)) if conf is not None else 0.0)
-    prm = ctx.params("verify_select", kernels.select_params(gamma, thr, ctx.layout.t_max, mode=mode, cost=cost, log_cap=kernels.ACCEPT_LOG_CAP,
+    prm = ctx.params("verify_select", kernels.select_params(gamma, thr, ctx.t, mode=mode, cost=cost, log_cap=kernels.ACCEPT_LOG_CAP,
                                                             ctx_cap=ctx.ctx_cap_target, lm=bool(op.attrs.get("lm"))))
     ctx.program.buffers.setdefault(CONF_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * kernels.CONF_LOG_WIDTH * 4, None, "arena"))
     cb = ctx.buf(conf) if conf is not None else (ctx.scratch("verify_select.conf", gamma * 4), 0)
@@ -1119,7 +1133,7 @@ def _verify_select(ctx: _Ctx, op: Op) -> None:
 
 def _accept_scan(ctx: _Ctx, op: Op) -> None:
     token, = op.inputs
-    k = ctx.kernel("spec_ops", _spec_ops(ctx), "accept_scan", {})
+    k = ctx.kernel("spec_ops", _spec_ops(ctx), "accept_scan", kernels.eos_macros(ctx.eos))
     prm = ctx.params("accept_scan", kernels.accept_params(ctx.ring_capacity, ctx.eos, kernels.ACCEPT_LOG_CAP, ctx_cap=ctx.ctx_cap,
                                                           lm=bool(op.attrs.get("lm"))))
     ctx.program.buffers.setdefault(ACCEPT_LOG, BufferSpec(kernels.ACCEPT_LOG_CAP * 4, None, "arena"))
@@ -1201,12 +1215,13 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_
 
 
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
-                 layout: Optional[StepStateLayout] = None, eos: int = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
+                 layout: Optional[StepStateLayout] = None, eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
                  tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal",
                  attention: Optional[str] = None, accelerator: Optional[str] = None, t_min: int = 1) -> Program:
     """Check coverage on ``profile`` and emit the step program for a lowered (and passed) graph: for a static
-    ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t_max`` read from StepState
-    at run time (kernels compiled at ``t_max``). ``pack`` is the pack (or the packs: the target's, then a drafter's)
+    ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t`` read from StepState
+    at run time. The dynamic bound defaults to ``layout.t_max``; an explicit smaller ``t`` lets programs share
+    a StepState ABI without sharing their activation sizes. ``pack`` is the pack (or the packs: the target's, then a drafter's)
     the graph's weights and constants come from. ``tail="advance"`` appends the step's advance on ``token`` (the
     sampled tokens); ``None`` leaves the closing op to the graph (a program with the DSpark round emits its own
     ``accept_scan``). ``barriers``: ``"minimal"`` keeps an ICB barrier only where a dependency needs one (the
@@ -1215,7 +1230,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     ``accelerator`` (or the override) sends the T > 1 GEMVs to the tensor-ops tile (#51)."""
     layout = layout or StepStateLayout()
     packs = [pack] if isinstance(pack, PackFile) else list(pack)
-    if dynamic_t:
+    if dynamic_t and t is None:
         t = layout.t_max
     if t is None or t < 1 or t > layout.t_max:
         raise ValueError(f"emit_program: T = {t} must be within 1..t_max = {layout.t_max}")
@@ -1264,7 +1279,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     if tail == "advance":
         if token is None:
             raise ValueError("emit_program: the advance needs the sampled token value")
-        adv = ctx.kernel("advance", kernels.advance_source(layout.to_msl()), "advance", {})
+        adv = ctx.kernel("advance", kernels.advance_source(layout.to_msl()), "advance", kernels.eos_macros(eos))
         prm = ctx.params("advance", kernels.advance_params(t, ring_capacity, eos, ctx_cap=ctx.ctx_cap))
         ctx.add(adv, [(0, *ctx.buf(token)), (1, program.step_state, 0), (2, program.ring, 0), (3, prm, 0)], (1, 1, 1), (32, 1, 1), "advance",
                 writes=[1, 2])
@@ -1358,16 +1373,17 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
     return drafter.lower_select(g, block, profile, cost=cost, threshold=threshold, fixed=fixed)
 
 
-def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: int = -1, ring_capacity: int = 4096,
+def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096,
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
                     verify_threshold: Optional[float] = None, verify_length: Optional[int] = None, barriers: str = "minimal",
-                    attention: Optional[str] = None, accelerator: Optional[str] = None) -> Program:
+                    attention: Optional[str] = None, accelerator: Optional[str] = None, prefill: bool = False) -> Program:
     """Lower ``model``, run the ``passes`` and emit its step program (see :func:`emit_program`). With a ``drafter``
     (and its pack) the dynamic-T program carries the speculative round instead of the advance: ``verify`` = ``"cost"``
     (the cost-aware verify-length rule when the profile has a cost table for the pack's dominant format, otherwise the
     threshold rule), ``"threshold"`` (``verify_threshold``; None = 0.5, ≤ 0 = verify the whole block) or ``"fixed"``
-    (``verify_length`` drafts every step — the measurement's baseline)."""
+    (``verify_length`` drafts every step — the measurement's baseline). ``prefill=True`` retains the one-token
+    variants needed by a partial prompt chunk, even when verification always processes two or more tokens."""
     layout = layout or StepStateLayout()
     g = Graph("step")
     token = model.lower(g)
@@ -1381,7 +1397,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
         raise ValueError("compile_program: the speculative round needs the dynamic-T program (dynamic_t=True)")
     if drafter_pack is None:
         raise ValueError("compile_program: a drafter needs its pack")
-    if drafter.gamma > layout.gamma_max or drafter.gamma + 1 > layout.t_max:
+    if drafter.gamma > layout.gamma_max or drafter.gamma + 1 > (t or layout.t_max):
         raise ValueError(f"compile_program: a block of {drafter.gamma} needs gamma_max >= {drafter.gamma} and t_max >= {drafter.gamma + 1} "
                          f"(layout: {layout.gamma_max}, {layout.t_max})")
     if verify not in ("cost", "threshold", "fixed"):
@@ -1391,7 +1407,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
         if verify_length is None or not 0 <= verify_length <= drafter.gamma:
             raise ValueError(f"compile_program: verify='fixed' needs verify_length in 0..{drafter.gamma}")
         fixed = int(verify_length)
-    cost = verify_costs(profile, pack, drafter.gamma, layout.t_max, accelerator) if verify == "cost" else None
+    cost = verify_costs(profile, pack, drafter.gamma, t or layout.t_max, accelerator) if verify == "cost" else None
     if cost is None and fixed is None and verify_threshold is None:
         verify_threshold = FALLBACK_THRESHOLD           # no cost table (or the threshold rule asked for without a threshold)
     lower_round(g, model, drafter, token, profile, cost=cost, threshold=verify_threshold, fixed=fixed)
@@ -1401,6 +1417,6 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     # a decode step of the round runs at T = 1 + L: the cost rule never chooses L = 0 (a draft with any confidence scores
     # above the bare anchor) and a fixed L >= 1 never does, so their programs skip the T = 1 variants — 144 dispatches
     # of the 8B's step that returned at once (decode-kernels.md §8); the threshold rule can pick L = 0 and keeps them
-    t_min = 2 if (cost is not None or (fixed is not None and fixed >= 1)) else 1
-    return emit_program(g, pack=[pack, drafter_pack], profile=profile, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
+    t_min = 2 if not prefill and (cost is not None or (fixed is not None and fixed >= 1)) else 1
+    return emit_program(g, pack=[pack, drafter_pack], profile=profile, t=t, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
                         tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention, accelerator=accelerator, t_min=t_min)

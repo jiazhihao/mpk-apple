@@ -27,11 +27,12 @@ def dev():
 
 
 class Cfg:
-    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0, adaptive=False, single_block=False):
+    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0, adaptive=False, single_block=False, qk_norm=True):
         self.heads, self.kv, self.d, self.rot, self.ctx_max, self.t_max = heads, kv, d, rot, ctx_max, t_max
         self.mma, self.step_state, self.lm_mode = mma, step_state, lm_mode
         self.single_block = single_block
         self.adaptive = adaptive
+        self.qk_norm = qk_norm
         self.v2, self.n_tg, self.steal = v2, n_tg, steal                # v2: the partial granularity is 32 keys (the numpy model's chunk)
         self.v3, self.nsg3 = v3, nsg3 or kernels.gqa_v3_simdgroups(d)   # v3: one dispatch, a threadgroup of nsg3 SIMD-groups per query row
         if v2 or (mma and d == 256):
@@ -54,6 +55,8 @@ class Harness:
 
     def __init__(self, dev, cfg, qn, kn):
         self.dev, self.cfg = dev, cfg
+        def library(source, macros, language_version=0):
+            return nt.Library(dev, source, dict(macros, QK_NORM=str(int(cfg.qk_norm))), language_version)
         if cfg.mma:
             macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(cfg.d, cfg.rep)))
             if cfg.adaptive:
@@ -64,17 +67,17 @@ class Harness:
                 self.layout = StepStateLayout()
                 macros["STEP_STATE"] = "1"
                 source = source.replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl(), 1)
-            lib = nt.Library(dev, source, macros, kernels.MSL_TENSOR_OPS)
+            lib = library(source, macros, kernels.MSL_TENSOR_OPS)
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_mma"), nt.Pipeline(lib, "gqa_merge")
         elif cfg.v3:
-            lib = nt.Library(dev, kernels.gqa_source(v3=True), dict(kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3), SINGLE_BLOCK=str(int(cfg.single_block))))
+            lib = library(kernels.gqa_source(v3=True), dict(kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3), SINGLE_BLOCK=str(int(cfg.single_block))))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v3"), None
             assert self.p_dec.max_threads_per_threadgroup >= cfg.nsg3 * 32
         elif cfg.v2:
-            lib = nt.Library(dev, kernels.gqa_source(True), kernels.gqa_v2_macros(cfg.d, rmax=cfg.rows_max, rg=cfg.rb))
+            lib = library(kernels.gqa_source(True), kernels.gqa_v2_macros(cfg.d, rmax=cfg.rows_max, rg=cfg.rb))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v2"), nt.Pipeline(lib, "gqa_merge_v2")
         else:
-            lib = nt.Library(dev, kernels.gqa_source(steal=cfg.steal), kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=cfg.rb, steal=cfg.steal, steal_hits=cfg.steal))
+            lib = library(kernels.gqa_source(steal=cfg.steal), kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=cfg.rb, steal=cfg.steal, steal_hits=cfg.steal))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode"), nt.Pipeline(lib, "gqa_merge")
             if cfg.steal:
                 self.p_reset = nt.Pipeline(lib, "steal_reset")
@@ -128,7 +131,7 @@ class Harness:
                 macros["STEP_STATE"] = "1"
                 source = source.replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl(), 1)
             source, constants = kernels.specialize_params(source, "gqa", params)
-            lib = nt.Library(self.dev, source, dict(macros, **constants), kernels.MSL_TENSOR_OPS if c.mma else 0)
+            lib = nt.Library(self.dev, source, dict(macros, **constants, QK_NORM=str(int(c.qk_norm))), kernels.MSL_TENSOR_OPS if c.mma else 0)
             name = "gqa_decode_mma" if c.mma else "gqa_decode_v3" if c.v3 else "gqa_decode_v2" if c.v2 else "gqa_decode"
             self.p_dec = nt.Pipeline(lib, name)
             self.p_merge = None if c.v3 else nt.Pipeline(lib, "gqa_merge_v2" if c.v2 else "gqa_merge")
@@ -174,11 +177,12 @@ class Harness:
 
 # ---- the kernel's contract in numpy -----------------------------------------------------------------------------
 
-def norm_rope_np(x, nw, cos_row, sin_row, d):
+def norm_rope_np(x, nw, cos_row, sin_row, d, qk_norm=True):
     """``x [..., D]`` in the permuted layout: (1 + w) RMSNorm then full-width rotary pairs, the reference's roundings."""
-    ss = (x.astype(np.float32) ** 2).sum(-1, keepdims=True)
-    rstd = (1.0 / np.sqrt(ss / d + EPS)).astype(np.float32)
-    x = rbf(x * rstd * nw)
+    if qk_norm:
+        ss = (x.astype(np.float32) ** 2).sum(-1, keepdims=True)
+        rstd = (1.0 / np.sqrt(ss / d + EPS)).astype(np.float32)
+        x = rbf(x * rstd * nw)
     half = d // 2
     partner = np.concatenate([x[..., half:], x[..., :half]], axis=-1)
     a, b = rbf(x * cos_row), rbf(partner * sin_row)
@@ -196,8 +200,8 @@ def ref_step(h, proj, position, k_cache, v_cache):
     k = proj[:, c.k_off: c.k_off + c.kv * d].reshape(t, c.kv, d)
     v = proj[:, c.v_off: c.v_off + c.kv * d].reshape(t, c.kv, d)
     pos = np.arange(position, position + t)
-    q = norm_rope_np(q, h.qn, h.cos[pos][:, None, :], h.sin[pos][:, None, :], d)
-    k = norm_rope_np(k, h.kn, h.cos[pos][:, None, :], h.sin[pos][:, None, :], d)
+    q = norm_rope_np(q, h.qn, h.cos[pos][:, None, :], h.sin[pos][:, None, :], d, c.qk_norm)
+    k = norm_rope_np(k, h.kn, h.cos[pos][:, None, :], h.sin[pos][:, None, :], d, c.qk_norm)
     k_cache[position: position + t] = k
     v_cache[position: position + t] = v
     ctx = position + t
@@ -641,3 +645,22 @@ def test_v3_cached_key_pair_boundaries(dev, nsg, position, single_block):
     got_k, got_v = h.caches()
     assert np.array_equal(got_v[:position + 3], vc[:position + 3])
     assert np.abs(got_k[:position + 3] - kc[:position + 3]).max() <= 1e-2 * max(np.abs(kc[:position + 3]).max(), 1e-6)
+
+
+@pytest.mark.parametrize("kind", ["v1", "v2", "v3", "mma", "adaptive"])
+@pytest.mark.parametrize("position", [0, 249, 1024])
+def test_attention_without_query_key_norm(dev, kind, position):
+    rng = np.random.default_rng(1729)
+    cfg = Cfg(4, 2, 128, 128, 1152, 4, gate=False, v2=kind == "v2", v3=kind == "v3",
+              mma=kind in ("mma", "adaptive"), adaptive=kind == "adaptive", qk_norm=False)
+    # Poison disabled norm bindings: the kernel must not load either table.
+    harness = Harness(dev, cfg, np.full(128, np.nan), np.full(128, np.nan))
+    caches = [rbf(rng.normal(0, .1, (cfg.ctx_max, cfg.kv, cfg.d))) for _ in range(2)]
+    harness.set_caches(*caches)
+    proj = _random_proj(rng, cfg, 4)
+    expected = ref_step(harness, bf16_to_f32(proj), position, *caches)
+    actual = harness.step(proj, position)
+    np.testing.assert_allclose(actual, expected, atol=.003, rtol=.02)
+    for actual_cache, expected_cache in zip(harness.caches(), caches):
+        np.testing.assert_array_equal(actual_cache, expected_cache)
+    np.testing.assert_array_equal(harness.step(proj, position), actual)

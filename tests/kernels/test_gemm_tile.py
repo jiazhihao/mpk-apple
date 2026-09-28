@@ -79,8 +79,9 @@ def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None
     tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
     lib = _lib(dev, fmt, macros)
     pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(_lib(dev, fmt, dict(macros, **kernels.x_permute_macros(False))), "x_permute")
-    xp = nt.Buffer(dev, tm * k * 2)
-    y = nt.Buffer(dev, tm * n * (2 if out_bf16 else 4)); y.fill(0)
+    padded = max(tm, -(-t_act // tm) * tm)
+    xp = nt.Buffer(dev, padded * k * 2)
+    y = nt.Buffer(dev, padded * n * (2 if out_bf16 else 4)); y.fill(0)
     n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", kernels.gemm_tiles(n, tn), dev.info().gpu_cores,
                                            min(384, pso.max_threads_per_threadgroup))
     if specialize:
@@ -88,16 +89,16 @@ def _run(dev, fmt, n, k, tm, t_act, lane_order, out_bf16=False, rows=16, tn=None
             kernels.gemm_params(n, kernels.gemm_tiles(n, tn), n_sg, tm))
         pso = nt.Pipeline(nt.Library(dev, source, dict(macros, **constants), kernels.MSL_TENSOR_OPS), "gemm_tile")
     d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(dev, xb.tobytes())).buffer(3, xp)
-          .bytes(4, kernels.x_permute_params(k, t_act, tm, int(f.weights_per_word), tk)).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
+          .bytes(4, kernels.x_permute_params(k, t_act, padded, int(f.weights_per_word), tk)).grid(padded * kernels.GEMM_PERM_SG).threadgroup(32).barrier())
     d1 = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, data)).buffer(1, nt.Buffer(dev, row_scales.tobytes())).buffer(2, xp).buffer(3, y)
-          .bytes(4, kernels.gemm_params(n, kernels.gemm_tiles(n, tn), n_sg, t_act)).grid(n_tg).threadgroup(tg))
+          .bytes(4, kernels.gemm_params(n, kernels.gemm_tiles(n, tn), n_sg, t_act)).grid(n_tg, padded // tm, 1).threadgroup(tg))
     r = nt.Queue(dev).run([d0, d1])
     assert not r.error, r.error
     if out_bf16:
-        out = bf16_to_f32(np.frombuffer(y.read(0, tm * n * 2), dtype=np.uint16).reshape(tm, n))
+        out = bf16_to_f32(np.frombuffer(y.read(0, padded * n * 2), dtype=np.uint16).reshape(padded, n))
     else:
-        out = np.frombuffer(y.read(0, tm * n * 4), dtype=np.float32).reshape(tm, n)
-    xperm = bf16_to_f32(np.frombuffer(xp.read(0, tm * k * 2), dtype=np.uint16).reshape(tm, k))
+        out = np.frombuffer(y.read(0, padded * n * 4), dtype=np.float32).reshape(padded, n)
+    xperm = bf16_to_f32(np.frombuffer(xp.read(0, padded * k * 2), dtype=np.uint16).reshape(padded, k))
     assert np.array_equal(xperm[:t_act], bf16_to_f32(xb)[:, kernels.x_permute_columns(k, int(f.weights_per_word), tk)]) and np.all(xperm[t_act:] == 0)
     rs = row_scales.astype(np.float64)[:, None]                            # the per-tensor scale, applied in FP32 at the epilogue
     w = bf16_to_f32(f32_to_bf16((f.dequantize(spec) / rs).astype(np.float32))) * rs   # the BF16 operand the accelerator multiplies
@@ -163,6 +164,7 @@ class Gemm:
         """``norm`` = (stat [T, parts] float32, parts, norm_w [K]); ``row_range`` = (start, count) in slab rows;
         ``step_state`` = (layout, values) with ``t_range`` = (lo, hi) for a predicated variant."""
         t_act = self.tm if t_active is None else t_active
+        padded = max(self.tm, -(-t_act // self.tm) * self.tm)
         if out_bf16 is None:
             out_bf16 = epilogue is not None
         macros = kernels.gemm_macros(self.info, tm=self.tm, out_bf16=out_bf16, epilogue=epilogue, stat_out=stat_out, round_before_residual=round_residual, ksplit=ksplit)
@@ -207,16 +209,16 @@ class Gemm:
             pso = nt.Pipeline(nt.Library(self.dev, specialized, dict(macros, **constants),
                 language_version=kernels.MSL_TENSOR_OPS), self.function)
         n_out = n_rows // 2 if epilogue == "silu_mul" else n_rows
-        xp = nt.Buffer(self.dev, self.tm * self.k * 2)
-        y = nt.Buffer(self.dev, self.tm * n_out * 4); y.fill(0)
+        xp = nt.Buffer(self.dev, padded * self.k * 2)
+        y = nt.Buffer(self.dev, padded * n_out * 4); y.fill(0)
         parts = norm[1] if norm else 1
         d0 = (nt.Dispatch().pipeline(ppso).buffer(0, nt.Buffer(self.dev, x_bf16.tobytes())).buffer(3, xp)
-              .bytes(4, kernels.x_permute_params(self.k, t_act, self.tm, self.wpw, tk, parts, EPS))
-              .grid(self.tm * perm_simdgroups // perm_groups).threadgroup(32 * perm_groups).barrier())
+              .bytes(4, kernels.x_permute_params(self.k, t_act, padded, self.wpw, tk, parts, EPS))
+              .grid(padded * perm_simdgroups // perm_groups).threadgroup(32 * perm_groups).barrier())
         if norm:
             d0.buffer(1, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes())).buffer(2, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
         d1 = (nt.Dispatch().pipeline(pso).buffer(0, self.wbuf).buffer(1, self.rsbuf).buffer(2, xp).buffer(3, y)
-              .bytes(4, kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks)).grid(n_tg).threadgroup(tg))
+              .bytes(4, kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks)).grid(n_tg, padded // self.tm, 1).threadgroup(tg))
         direct_norm = (extra_macros or {}).get("DIRECT_NORM") == "1"
         if direct_norm:
             d1.buffer(2, nt.Buffer(self.dev, x_bf16.tobytes()))
@@ -228,15 +230,15 @@ class Gemm:
             d1.buffer(7, nt.Buffer(self.dev, residual.tobytes()))
         so = None
         if stat_out:
-            so = nt.Buffer(self.dev, self.tm * n_parts * 4); so.fill(0)
+            so = nt.Buffer(self.dev, padded * n_parts * 4); so.fill(0)
             d1.buffer(8, so)
         if step_state is not None:
             d0.buffer(15, st); d1.buffer(15, st)
         r = nt.Queue(self.dev).run([d1] if direct_norm else [d0, d1])
         assert not r.error, r.error
-        raw = y.read(0, self.tm * n_out * (2 if out_bf16 else 4))
-        out = bf16_to_f32(np.frombuffer(raw, dtype=np.uint16)).reshape(self.tm, n_out) if out_bf16 else np.frombuffer(raw, dtype=np.float32).reshape(self.tm, n_out)
-        so_arr = np.frombuffer(so.read(0, self.tm * n_parts * 4), dtype=np.float32).reshape(self.tm, n_parts) if stat_out else None
+        raw = y.read(0, padded * n_out * (2 if out_bf16 else 4))
+        out = bf16_to_f32(np.frombuffer(raw, dtype=np.uint16)).reshape(padded, n_out) if out_bf16 else np.frombuffer(raw, dtype=np.float32).reshape(padded, n_out)
+        so_arr = np.frombuffer(so.read(0, padded * n_parts * 4), dtype=np.float32).reshape(padded, n_parts) if stat_out else None
         return out, so_arr
 
 
@@ -494,3 +496,37 @@ def test_static_geometry_preserves_matrix_tails_and_partial_tokens(dev, fmt, act
                for flag in (False, True)]
     np.testing.assert_array_equal(*outputs)
     assert not outputs[1][active:].any()
+
+
+@pytest.mark.parametrize("fmt", ["bf16", "nvfp4", "int4_affine"])
+@pytest.mark.parametrize("tokens", [33, 127, 128, 129])
+def test_token_axis_tiling_for_large_prefill(dev, fmt, tokens):
+    out, ref = _run(dev, fmt, 200, K, 32, tokens, "interleaved16", ksplit=2)
+    assert check_against_oracle(out[:tokens], ref).ok()
+    assert np.all(out[tokens:] == 0)
+
+
+@pytest.mark.parametrize("fmt", ["bf16", "nvfp4", "int4_affine"])
+def test_token_axis_tiling_preserves_epilogues(dev, fmt):
+    from monolith.core import StepStateLayout
+    rng = np.random.default_rng(12)
+    count, active, n = 129, 127, 192
+    g = Gemm(dev, fmt, n, 1024, 32)
+    x = f32_to_bf16(rng.normal(0, .1, (count, 1024)).astype(np.float32))
+    residual = f32_to_bf16(rng.normal(0, .1, (count, n)).astype(np.float32))
+    state = (StepStateLayout(t_max=count), {"t_this_step": active})
+    opts = dict(t_active=count, step_state=state, t_range=(1, count), ksplit=2)
+    y, stat = g.run(x, epilogue="residual", residual=residual, stat_out=True, **opts)
+    product = bf16_to_f32(x).astype(np.float64) @ g.w.T
+    ref = _rbf(product + bf16_to_f32(residual))
+    assert check_against_oracle(y[:active], ref[:active]).ok_rounded()
+    expected = (y[:active].astype(np.float64) ** 2).reshape(active, -1, g.info.rows).sum(-1)
+    assert np.allclose(stat[:active], expected, rtol=1e-5)
+    assert np.all(y[active:] == 0) and np.all(stat[active:] == 0)
+    y, _ = g.run(x, epilogue="silu_mul", **opts)
+    blocks = product.reshape(count, -1, g.info.rows)
+    half = g.info.rows // 2
+    gate, up = blocks[:, :, :half], blocks[:, :, half:]
+    ref = _rbf((gate / (1 + np.exp(-gate)) * up).reshape(count, n // 2))
+    assert check_against_oracle(y[:active], ref[:active]).ok_rounded()
+    assert np.all(y[active:] == 0)

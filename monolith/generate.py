@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Generate with the step program on the GPU (plan M4): the prompt is fed in chunks of ``t_max`` tokens through a
-dynamic-T prefill program (T read from StepState per step, the last chunk shorter), then a decode program at
-``T = 1`` is replayed from one encode; all programs share weights, states, StepState and the ring, and tokens come
-back through the ring. With a drafter (design §5.8) the dynamic-T program carries the whole speculative round —
-verify pass, accept scan, state commit, draft pass, verify-length select — and is replayed for decode as well; the
-host only drains tokens.
+"""Generate on the GPU with separate prefill and decode programs. Prompt chunks default to 128 tokens;
+plain decode uses T=1 and speculative decode retains its small verification bound. The programs share weights,
+caches, recurrent state, StepState and the ring. The prefill program also ingests the drafter's context and
+bootstraps its first draft block; subsequent rounds run only through the small decode program.
 
     python -m monolith.generate --model ~/models/<ckpt> --pack <pack dir> --prompt "The capital of France is" -n 48
     python -m monolith.generate --model … --pack … --drafter ~/models/<drafter> --drafter-pack <dir> [--verify cost|threshold]
@@ -19,7 +17,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .compiler import compile_program
 from .core.profile import Profile
@@ -61,7 +59,7 @@ class Generation:
 
 
 class Session:
-    """A model + pack on a device: compiles a program per static T on demand and keeps the device buffers.
+    """A model + pack on a device: caches separate prefill and decode programs with shared persistent buffers.
 
     Sampling with a drafter is exact speculative sampling (design §5.8): the drafts are greedy, so the verifier that
     preserves the target's distribution draws ``y_k ~ p_t(· | prefix, d_1 … d_k)`` at every position with the
@@ -71,12 +69,13 @@ class Session:
     sampling mode of its own."""
 
     def __init__(self, model: Model, pack_dir: str, profile: Optional[Profile] = None, *, layout: Optional[StepStateLayout] = None,
-                 eos: int = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
+                 eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096, temperature: float = 0.0, top_k: int = 0, top_p: float = 0.0,
                  min_p: float = 0.0, seed: int = 0, autotune: bool = True, drafter: Any = None, drafter_pack: Optional[str] = None,
                  verify: str = "cost", verify_threshold: Optional[float] = None, verify_length: Optional[int] = None,
-                 barriers: str = "minimal", attention: Optional[str] = None, fast_math: bool = False, accelerator: Optional[str] = None) -> None:
+                 barriers: str = "minimal", attention: Optional[str] = None, fast_math: bool = False, accelerator: Optional[str] = None,
+                 prefill_chunk_size: int = 128) -> None:
         """``drafter`` (a ``Drafter`` built with the model's head) and its pack turn the session speculative: one
-        dynamic-T program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
+        small dynamic-T decode program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
         from .bench import profile_for_device
         from .runtime import _native as nt
 
@@ -97,7 +96,14 @@ class Session:
             bind_pack_formats(drafter, self.drafter_pack)
         if layout is None and drafter is not None:
             layout = StepStateLayout(t_max=max(8, drafter.gamma + 1), gamma_max=max(7, drafter.gamma))
-        self.layout = layout or StepStateLayout()
+        decode_layout = layout or StepStateLayout()
+        if not isinstance(prefill_chunk_size, int) or isinstance(prefill_chunk_size, bool) or prefill_chunk_size < 1:
+            raise ValueError("prefill_chunk_size must be a positive integer")
+        self.prefill_chunk_size = prefill_chunk_size
+        self.decode_t_max = decode_layout.t_max
+        # Both programs share one ABI and persistent state; their graph row bounds
+        # are independent. A large pending-token array does not enlarge decode ops.
+        self.layout = StepStateLayout(max(prefill_chunk_size, decode_layout.t_max), decode_layout.gamma_max)
         self.verify, self.verify_threshold, self.verify_length = verify, verify_threshold, verify_length
         self.barriers, self.attention, self.fast_math, self.accelerator = barriers, attention, fast_math, accelerator
         if accelerator is None and os.environ.get("MONOLITH_ACCELERATOR") in ("on", "off"):
@@ -106,7 +112,8 @@ class Session:
         self.seed = seed
         # temperature 0 = greedy (the argmax path); otherwise the Gumbel-max sampler with the thresholds
         model.sampler = GreedySampler(prefix="sampler.") if temperature <= 0 else StochasticSampler(temperature, top_k, top_p, min_p, seed, prefix="sampler.")
-        self.engines: Dict[int, Any] = {}
+        self.engines: Dict[Any, Any] = {}
+        self._last_engine = None
         self.buffers: Optional[Dict[str, Any]] = None
         self.tuner = None
         if autotune:
@@ -116,17 +123,29 @@ class Session:
             self.tuner = Autotuner(self.dev, info.gpu_cores, str(Path(pack_dir) / f"autotune.{chip}.json"))
 
     def engine(self, t: int):
-        """The engine for a static ``T = t``; ``t = 0`` is the dynamic-T program (prefill, and with a drafter the
-        whole speculative round, decode included)."""
+        """Decode/verification program: static ``t`` or the small dynamic verification bound at ``t=0``."""
+        if self.drafter is not None and t != 0:
+            raise ValueError("Session: a speculative session decodes with engine(0)")
+        return self._engine(t, self.decode_t_max if t == 0 else t, dynamic=(t == 0))
+
+    def prefill_engine(self, prompt_tokens: Optional[int] = None):
+        """A separate graph/ICB for prompt chunks; short prompts use a smaller bucket."""
+        bound = self.prefill_chunk_size
+        if prompt_tokens is not None:
+            bound = min(bound, 1 << (max(1, prompt_tokens) - 1).bit_length())
+        # The last prefill pass bootstraps drafting as well as ingesting the prompt.
+        bound = max(bound, self.drafter.gamma + 1 if self.drafter is not None else 1)
+        return self._engine(f"prefill.{bound}", bound, dynamic=True, prefill=True)
+
+    def _engine(self, key, bound: int, *, dynamic: bool, prefill: bool = False):
         from .runtime import Engine
 
-        if self.drafter is not None and t != 0:
-            raise ValueError("Session: a speculative session runs everything in the dynamic-T program (engine(0))")
-        if t not in self.engines:
-            prog = compile_program(self.model, self.pack, self.profile, t=None if t == 0 else t, dynamic_t=(t == 0), eos=self.eos,
-                                   ring_capacity=self.ring_capacity, layout=self.layout, tuner=self.tuner, drafter=self.drafter,
+        if key not in self.engines:
+            prog = compile_program(self.model, self.pack, self.profile, t=bound, dynamic_t=dynamic, eos=self.eos,
+                                   ring_capacity=self.ring_capacity, layout=self.layout, tuner=None if prefill else self.tuner, drafter=self.drafter,
                                    drafter_pack=self.drafter_pack, verify=self.verify, verify_threshold=self.verify_threshold,
-                                   verify_length=self.verify_length, barriers=self.barriers, attention=self.attention, accelerator=self.accelerator)
+                                   verify_length=self.verify_length, barriers=self.barriers, attention=self.attention, accelerator=self.accelerator,
+                                   prefill=prefill)
             if self.tuner is not None:
                 self.tuner.save(self.dev.info().name)
             eng = Engine(prog, self.dev, buffers=self.buffers, fast_math=self.fast_math)
@@ -134,8 +153,8 @@ class Session:
                 self.buffers = dict(eng.buffers)
             else:
                 self.buffers.update(eng.buffers)
-            self.engines[t] = eng
-        return self.engines[t]
+            self.engines[key] = eng
+        return self.engines[key]
 
     def reset(self) -> None:
         """Zero the states, StepState and ring for a new sequence (the weights stay mapped)."""
@@ -149,9 +168,10 @@ class Session:
         if p < 1:
             raise ValueError("the prompt must have at least one token")
         self.reset()
-        t_max = self.layout.t_max
+        t_max = self.prefill_chunk_size
         chunks = [list(prompt_ids[i: i + t_max]) for i in range(0, p, t_max)]
-        pre = self.engine(0)
+        pre = self.prefill_engine(p)
+        self._last_engine = pre
         cap = pre.program.context_capacity                    # the last new token is sampled at position p + max_new_tokens - 2
         if cap and p + max_new_tokens - 1 > cap:
             raise ValueError(f"generate: a {p}-token prompt plus {max_new_tokens} new tokens exceeds the context capacity of {cap} positions "
@@ -175,10 +195,13 @@ class Session:
         if max_new_tokens > 1 and not r1.done:
             if self.drafter is None:
                 dec = self.engine(1)
+                self._last_engine = dec
                 r2 = dec.run(max_new_tokens - 1, steps_per_cb=steps_per_cb, in_flight=in_flight)
                 tokens += r2.tokens
                 dec_ms, dec_wall, host, steps = r2.gpu_ms, r2.wall_ms, r2.host_busy_ms, r2.steps
             else:
+                dec = self.engine(0)
+                self._last_engine = dec
                 done = False                               # every step commits ≥ 1 token: the remaining count bounds the steps
                 while len(tokens) < max_new_tokens and not done:
                     need = max_new_tokens - len(tokens)
@@ -187,16 +210,16 @@ class Session:
                     # (~0.8 ms for the 8B's 387 dispatches), so a round's command buffers hold one step with two in
                     # flight: measured 1 % faster per token than 8 × 3 on the 8B (decode-kernels.md §9), the host
                     # busy for 4 ms of a 128-token generation
-                    r2 = pre.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
+                    r2 = dec.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
                     tokens += r2.tokens
                     dec_ms += r2.gpu_ms; dec_wall += r2.wall_ms; host += r2.host_busy_ms; steps += r2.steps
                     done = r2.done or r2.steps == 0
         if len(tokens) < max_new_tokens:
-            err = int(pre.state()["error"])                       # 1: the ring overflowed; 2: the context filled (the pump's over-run
+            err = int(self._last_engine.state()["error"])        # 1: the ring overflowed; 2: the context filled (the pump's over-run
             if err:                                               # past a request that fits sets 2 harmlessly, so only a short result is one)
                 raise RuntimeError(f"generate: the program stopped with error {err} after {len(tokens)} of {max_new_tokens} tokens "
                                    f"({'the token ring overflowed' if err == 1 else 'the context capacity was reached'})")
-        stats = self._accept_stats(pre, len(chunks)) if self.drafter is not None else None
+        stats = self._accept_stats(self._last_engine, len(chunks)) if self.drafter is not None else None
         if stats is not None:
             steps = len(stats[0])          # the decode steps that ran: the pump's count includes the steps queued behind `done`, which returned at once
         gen = Generation(tokens[:max_new_tokens], prefill_ms, dec_ms, dec_wall, host, steps, decode_tokens=min(len(tokens), max_new_tokens) - n_pre)
@@ -221,7 +244,7 @@ class Session:
                 [[float(x) for x in c[:g]] for _, c in rows])
 
     def read(self, name: str) -> bytes:
-        eng = next(iter(self.engines.values()))
+        eng = self._last_engine or next(iter(self.engines.values()))
         return eng.read(name)
 
     def bytes_per_step(self, t: Optional[int] = None) -> int:
@@ -262,7 +285,7 @@ class Session:
         return line
 
 
-def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos: Optional[int] = None, drafter_dir: Optional[str] = None,
+def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos: Optional[Union[int, Sequence[int]]] = None, drafter_dir: Optional[str] = None,
                  drafter_pack: Optional[str] = None, drafter_kind: str = "dspark", sts_path: Optional[str] = None,
                  drafter_options: Optional[Dict[str, Any]] = None, **options: Any) -> Session:
     """The session for a checkpoint directory (+ optionally a drafter's: its kind names the ``Drafter`` plugin;
@@ -276,7 +299,7 @@ def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos:
     model = cls.from_checkpoint(model_dir, max_context=max_context)
     if eos is None:
         e = getattr(model.config, "eos_token_id", None)
-        eos = e[0] if isinstance(e, list) and e else (e if isinstance(e, int) else -1)
+        eos = e if isinstance(e, (int, list)) else -1
     drafter = None
     if drafter_dir is not None:
         from .spec import DRAFTERS
@@ -296,6 +319,7 @@ def main(argv=None) -> int:
     ap.add_argument("--prompt", default="The capital of France is")
     ap.add_argument("-n", "--max-new-tokens", type=int, default=48)
     ap.add_argument("--max-context", type=int, default=4096)
+    ap.add_argument("--prefill-chunk-size", type=int, default=128, help="prompt tokens per prefill pass (independent of decode/verification)")
     ap.add_argument("--no-eos", action="store_true", help="ignore the model's EOS (fixed-length generation)")
     ap.add_argument("--temperature", type=float, default=0.0, help="0 = greedy; otherwise Gumbel-max sampling on the GPU")
     ap.add_argument("--top-k", type=int, default=0)
@@ -327,7 +351,7 @@ def main(argv=None) -> int:
                         drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind, verify=a.verify,
                         verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts, barriers=a.barriers,
                         drafter_options={"gamma": a.draft_gamma} if a.draft_gamma is not None else None,
-                        attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator)
+                        prefill_chunk_size=a.prefill_chunk_size, attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator)
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0
     print(tok.decode(gen.tokens))

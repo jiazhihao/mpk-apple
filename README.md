@@ -24,6 +24,8 @@ weights from a block-lane-major pack — not one never-returning kernel with spe
 
 Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); §4 of the hardware report is the checklist for a chip not yet measured.
 
+To expose a local model through `/v1/chat/completions` for OpenAI-compatible clients, see [the serving guide](docs/serving.md).
+
 Status: design and plan drafted 2026-09-19, revised 2026-09-22 (M5 Pro measurements) and 2026-09-23 (build phase,
 DSpark). The hardware-characterization half of M0 is done for the M3 Pro (13 probes) and the M5 Pro (16 probes,
 including the first real FP8/NVFP4 decode kernels and an M5 `matmul2d` path). Engine code starts with the PRs listed

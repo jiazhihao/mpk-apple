@@ -67,7 +67,7 @@ kernel void gemv_bf16_rows(device const bfloat4* w [[buffer(0)]], device const f
   const uint phys=k*4u,ln=(phys%(32u*WPW))/WPW,j=phys/(32u*WPW),col=ln*KL+j*WPW+phys%WPW;
   const float4 raw=float4(xp[col/4u]),nw=*(device const float4*)(norm_w+col);
   float4 x;
-  for(uint e=0;e<4;e++)x[e]=round_bf16(raw[e]*rn*nw[e]);
+  for(uint e=0;e<4;e++)x[e]=round_bf16(norm_scale(raw[e], rn, nw[e]));
 #else
   const float4 x=float4(xp[bf16_slot4(k)]);
 #endif
@@ -99,7 +99,7 @@ kernel void gemv_bf16_rows(device const bfloat4* w [[buffer(0)]], device const f
 #if EPILOGUE == 2
   const uint o=block*(R/2u)+rr,nout=p.n_rows/2u;
   bool writer=rr<R/2u;
-  float v=silu_f(acc[r])*vals[(rr+R/2u)%R];
+  float v=silu_mul(acc[r], vals[(rr+R/2u)%R]);
 #else
   const uint o=block*R+rr,nout=p.n_rows;
   bool writer=true;

@@ -80,19 +80,19 @@ def test_greedy_tokens_match_the_golden(session):
           f"{1000 / gens[1].ms_per_token:.0f} tok/s, host busy {100 * gens[1].host_busy_ms / max(gens[1].decode_wall_ms, 1e-9):.1f} %")
 
 
-def test_chunked_prefill_matches_the_long_golden(session):
-    """A prompt longer than one step goes through the dynamic-T prefill program in chunks of t_max (8, 8, 5 tokens
-    here), then decode; the greedy tokens must equal the HF golden of the long prompt."""
+def test_large_prefill_matches_the_long_golden(session):
+    """A prompt longer than the decode bound goes through the separate prefill program, then decode;
+    the greedy tokens must equal the HF golden of the long prompt."""
     sess, _ = session
     with open(str(GOLDEN) + "-long.json") as f:
         golden = json.load(f)
     ids = golden["prompt_ids"]
-    assert len(ids) > sess.layout.t_max
+    assert len(ids) > sess.decode_t_max
     gen = sess.generate(ids, len(golden["gen_ids"]))
     assert gen.tokens == golden["gen_ids"], (gen.tokens[:8], golden["gen_ids"][:8])
     st = sess.engines[1].state()
     assert st["position"] == len(ids) + len(golden["gen_ids"]) - 1 and st["prefill_left"] == 0
-    print(f"\nchunked prefill of {len(ids)} tokens ({-(-len(ids) // sess.layout.t_max)} chunks): {gen.prefill_ms:.1f} ms; "
+    print(f"\nchunked prefill of {len(ids)} tokens ({-(-len(ids) // sess.prefill_chunk_size)} chunks): {gen.prefill_ms:.1f} ms; "
           f"{len(gen.tokens)} greedy tokens equal the long golden")
 
 

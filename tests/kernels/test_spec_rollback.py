@@ -125,7 +125,8 @@ def test_context_capacity_guard(packs):
     assert st["position"] <= 30 and st["drafter_ctx_len"] <= 30 and st["error"] in (0, 2)
     # a roomier drafter takes the target's capacity
     wide, _, _, _ = build(ddir, target_lm_head=model.lm_head, max_context=256)
-    wide_s = Session(model, str(tdir / "pack"), eos=-1, autotune=False, drafter=wide, drafter_pack=str(ddir / "pack"), verify="threshold")
+    pack_model(wide, str(ddir), str(ddir / "wide-pack"), PackLayout(rows=16))
+    wide_s = Session(model, str(tdir / "pack"), eos=-1, autotune=False, drafter=wide, drafter_pack=str(ddir / "wide-pack"), verify="threshold")
     assert wide_s.engine(0).program.context_capacity == 64
     assert wide_s.generate(ids, 60).tokens == ref.tokens
 
