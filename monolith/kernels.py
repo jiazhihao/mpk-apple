@@ -86,6 +86,8 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
         g["GROUP_SEG"] = str(math.gcd(math.gcd(int(f.weights_per_word), info.k // 32), int(group)))
     if info.lanes_per_word > 1:
         g["LANES_PER_WORD"] = f"{info.lanes_per_word}u"                     # 2 or 4 lanes share a payload word (blm.py)
+    if s and info.scale_dtype == "f16":
+        g["SCALE_F16"] = "1"                                                # int4_affine: the pairs in the checkpoint's F16, not BF16
     return g
 
 

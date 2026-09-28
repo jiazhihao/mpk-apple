@@ -58,6 +58,12 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       lane-order, parity and T-cost results are Apple10-only stays open), the plain and speculative baselines on the
       M3 Pro (#3, #5 — the 27B's baselines wait for a machine that hosts it), the M4 measurement (#8 — the hardware
       report §4 keeps the checklist for any chip not yet measured).
+* **Dropped 2026-09-27 (nothing this M5 Pro can host):** the 27B end-to-end gates (#31 — the small-model golden is in CI
+      and the MLX comparison is measured on the 8B), the on-policy drafter retraining (#42 — the #103 gate is met with
+      the public drafters), the Max-class probe re-runs (#43), the real MoE checkpoint (#46 — the package is built and
+      proven on a synthetic one; the smallest real checkpoint we read exceeds the GPU working set), the other M5 chips'
+      profiles (#49) and MSL 4.1 (#52, macOS 27). The M5 contingency tasks (#100–#103) closed the same day as done: the
+      gate met at 8.97 (LM drafter) / 9.14 (DSpark) against mlx-lm's 9.24. Open: the roadmap issue and #113 (PR #114).
 * [ ] **Drafters.** Fetch the Apache-2.0 DSpark drafters for the target — `DimInfer/Qwen3.8-27B-Dspark-v1` (safetensors
       + GGUF Q8/BF16, trained against the Q4_K_M target) and `gittensor-model-hub/Qwen3.8-27B-DSpark-NVFP4` (1.3 GB,
       MLP/o_proj in NVFP4, trained on-policy against an NVFP4 target) — and `Dogacel/Qwen3-8B-DSpark` for model 2.

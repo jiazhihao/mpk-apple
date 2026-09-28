@@ -165,11 +165,17 @@ class Autotuner:
         return choice
 
     # ---- the tensor-ops tile (#51) -------------------------------------------------------------------------------
-    def tune_gemm(self, info: PackInfo, tm: int, epilogue: Optional[str], *, force: bool = False) -> Choice:
+    def tune_gemm(self, info: PackInfo, tm: int, epilogue: Optional[str], *, force: bool = False, permute: bool = False,
+                  norm_fed: bool = False, stat_parts: int = 1) -> Choice:
         """The tile's geometry: one or two threadgroups per core (the sweep in decode-kernels.md §6 found either,
         by format) or the K-split (one tile per threadgroup of 2 or 4 SIMD-groups, for the shapes whose tiles cannot
-        occupy the crew), timed on synthetic data like the GEMV variants."""
+        occupy the crew), timed on synthetic data like the GEMV variants. ``permute``: an ``x_permute`` dispatch per
+        tile (the program's, when the producer does not write the input permuted; ``norm_fed`` = the norm applied on
+        the way from ``stat_parts`` partials) — the tile-versus-shader decision must see the whole path, and a permute
+        run once before every copy hid it."""
         key = f"gemm3|{info.format}|{info.n}x{info.k}|R{info.rows}|{info.lane_order}|{info.scale_placement}|TM{tm}|{epilogue or 'plain'}"
+        if permute:
+            key += "|perm" + (f"|norm|P{int(stat_parts)}" if norm_fed else "")
         if key in self.choices and not force:
             c = self.choices[key]
             return Choice(dict(c["macros"]), c["grid_mode"], False, c.get("ms", 0.0), c.get("default_ms", 0.0))
@@ -183,7 +189,7 @@ class Autotuner:
             wbuf.write(data, c * len(data))
         macros = kernels.gemm_macros(pinfo, tm=tm, out_bf16=True, epilogue=epilogue)
         tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
-        lib = nt.Library(self.dev, kernels.gemm_source(info.format), dict(macros, **kernels.x_permute_macros(False)), language_version=kernels.MSL_TENSOR_OPS)
+        lib = nt.Library(self.dev, kernels.gemm_source(info.format), dict(macros, **kernels.x_permute_macros(permute and norm_fed)), language_version=kernels.MSL_TENSOR_OPS)
         pso, ppso = nt.Pipeline(lib, "gemm_tile"), nt.Pipeline(lib, "x_permute")
         psos = {"crew": pso, "crew2": pso}
         # the K-splits, each with the scale cache where it fits and without it (the cache's registers cost more than the
@@ -204,6 +210,10 @@ class Autotuner:
         xb = f32_to_bf16(rng.uniform(-1, 1, size=(tm, info.k)).astype(np.float32))
         xbuf, rsbuf = nt.Buffer(self.dev, xb.tobytes()), nt.Buffer(self.dev, row_scales.tobytes())
         xp = nt.Buffer(self.dev, tm * info.k * 2)
+        parts = max(1, int(stat_parts))
+        stat = nt.Buffer(self.dev, tm * 4 * parts)
+        stat.write(np.full(tm * parts, float(info.k) / parts, np.float32).tobytes(), 0)
+        nw = nt.Buffer(self.dev, np.ones(info.k, np.float32).tobytes())
         n_out = info.n // 2 if epilogue == "silu_mul" else info.n
         ybuf = nt.Buffer(self.dev, tm * n_out * 2)
         res = nt.Buffer(self.dev, tm * info.n * 2)
@@ -214,11 +224,20 @@ class Autotuner:
             n_sg, n_tg, tg = kernels.gemm_geometry(mode, n_tiles, self.cores, min(384, mpso.max_threads_per_threadgroup))
             grid = (n_tg, 1, 1)
             prm = kernels.gemm_params(info.n, n_tiles, n_sg, tm, n_blocks=pinfo.n_blocks)
-            pprm = kernels.x_permute_params(info.k, tm, tm, wpw, tk)
-            ds = [nt.Dispatch().pipeline(ppso).buffer(0, xbuf).buffer(3, xp).bytes(4, pprm).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier()]
+            pprm = kernels.x_permute_params(info.k, tm, tm, wpw, tk, parts if (permute and norm_fed) else 1, 1e-6)
+
+            def perm_dispatch():
+                pd = nt.Dispatch().pipeline(ppso).buffer(0, xbuf).buffer(3, xp).bytes(4, pprm).grid(tm * kernels.GEMM_PERM_SG).threadgroup(32).barrier()
+                if permute and norm_fed:
+                    pd.buffer(1, stat).buffer(2, nw)
+                return pd
+
+            ds = [] if permute else [perm_dispatch()]                # without the permute in the timing it runs once, ahead of the copies
             for c in range(copies):
+                if permute:
+                    ds.append(perm_dispatch())                        # the program's: one permute per tile
                 d = (nt.Dispatch().pipeline(mpso).buffer(0, wbuf, c * len(data)).buffer(1, rsbuf).buffer(2, xp).buffer(3, ybuf).bytes(4, prm)
-                     .grid(*grid).threadgroup(tg, 1, 1))
+                     .grid(*grid).threadgroup(tg, 1, 1).barrier())
                 if epilogue == "residual":
                     d.buffer(7, res)
                 ds.append(d)

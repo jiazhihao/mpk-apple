@@ -54,6 +54,14 @@ DROPPED = [
     ("2026-09-25", 3, "M0: plain-decode baselines on the M3 Pro (mlx-lm, llama.cpp)", "the M3 Pro is off the roadmap; the 27B's baselines wait for a machine that hosts it"),
     ("2026-09-25", 5, "M0: speculative baseline — llama.cpp draft-dspark on the M3 Pro", "the M3 Pro is off the roadmap; the 27B's speculative baseline waits for a machine that hosts it"),
     ("2026-09-25", 8, "M0: measure an M4-family Mac", "the M4 family is off the roadmap; the hardware report §4 keeps the checklist for any new chip"),
+    ("2026-09-27", 31, "M4: end-to-end gates — small-model golden in CI, 27B reduced-layer and full greedy match, MLX parity, host < 5 %",
+     "the small-model golden is in CI and the MLX comparison is measured on the 8B; the 27B rows need a machine that hosts the 27B"),
+    ("2026-09-27", 42, "M6 (dependency): retrain a drafter on-policy if acceptance disappoints", "the #103 gate is met with the public drafters; retraining needs a GPU box"),
+    ("2026-09-27", 43, "M7: re-run p10 and p6b on Max-class parts and small models", "needs Max-class parts; the M5 Pro is the only machine"),
+    ("2026-09-27", 46, "M8: model 3 — a Qwen3.5-MoE-class model (router + expert GEMV via GPU-resident ids)",
+     "built and proven on a synthetic checkpoint; the smallest real MoE checkpoint we read (~18.5 GB resident) exceeds this machine's GPU working set"),
+    ("2026-09-27", 49, "M9: profiles and autotune on M5, M5 Pro/Max", "the M5 Pro's profile is the writer's; the other M5 chips need their machines"),
+    ("2026-09-27", 52, "M9: MSL 4.1 on macOS 27", "waits for macOS 27"),
 ]
 
 def T(ms, title, labels, context, work, done, refs):
@@ -432,8 +440,9 @@ def master_body(numbers, closed=()):
         "| M9 M5 family tuning | per-chip results next to each chip's bound | 3 ew |",
         "",
         "Critical path: M0 → M1 → M3 → M4 → M5 → M6. Machine: an M5 Pro (24 GB: characterization, kernels, models up to ~18 GB resident).",
-        "The M3 Pro (36 GB, the machine that hosted the 27B) and the M4 measurements were dropped from the roadmap on 2026-09-25 (the",
-        "tasks under *Dropped* below); the 27B gates (#31, #36, #40's 27B rows) wait for a machine that hosts it. Conventions: standalone",
+        "The M3 Pro (36 GB, the machine that hosted the 27B) and the M4 measurements were dropped from the roadmap on 2026-09-25, and on",
+        "2026-09-27 every task this M5 Pro cannot host (the 27B gates, the MoE checkpoint, other chips, macOS 27, a GPU box — the tasks",
+        "under *Dropped* below); they reopen with the machine. Conventions: standalone",
         "repo (design D15), model-agnostic by construction (D16, §5.14), DSpark not the MTP head (D10).",
         "",
         "## Tasks",
@@ -443,6 +452,8 @@ def master_body(numbers, closed=()):
         for t in TASKS:
             if t["milestone"] == key:
                 n = numbers.get(t["title"])
+                if n in {d[1] for d in DROPPED}:
+                    continue                                                    # listed under Dropped below, not ticked as done
                 box = "[x]" if n in closed else "[ ]"
                 lines.append(f"- {box} #{n} {t['title']}" if n else f"- [ ] {t['title']}")
     if DROPPED:

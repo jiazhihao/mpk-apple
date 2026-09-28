@@ -120,14 +120,17 @@ def accelerator_plan(shader: Mapping[str, Mapping[int, float]], tile: Mapping[st
 
 def attention_choice(v1: Mapping[Any, float], v2: Mapping[Any, float], rep: int = 4, v3: Optional[Mapping[Any, float]] = None) -> Tuple[str, str]:
     """``(attention, why)`` from the kernels' ms per (context, T). With v3 measured: ``auto`` (= v3, the emitter's rule)
-    when it beats v1 and, where measured, v2 at every point by more than the margin; otherwise — or without v3 — the
-    v1 / v2 rule: ``v2`` when it wins at every point, ``v1`` otherwise."""
+    when it was measured at every point v1 was and beats v1 and, where measured, v2 at each by more than the margin;
+    otherwise — or without v3 — the v1 / v2 rule: ``v2`` when it wins at every point, ``v1`` otherwise."""
     base, why = _attention_choice_v12(v1, v2, rep)
     if not v3:
         return base, why + "; v3 not measured"
     common = [k for k in v3 if k in v1]
     if not common:
         return base, why + "; v3 measured at no common point"
+    missing = [k for k in v1 if k not in v3]
+    if missing:                                                          # a point the writer could not run: auto would use v3 there too
+        return base, why + "; v3 not measured at " + ", ".join(str(k) for k in missing)
     if all(v3[k] < v1[k] * (1 - NOISE) and (k not in v2 or v3[k] < v2[k] * (1 - NOISE)) for k in common):
         return "auto", "v3 faster than v1" + (" and v2" if any(k in v2 for k in common) else "") + " at every point: " + ", ".join(
             f"{k}: {v3[k]:.3f} vs v1 {v1[k]:.3f}" + (f" / v2 {v2[k]:.3f}" if k in v2 else "") + " ms" for k in common)
