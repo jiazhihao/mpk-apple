@@ -15,6 +15,7 @@ dependencies = ["numpy>=1.26"]
 # Oracles, goldens and weight loading. The contract tier and the runtime never need these.
 oracle = ["torch>=2.4", "safetensors>=0.4", "transformers>=5.0", "huggingface_hub>=0.30"]
 dev = ["pytest>=8"]
+serve = ["fastapi>=0.115", "pydantic>=2.9", "uvicorn>=0.30", "transformers>=5.0", "safetensors>=0.4"]
 
 [tool.setuptools.packages.find]
 include = ["monolith*"]
