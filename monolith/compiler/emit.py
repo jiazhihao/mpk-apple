@@ -404,12 +404,28 @@ def gemm_tm(t: int) -> int:
     raise ValueError(f"gemm_tile: T = {t} exceeds the largest tile (32 rows)")
 
 
+def _bf16_rows(info: PackInfo) -> bool:
+    """Two-row SIMD projection with normalization folded into activation loads."""
+    return (info.format == "bf16" and info.k >= 1024 and info.k % 256 == 0
+            and info.rows in (8, 16) and info.lane_order == "interleaved16")
+
+
+def _nvfp4_rows(info: PackInfo) -> bool:
+    """Measured two-row SIMD path; uses the accelerator-compatible input order."""
+    return (info.format == "nvfp4" and info.k >= 4096 and info.k % 1024 == 0
+            and info.rows in (8, 16) and info.lane_order == "interleaved16")
+
+
 def _accel_plan(ctx: _Ctx, info: PackInfo, op: Op, t_c: int, t_src: int, variants: List[int]) -> Tuple[List[int], Optional[Tuple[int, int]]]:
     """Split a GEMV's row counts between the shader variants and the tensor-ops tile: with the accelerator on and the
     slab's format at or above its ``accel_min_t`` (default 2), the T in (min_t − 1, t_c] go to one tile dispatch at
     TM = gemm_tm(t_c); the shader keeps the variants below (T = 1 with the default). Static row counts take the tile
     whole when they reach min_t; a program without per-T variants (chunked prefill) is split the same way."""
     variants = _prune_variants(ctx, variants, t_src)
+    if ctx.accelerator == "on" and t_c == 1 and (_nvfp4_rows(info) or _bf16_rows(info)):
+        rr = op.attrs.get("row_range")
+        if rr is None or int(rr[0]) % kernels.GEMM_TN == 0:
+            return [], (0, 1)
     if ctx.accelerator != "on" or t_c < 2:
         return variants, None
     min_t = int(ctx.accel_min_t.get(COST_FORMAT.get(info.format, info.format), 2))
@@ -533,6 +549,9 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     tn, tk = int(macros["TN"].rstrip("u")), int(macros["TK"].rstrip("u"))
     small_bf16 = (info.format == "bf16" and info.k == 1024 and info.lane_order == "interleaved16"
                   and hi == 4 and tn == 16)
+    nvfp4_rows = _nvfp4_rows(info) and hi == 1
+    bf16_rows = _bf16_rows(info) and hi == 1
+    direct_norm = bf16_rows and stat is not None
     tmac = dict(ctx.t_macros(hi, t_src))
     if predicated:
         tmac["T_LO"], tmac["T_HI"] = str(lo), str(hi)
@@ -541,7 +560,10 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     xb = ctx.buf(x)
     key = (xb, stat.name if stat is not None else None, tm, wpw, tk, lo, hi, t_src)
     xp = ctx.perm_scratch.get(key)
-    if xp is None:
+    if direct_norm:
+        tmac.update(DIRECT_NORM="1", STAT_PARTS=f"{ctx.stat_parts.get(stat.name, 1)}u",
+                    EPS=f"{float(op.attrs.get('eps', 1e-6))}f")
+    elif xp is None:
         xp = ctx.scratch(f"{y.name}.xp", tm * kdim * 2)
         ctx.perm_scratch[key] = xp
         pk = ctx.kernel(f"x_permute|{info.format}", kernels.gemm_source(info.format), "x_permute",
@@ -567,25 +589,31 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     y_binding = (fused[0], 0) if fused else ctx.buf(y)                                    # consumer reads x' from here
     if fused:
         tmac = dict(tmac, **fused[1])
-    function = "gemv_bf16_small" if small_bf16 else "gemm_tile"
+    function = ("gemv_nvfp4_rows" if nvfp4_rows else "gemv_bf16_rows" if bf16_rows else
+                "gemv_bf16_small" if small_bf16 else "gemm_tile")
     n_tiles = -(-n_rows // tn)
     n_sg, grid, tg = ctx.geometry(mode, n_tiles)
     if small_bf16:
         n_sg, grid, tg = n_blocks * info.rows // 2, (n_blocks, 1, 1), (16 * info.rows, 1, 1)
         mode = "bf16_simd16"
+    elif nvfp4_rows or bf16_rows:
+        n_sg, grid, tg = n_blocks * info.rows // 2, (n_blocks, 1, 1), (16 * info.rows, 1, 1)
+        mode = f"{info.format}_rows2"
     prm = ctx.params("gemm", kernels.gemm_params(n_rows, n_tiles, n_sg, hi, tile0=block0 * info.rows // tn, n_blocks=n_blocks))
     k = ctx.kernel(f"gemm_tile|{info.format}", kernels.gemm_source(info.format), function, dict(macros, **tmac),
                    language_version=kernels.MSL_TENSOR_OPS,
                    static_params=[("gemm", "p", prm)] if info.format in ("int4_affine", "nvfp4", "bf16") else ())
-    bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, xp, 0), (3, *y_binding), (4, prm, 0)]
+    bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, *(xb if direct_norm else (xp, 0))), (3, *y_binding), (4, prm, 0)]
     writes = [3]
+    if direct_norm:
+        bindings += [(5, *ctx.buf(stat)), (6, *ctx.windows[nw.name])]
     if residual is not None:
         bindings.append((7, *ctx.buf(residual)))
     if stat_out is not None:
         bindings.append((8, stat_out, 0))
         writes.append(8)
     ctx.add(k, bindings, grid, tg, f"{op.kind}:{w.name}", writes=writes, kind=op.kind, bytes=nbytes, format=info.format, n=n_rows, k=info.k,
-            accelerator=not small_bf16, tm=tm, perm_out=bool(fused), tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
+            accelerator=not (small_bf16 or nvfp4_rows or bf16_rows), tm=tm, perm_out=bool(fused), tile=[tn, tk], geometry=mode, t_variant=hi, t_range=[lo, hi] if predicated else None,
             variant_group=vgroup, sibling=bool(op.attrs.get("sibling")),
             row_range=[block0 * info.rows, n_rows] if op.attrs.get("row_range") is not None else None)
 

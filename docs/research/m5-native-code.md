@@ -848,3 +848,50 @@ CPU work but no useful wall-latency improvement: GDN T=1 176.10/176.22 µs,
 T=4 191.90/192.00; attention T=1 152.98/153.40 and T=8 163.12/164.55. The prototype
 was removed. Shader instrumentation also crashed in Metal's report-decoding path;
 no production correctness claim relies on that experimental submission path.
+
+## Two output rows per SIMD group at T=1
+
+A format/geometry specialization streams one NVFP4 quantization group per lane,
+reusing four activation vectors across two output rows. Two reduction chunks
+are unrolled; four chunks are slower. It consumes the existing matrix input
+permutation and both inline and block scale placements, without changing the
+packed weights. For compiled T=1, interleaved NVFP4 packs with K≥4096 divisible
+by 1024 and R=8/16 use this path. Other token counts retain their existing path.
+
+The native projection specializations report 53–58 registers, zero scratch and
+5,042–6,330 code bytes. The gate projection is 58 registers / zero scratch /
+6,296 bytes, versus the preceding scalar kernel's 93 / 48 / 8,180. This is
+compiler metadata, not a decoded M5 instruction listing. An isolated decode
+A/B rejects sign-bit half construction and paired-half conversion: 448.6 and
+436.0 µs/layer versus 410.7 for the existing magnitude/select decoding.
+
+The same-input MLX gate passes numerically at both contexts but still loses
+latency (seven alternating pairs, 32 steps, all 36 distinct layers streamed):
+
+| T | Context | MPK µs/layer | MLX µs/layer | Minimum layer cosine |
+|---:|---:|---:|---:|---:|
+| 1 | 128 | 410.78 | 391.13 | 0.999977 |
+| 1 | 1024 | 434.23 | 408.77 | 0.999955 |
+
+BF16 uses a related two-row specialization, folding RMS normalization into the
+activation loads when needed. The measured geometry is interleaved R=8/16,
+K≥1024 divisible by 256, compiled T=1. Normalized inputs retain their natural
+order; other inputs retain producer-fused permutation. The output epilogues
+preserve residual rounding, SiLU/multiply, permutation and statistics. Statistics
+use separate scratch from the gate/up exchange so writers cannot race readers.
+Separate five-pair kind A/Bs measure GDN 176.56→175.83 µs and attention 153.22→150.07 µs.
+The all-layer T=1 streaming comparison still loses to MLX, 168.78/166.48 µs at
+context 128 and 173.64/169.03 at 1024. Both numerical comparisons pass.
+
+Each new kernel passes 19 tests under Metal validation, including independent
+FP64 dot products, partial final blocks and nonzero row starts, inline/block
+scales or fused normalization, every row-count source, inactive/done/range
+predicates, output permutation, both output dtypes, residual rounding and fused
+statistics. The BF16 run also passes 13 barrier contracts. Raw results have
+`nvfp4_rows_native`, `fixed_nvfp4_rows`, `fixed_bf16_rows`, and `bf16_rows_ab`
+20260928 suffixes. These changes reduce the gap; they do not close the latency gate.
+
+All five selected real-model tests also pass with Metal validation: NVFP4
+prefill layers and the 48-token greedy golden, BF16 per-layer oracle, greedy
+golden twice, sampling reproducibility, and speculative rollback. The known
+long-prompt session-reuse issue #123 remains outside this passing selection.

@@ -47,6 +47,16 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
   quantized-checkpoint reader also follows MLX's `nvfp4` layout (codes eight per U32, E4M3 scales as U8), no code
   copied for that.
 
+- `kernels/gemv_nvfp4_rows.metal` — adapted from `mlx/backend/metal/kernels/fp_quantized.h`
+  @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): quantization-group dot products
+  reusing four activation vectors across output rows, extended for MPK's packed
+  weights, permuted activations, row ranges and epilogues. License: `third_party/MLX-LICENSE`.
+
+- `kernels/gemv_bf16_rows.metal` — adapted from `mlx/backend/metal/kernels/gemv.h`
+  @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): activation-vector reuse across
+  output rows, extended for packed BF16 weights, fused normalization and epilogues.
+  License: `third_party/MLX-LICENSE`.
+
 ## Original
 
 - `probes/` — original to this repository.

@@ -144,12 +144,12 @@ def _rbf(a):
 class Gemm:
     """One packed matrix and the dispatch plumbing for the tile's variants (mirrors the fused-GEMV harness)."""
 
-    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16", function="gemm_tile"):
+    def __init__(self, dev, fmt, n, k, tm, rows=16, seed=3, lane_order="interleaved16", function="gemm_tile", placement="inline"):
         self.dev, self.n, self.k, self.tm, self.fmt = dev, n, k, tm, fmt
         self.function = function
         rng = np.random.default_rng(seed)
         self.spec = random_spec(fmt, n, k, rng)
-        self.data, self.info, self.row_scales = pack_spec(self.spec, PackLayout(rows=rows, lane_order=lane_order))
+        self.data, self.info, self.row_scales = pack_spec(self.spec, PackLayout(rows=rows, lane_order=lane_order, scale_placement=placement))
         f = FORMATS.get(fmt)
         rs = self.row_scales.astype(np.float64)[:, None]
         self.w = _rbf((f.dequantize(self.spec) / rs).astype(np.float32)).astype(np.float64) * rs      # the BF16 operand × the tensor scale
@@ -188,7 +188,7 @@ class Gemm:
         n_sg, n_tg, tg = kernels.gemm_geometry(f"ksplit{ksplit}" if ksplit > 1 else "crew", n_tiles, self.dev.info().gpu_cores,
                                                min(384, pso.max_threads_per_threadgroup))
         n_blocks = -(-n_rows // self.info.rows)
-        if self.function == "gemv_bf16_small":
+        if self.function in ("gemv_bf16_small", "gemv_nvfp4_rows", "gemv_bf16_rows"):
             n_sg, n_tg, tg = n_blocks * self.info.rows // 2, n_blocks, 16 * self.info.rows
         n_out = n_rows // 2 if epilogue == "silu_mul" else n_rows
         xp = nt.Buffer(self.dev, self.tm * self.k * 2)
@@ -200,6 +200,11 @@ class Gemm:
             d0.buffer(1, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes())).buffer(2, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
         d1 = (nt.Dispatch().pipeline(pso).buffer(0, self.wbuf).buffer(1, self.rsbuf).buffer(2, xp).buffer(3, y)
               .bytes(4, kernels.gemm_params(n_rows, n_tiles, n_sg, t_act, tile0=tile0, n_blocks=n_blocks)).grid(n_tg).threadgroup(tg))
+        direct_norm = (extra_macros or {}).get("DIRECT_NORM") == "1"
+        if direct_norm:
+            d1.buffer(2, nt.Buffer(self.dev, x_bf16.tobytes()))
+            d1.buffer(5, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes()))
+            d1.buffer(6, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
         if epilogue == "residual":
             d1.buffer(7, nt.Buffer(self.dev, residual.tobytes()))
         so = None
@@ -208,7 +213,7 @@ class Gemm:
             d1.buffer(8, so)
         if step_state is not None:
             d0.buffer(15, st); d1.buffer(15, st)
-        r = nt.Queue(self.dev).run([d0, d1])
+        r = nt.Queue(self.dev).run([d1] if direct_norm else [d0, d1])
         assert not r.error, r.error
         raw = y.read(0, self.tm * n_out * (2 if out_bf16 else 4))
         out = bf16_to_f32(np.frombuffer(raw, dtype=np.uint16)).reshape(self.tm, n_out) if out_bf16 else np.frombuffer(raw, dtype=np.float32).reshape(self.tm, n_out)

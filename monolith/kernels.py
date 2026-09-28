@@ -219,6 +219,9 @@ def gemm_source(fmt: str) -> str:
     src = PRELUDE + PERM_OUT_MSL + FORMATS.get(fmt).msl_decode + "\n" + template("gemm_tile.metal")
     if fmt == "bf16":
         src += "\n" + template("gemv_bf16_small.metal")
+        src += "\n" + template("gemv_bf16_rows.metal")
+    if fmt == "nvfp4":
+        src += "\n" + template("gemv_nvfp4_rows.metal")
     return src
 
 
