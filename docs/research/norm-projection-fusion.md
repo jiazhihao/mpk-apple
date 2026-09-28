@@ -71,3 +71,64 @@ python tools/bench/layer_fixed_vs_mlx.py --model CHECKPOINT --pack PACK \
 requests finite-output sanity while recording the measured cosine; the default
 remains 0.999. `--commute-norm` without `--norm-ab` compares only fused Monolith
 against MLX. No claim is made that every individual layer beats MLX.
+
+## Why Qwen 8B regresses
+
+[M] Follow-up at T=8/context 128, all 36 layers, using the **same legacy
+block-scale/lane-order NVFP4 pack as the original comparison**. This is not a
+claim about every pack layout. The fresh paired run reproduces the regression:
+462.21 → 467.27 µs/layer (+1.10%).
+[Raw samples, profiles and native metadata](../../tools/bench/results/apple-m5-pro-20c_commute-norm-diagnosis.jsonl).
+
+The dominant cost is repeating the RMS-statistic reduction in every output tile:
+
+- Hidden width 4096 produces 256 partial sums per token. QKV has 384 output tiles;
+  gate/up has 1,536. Each tile independently reduces the same token statistics.
+- At T=8, a typical interior layer therefore reads **15 MiB of logical statistic
+  data**, versus **256 KiB** in the original two normalization/permutation
+  dispatches (16 SIMD-groups per token each): **60×**. These are logical loads,
+  largely cache-reused, not measured DRAM traffic.
+- Qwen 0.6B has 64 partials, 256 QKV tiles and 384 gate/up tiles: only **1.25 MiB**
+  of fused statistic reads. The 8B case does **12×** as much of this work while
+  still removing just two dispatches.
+- The added reduction runs after the K-split join, in the sole writing SIMD-group
+  of each eight-SIMD-group threadgroup. It extends the projection's final phase.
+
+Separate-encoder timestamp profiles localize the cost (mean µs/layer, five-run
+per-op minima; their sums are not an ICB wall-time measurement):
+
+| Work | Original | Fused | Change |
+|---|---:|---:|---:|
+| Normalization/permutation | 9.83 | 0.13 | -9.69 |
+| QKV | 56.38 | 60.42 | +4.03 |
+| Gate/up | 205.93 | 214.94 | +9.01 |
+| Output + down producers | 158.29 | 160.13 | +1.84 |
+
+Controlled fixed-replay ablations preserve the final output **bit-for-bit**.
+Twelve rotated/reversed repetitions × 48 replays give these minima:
+
+| Fused path control | µs/layer | Saving from fused |
+|---|---:|---:|
+| Full fusion | 464.78 | — |
+| Reuse the already-computed gamma-scaled inputs; omit producer work | 463.07 | 1.71 |
+| Reuse exact FP32 sums; replace 256 partials with one sum per token | 455.50 | 9.28 |
+| Both controls | 452.05 | 12.74 |
+
+The cached controls are diagnostic only: arbitrary new inputs require new inputs
+and sums. In a valid prototype that **recomputes** each sum once on the GPU every
+replay, the extra dispatch/barriers are included: original 460.03, fused 464.99,
+compact-sum 459.76 µs/layer. Ranges overlap (original 460.03–464.05, compact
+459.76–473.66), so this establishes approximate break-even, not a reliable win.
+
+Native archives also argue against spilling as the main explanation. QKV's
+experimental register field changes 82 → 84; gate/up's 83 → 85. Both scratch
+fields remain zero, and shared memory stays 3,584 bytes. Compact sums retain the
+**same** 84/85 register fields while recovering most of the time. Native code
+sizes are QKV 4,422 → 5,134 → 4,650 bytes and gate/up 6,668 → 7,388 → 6,904 bytes
+(original → fused → compact). No decoded M5 instruction counts or exact occupancy
+are inferred from these fields.
+
+The next optimization should amortize statistic reduction across output tiles
+and avoid paying a replacement dispatch for each input. Removing gamma stores
+alone does not address most of the loss. The arithmetic identity is valid; this
+particular placement duplicates too much work on the wider model.
