@@ -79,7 +79,8 @@ def main():
         end = time.perf_counter()
         return dict(tokens=tokens, decode_wall_ms=(end-first)*1000, decode_tokens=len(tokens)-1,
                     request_wall_ms=(end-t0)*1000, accepted_tokens=accepted,
-                    tokens_per_step=len(tokens)/max(1, len(tokens)-accepted),
+                    # This counts non-draft tokens, not rounds: the final round can be partial.
+                    tokens_per_non_draft_token=len(tokens)/max(1, len(tokens)-accepted),
                     reported_generation_tps=response.generation_tps,
                     mlx_active_bytes=mx.get_active_memory(), mlx_peak_bytes=mx.get_peak_memory())
 

@@ -77,9 +77,9 @@ Each cell reports the three repetition-level decode means' range in ms/token. To
 | SmolLM2 1.7B BF16 | 3 | 14.355–14.401 | 14.835–14.881 | 0/4 | 1/4 |
 | SmolLM2 1.7B BF16 | 5 | 14.348–14.585 | 14.658–14.889 | 1/4 | 1/4 |
 
-These are measured generation-throughput comparisons under matched configurations, not a claim of bit-identical output across modes or engines. Changed token streams can change speculative acceptance. The benchmark records complete tokens and the first divergence; it does not establish that every divergence is an exact logit tie. These differences need numerical investigation before claiming the strict speculative-correctness gate.
+These are measured generation-throughput comparisons under matched configurations, not a claim of bit-identical output across modes or engines. Changed token streams can change speculative acceptance. The benchmark records complete tokens and the first divergence; it does not establish that every divergence is an exact logit tie. These differences need numerical investigation before claiming the strict speculative-correctness gate; tracked in [issue #128](https://github.com/jiazhihao/mpk-apple/issues/128).
 
-The raw MLX `tokens_per_step` diagnostic is computed as total tokens divided by non-draft tokens. A final partially returned round can make it slightly exceed N+1; it is not used for latency aggregation or speedup conclusions.
+The raw MLX `tokens_per_non_draft_token` diagnostic is computed as total tokens divided by non-draft tokens. A final partially returned round can make it slightly exceed N+1; it is not used for latency aggregation or speedup conclusions.
 
 ## Reproduction and raw evidence
 
