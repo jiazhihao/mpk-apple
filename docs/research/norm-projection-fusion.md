@@ -26,7 +26,7 @@ norm weights, barriers and shrinking/growing active rows. Layer cosine below is
 measured against MLX on each layer's actual Monolith input; it does not establish
 whole-generation token equality or task quality.
 
-## Measurements
+## Initial measurements
 
 [M] Apple M5 Pro, 20 GPU cores, 24 GB, macOS 26.5.1, MLX 0.32.2 / mlx-lm 0.31.3.
 All checkpoint layers execute in a dependency chain with distinct weights, fixed
@@ -56,7 +56,7 @@ over repetitions. Raw samples, cosine and settings are in
 | Qwen3 8B NVFP4 | 5 | 440.40 [440.40–475.23] | 445.02 [445.02–492.03] | 646.22 [646.22–661.04] | +1.05% | 0.999975 |
 | Qwen3 8B NVFP4 | 7 | 440.15 [440.15–514.04] | 447.65 [447.65–532.55] | 825.42 [825.42–860.21] | +1.70% | 0.999976 |
 
-Qwen 0.6B at N=5/7 and Llama 3B at N=5 have non-overlapping original/fused ranges. Qwen 0.6B N=3 and SmolLM2 show overlapping ranges, so their lower minima are not conclusive wins. Llama 1B, Llama 3B N=7 and Qwen 8B do not benefit from enabling this option. SmolLM2 N=5 also remains slower than MLX by the measured minimum.
+In this initial sweep, Qwen 0.6B at N=5/7 and Llama 3B at N=5 have non-overlapping original/fused ranges. Qwen 0.6B N=3 and SmolLM2 show overlapping ranges, so their lower minima are not conclusive wins. Llama 1B, Llama 3B N=7 and Qwen 8B do not benefit from enabling this option. SmolLM2 N=5 also remains slower than MLX by the measured minimum.
 
 The fusion removes 55 normalization dispatches on the 28-layer models, 31 on Llama 1B, 47 on SmolLM2 and 71 on Qwen 8B. Its added producer stores and repeated per-tile statistic reductions can outweigh the saved dispatches. Moving the reciprocal computation after MMA and using adjacent four-lane reductions reduced the preliminary 8B regression, but did not eliminate it. Further optimization and shape-aware selection before default enablement are tracked in [#131](https://github.com/jiazhihao/mpk-apple/issues/131).
 
@@ -132,3 +132,48 @@ The next optimization should amortize statistic reduction across output tiles
 and avoid paying a replacement dispatch for each input. Removing gamma stores
 alone does not address most of the loss. The arithmetic identity is valid; this
 particular placement duplicates too much work on the wider model.
+
+## Persistent projection crews
+
+[M] The fused consumer now caches its reciprocal RMS after its first output tile
+and reuses it across the existing grid-stride loop. The measured legacy NVFP4
+geometry (K=4096, TK=128, eight-way K split, T=6/8) uses **two threadgroups per
+GPU core**, or 40 on this M5 Pro. There is no new dispatch or scratch buffer.
+Other geometries retain their previous schedule; `commute_norm` remains opt-in.
+
+Exactly one group per core was tested first. With eight SIMD-groups/group it
+slowed T=8 to **581.14 µs/layer**, versus **493.86** for the old fusion and
+**482.28** for 40 groups in the same sweep (six rotations × 24 replays).
+Larger 20-group variants, including 16-way K splitting and multiple independent
+crews per group, also lost. Merely reducing the launch count to 20 is insufficient:
+the projection must retain enough parallel work. The selected 40-group schedule
+reduces an interior layer's RMS folds from 384 + 1,536 to 40 + 40: **24× fewer**,
+or 640 KiB of logical statistic loads instead of 15 MiB at T=8. This is not a
+measurement of physical memory traffic.
+
+Final implementation, all 36 layers, context 128, same pack/input as above;
+rotated paired runs, 48 replays per sample, minimum wall µs/layer:
+
+| N | Repetitions | Unfused | Old fusion | Persistent fusion |
+|---|---:|---:|---:|---:|
+| 5 | 12 | 493.11 | 510.48 | 504.19 |
+| 5, confirmation | 6 | 506.69 | 495.57 | 487.43 |
+| 7 | 12 | 492.08 | 495.87 | 482.83 |
+
+The new schedule beats the old fusion in 11/12 pairs at both N=5 and N=7;
+median paired reductions are 1.32% and 1.53%. N=7's minimum is 2.63% below the
+old fusion and 1.88% below unfused. N=5's first unfused minimum is inconsistent
+with its other samples, so the warmed confirmation is included in full rather
+than replacing that run. These measurements support an improvement over the
+old fusion, but not a universal or noise-free win over unfused execution.
+
+The separate MLX-resident comparison gives persistent/MLX minima of
+491.16/723.12 at N=5 and 493.06/914.26 at N=7, with substantial outliers in all
+arms. Every layer's output is **bit-identical to the prior fused schedule**;
+minimum per-layer cosine against MLX remains 0.999975/0.999976. The 12 fusion
+kernel cases plus the MLX format contract pass with Metal shader validation,
+including unequal tile counts, padded T=6 scratch and changing active rows.
+
+[Raw grid sweeps, all paired samples and profiles](../../tools/bench/results/apple-m5-pro-20c_commute-norm-grid.jsonl).
+The existing `--norm-ab --ts 6,8 --ctx 128` command above reproduces the current
+persistent/unfused/MLX comparison; use revision `ff69a7c` for the prior fusion.

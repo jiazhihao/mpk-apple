@@ -709,6 +709,14 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
                 tmac["COMPACT_PARTIALS"] = "1"
     n_tiles = -(-n_rows // tn)
     n_sg, grid, tg = ctx.geometry(mode, n_tiles)
+    if (post_norm and info.format == "nvfp4" and info.k == 4096 and info.rows == 16
+            and info.lane_order == "interleaved16" and info.scale_placement == "block"
+            and info.scale_order == "lane" and hi in (6, 8) and tk == 128 and ksplit == 8):
+        # M5 whole-layer timing favors two groups/core over one. Keep the
+        # eight-way K split and fold RMS just once per persistent crew.
+        groups = min(n_tiles, 2 * ctx.cores)
+        n_sg, grid = groups * ksplit, (groups, 1, 1)
+        tmac["POST_NORM_ONCE"] = "1"
     if small_bf16:
         n_sg, grid, tg = n_blocks * info.rows // 2, (n_blocks, 1, 1), (16 * info.rows, 1, 1)
         mode = "bf16_simd16"

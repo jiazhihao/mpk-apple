@@ -270,6 +270,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
   const uint c0b = 4u * ((lane & 1u) + 2u * ((lane >> 3) & 1u));      // this thread's column-run base
   const uint c1b = ((lane >> 1) & 3u) + 4u * ((lane >> 4) & 1u);      // this thread's row-slot base
   const uint mq = (lane & 1u) | (((lane >> 3) & 1u) << 1);            // its member id in the quad sharing those rows
+#if POST_NORM
+  float norm_r = 0.f;
+#endif
   for (uint tile = p.tile0 + sg_tile; tile < p.tile0 + p.n_tiles; tile += n_tg) {
     auto bT = op.get_right_input_cooperative_tensor<bfloat, bfloat, float>();
     auto cT = op.get_destination_cooperative_tensor<tA_t, decltype(bT), float>();
@@ -445,6 +448,11 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #if TM > 8
 #error POST_NORM requires a short tile
 #endif
+#if POST_NORM_ONCE
+    // A persistent crew reuses the same input across its output tiles.
+    // Fold after the first MMA so the first tile keeps its short live range.
+    if (tile == p.tile0 + sg_tile) {
+#endif
     // Adjacent quads load one token's partials; shuffle its reciprocal RMS
     // into the accumulator's token layout. Keep this after MMA to shorten
     // register lifetimes and skip the non-writing K slices.
@@ -458,7 +466,10 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
     float ssq = (s0 + s1) + (s2 + s3);
     ssq += simd_shuffle_xor(ssq, ushort(1));
     ssq += simd_shuffle_xor(ssq, ushort(2));
-    const float norm_r = simd_shuffle(rsqrt(ssq / float(K) + POST_NORM_EPS), ushort(4u * c1b));
+    norm_r = simd_shuffle(rsqrt(ssq / float(K) + POST_NORM_EPS), ushort(4u * c1b));
+#if POST_NORM_ONCE
+    }
+#endif
 #endif
     // epilogue over the destination: element ((blk*(TN/16) + jump)*2 + s2) << 2 | q holds row n = c0b + 16*jump + q
     // and token m = 16*blk + c1b + 8*s2; a lane's 4 rows lie in one pack block, the block's other rows in the lanes
