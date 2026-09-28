@@ -37,6 +37,7 @@ def _checkpoint(tmp_path):
     h, inter, d = c["hidden_size"], c["intermediate_size"], c["head_dim"]
     kd, vd = c["linear_num_key_heads"] * c["linear_key_head_dim"], c["linear_num_value_heads"] * c["linear_value_head_dim"]
     conv_dim = 2 * kd + vd
+    hv, dv = c["linear_num_value_heads"], c["linear_value_head_dim"]
 
     def w(*shape):
         return (rng.standard_normal(shape) * 0.05).astype(np.float32)
@@ -46,9 +47,9 @@ def _checkpoint(tmp_path):
         f"{P}norm.weight": w(h),
         f"{P}layers.0.input_layernorm.weight": w(h), f"{P}layers.0.post_attention_layernorm.weight": w(h),
         f"{P}layers.0.linear_attn.in_proj_qkv.weight": w(conv_dim, h), f"{P}layers.0.linear_attn.in_proj_z.weight": w(vd, h),
-        f"{P}layers.0.linear_attn.in_proj_a.weight": w(4, h), f"{P}layers.0.linear_attn.in_proj_b.weight": w(4, h),
+        f"{P}layers.0.linear_attn.in_proj_a.weight": w(hv, h), f"{P}layers.0.linear_attn.in_proj_b.weight": w(hv, h),
         f"{P}layers.0.linear_attn.out_proj.weight": w(h, vd), f"{P}layers.0.linear_attn.conv1d.weight": w(conv_dim, 1, 4),
-        f"{P}layers.0.linear_attn.dt_bias": w(4), f"{P}layers.0.linear_attn.A_log": w(4), f"{P}layers.0.linear_attn.norm.weight": w(64),
+        f"{P}layers.0.linear_attn.dt_bias": w(hv), f"{P}layers.0.linear_attn.A_log": w(hv), f"{P}layers.0.linear_attn.norm.weight": w(dv),
         f"{P}layers.0.mlp.gate_proj.weight": w(inter, h), f"{P}layers.0.mlp.up_proj.weight": w(inter, h), f"{P}layers.0.mlp.down_proj.weight": w(h, inter),
         f"{P}layers.1.input_layernorm.weight": w(h), f"{P}layers.1.post_attention_layernorm.weight": w(h),
         f"{P}layers.1.self_attn.q_proj.weight": w(8 * 2 * d, h), f"{P}layers.1.self_attn.k_proj.weight": w(c["num_key_value_heads"] * d, h),

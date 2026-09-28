@@ -36,13 +36,13 @@ def _module(hidden, hk, hv, dk, dv, seed):
 
 
 class Harness:
-    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False, perm_out=None):
+    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False, perm_out=None, fused_norm=False):
         """The engine's configuration: two state slots by step parity read from StepState (a single slot races when
         several value heads share a key head's conv window — the kernel's note)."""
         from monolith.core import StepStateLayout
 
         self.dev, self.m, self.ab_separate = dev, m, ab_separate
-        self.prepared = prepared
+        self.prepared, self.fused_norm = prepared, fused_norm
         self.layout = StepStateLayout(t_max=max(8, t_max), gamma_max=7)
         macros = dict(kernels.gdn_macros(m.dk, m.dv, conv_width=CW, t=t_max, slice_cols=slice_cols, slices_per_block=slices_per_block,
                                          tokens_per_pass=tokens_per_pass, slots=2), STEP_STATE="1")
@@ -50,6 +50,9 @@ class Harness:
             macros.update(kernels.perm_out_macros(m.value_dim, *perm_out))
         if prepared:
             macros["PREPARED"] = "1"
+        if fused_norm:
+            assert prepared and slice_cols == 4 and slices_per_block == 1
+            macros["FUSED_NORM"] = "1"
         lib = nt.Library(dev, kernels.gdn_source().replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1), macros)
         self.pso, self.pso_norm = nt.Pipeline(lib, "gdn_mixer"), nt.Pipeline(lib, "gdn_norm")
         if prepared:
@@ -66,7 +69,7 @@ class Harness:
                     nt.Buffer(dev, (-np.exp(m.param("a_log").float().numpy())).astype(np.float32).tobytes()),
                     nt.Buffer(dev, m.param("dt_bias").float().numpy().astype(np.float32).tobytes()),
                     nt.Buffer(dev, m.param("norm_w").float().numpy().astype(np.float32).tobytes())]
-        self.n_sg = 12 * dev.info().gpu_cores
+        self.n_sg = m.v_heads * m.dv // 4 if fused_norm else 12 * dev.info().gpu_cores
 
     def set_state(self, state):                                              # into the slot the next pass reads
         slot = self.step_no & 1
@@ -81,7 +84,7 @@ class Harness:
         rec = np.frombuffer(self.rec_state.read(slot * self.rec_bytes, self.rec_bytes), dtype=np.float32).reshape(m.v_heads, m.dk, m.dv)
         return conv, rec
 
-    def step(self, proj, t_active=None):
+    def step(self, proj, t_active=None, done=False):
         """``proj`` torch BF16 [T, N1] in checkpoint column order."""
         m = self.m
         t = proj.shape[0]
@@ -100,13 +103,16 @@ class Harness:
         out = nt.Buffer(self.dev, t * vd * 2); out.fill(0)
         mb = nt.Buffer(self.dev, main.tobytes())
         abb = nt.Buffer(self.dev, ab.tobytes()) if self.ab_separate else mb
-        self.st.write(self.layout.pack({"step": self.step_no, "t_this_step": t if t_active is None else t_active}), 0)
+        self.st.write(self.layout.pack({"step": self.step_no, "t_this_step": t if t_active is None else t_active, "done": int(done)}), 0)
         d = (nt.Dispatch().pipeline(self.pso).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state).buffer(3, self.rec_state)
              .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(7, self.o_part)
              .bytes(9, params).buffer(15, self.st).grid(-(-(self.n_sg * 32) // 384)).threadgroup(384).barrier())
         d2 = (nt.Dispatch().pipeline(self.pso_norm).buffer(0, self.o_part).buffer(1, mb).buffer(2, self.aux[3]).buffer(3, out)
               .bytes(4, params).buffer(15, self.st).grid(t * hv).threadgroup(32))
         ds = [d, d2]
+        if self.fused_norm:
+            d.bytes(11, params).buffer(12, self.aux[3]).buffer(13, mb).buffer(14, out).grid(hv).threadgroup(32 * m.dv // 4)
+            ds = [d]
         if self.prepared:
             dp = (nt.Dispatch().pipeline(self.pso_prepare).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state)
                   .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(8, self.prep)
@@ -286,3 +292,30 @@ def test_norm_writes_consumer_permutation(dev, wpw, tk):
     columns = kernels.x_permute_columns(m.value_dim, wpw, tk)
     assert np.array_equal(permuted, natural[:, columns])
     assert np.all(permuted[3:] == 0)
+
+
+@pytest.mark.parametrize("active", [0, 1, 4, 6, 8])
+@pytest.mark.parametrize("tp,ab_separate,perm_out", [(8, False, None), (3, True, (8, 64))])
+def test_fused_norm_matches_separate_passes(dev, active, tp, ab_separate, perm_out):
+    """Exact fusion equivalence with filled state, continuation, inactive rows,
+    separate scalar projection, output permutation and multiple token passes."""
+    torch = pytest.importorskip("torch")
+    m, rng = _module(64, 8, 16, 128, 128, seed=71)
+    state = {"l.conv_state": torch.from_numpy(rng.normal(0, .2, (m.conv_dim, CW - 1)).astype(np.float32)).to(torch.bfloat16),
+             "l.rec_state": torch.from_numpy(rng.normal(0, .1, (16, 128, 128)).astype(np.float32))}
+    hs = [Harness(dev, m, 8, prepared=True, slice_cols=4, slices_per_block=1, tokens_per_pass=tp,
+                  ab_separate=ab_separate, perm_out=perm_out, fused_norm=fused) for fused in (False, True)]
+    for h in hs:
+        h.set_state(state)
+    for _ in range(2):
+        proj = _proj(rng, torch, 8, m.in_proj.n)
+        out = [h.step(proj, t_active=active) for h in hs]
+        np.testing.assert_array_equal(*out)
+        for attr in ("conv_state", "rec_state"):
+            size = 2 * (hs[0].conv_bytes if attr == "conv_state" else hs[0].rec_bytes)
+            assert getattr(hs[0], attr).read(0, size) == getattr(hs[1], attr).read(0, size)
+        assert not out[1][active:].any()
+    h = hs[1]
+    before = (h.conv_state.read(0, 2 * h.conv_bytes), h.rec_state.read(0, 2 * h.rec_bytes))
+    assert not h.step(proj, done=True).any()
+    assert before == (h.conv_state.read(0, 2 * h.conv_bytes), h.rec_state.read(0, 2 * h.rec_bytes))

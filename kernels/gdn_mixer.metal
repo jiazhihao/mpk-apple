@@ -35,6 +35,12 @@
 // (hv > hk), the v-head blocks sharing a key head's conv window race on it — a block that finishes first overwrites
 // the window a slower sibling is still reading (seen as a flaky oracle test under GPU contention). SLOTS=1 is a
 // bench-only mode for hv == hk.
+#ifndef FUSED_NORM
+#define FUSED_NORM 0
+#endif
+#if FUSED_NORM && (!PREPARED || SPB != 1 || COMMIT)
+#error "fused GDN normalization needs one prepared state slice per SIMD group"
+#endif
 #ifndef PREPARED
 #define PREPARED 0
 #endif
@@ -205,10 +211,21 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
                       device const float* prepared [[buffer(8)]],
 #endif
                       constant GdnParams& p [[buffer(9)]],
+#if FUSED_NORM
+                      constant GdnParams& np [[buffer(11)]],
+                      device const float* norm_w [[buffer(12)]],
+                      device const ushort* z [[buffer(13)]],
+                      device ushort* final_out [[buffer(14)]],
+#endif
 #if STEP_STATE
                       device const StepState* st [[buffer(15)]],
 #endif
                       uint gid [[thread_position_in_grid]], uint lane [[thread_index_in_simdgroup]], uint sw [[threads_per_simdgroup]]) {
+#if FUSED_NORM
+  // One whole head per threadgroup: state slices publish each token for its
+  // gated RMSNorm, preserving the standalone norm's lane and summation order.
+  threadgroup float readout[TP][DV];
+#endif
   const uint sg = gid / sw;
   const uint rep = p.hv / p.hk;
 #if STEP_STATE
@@ -321,7 +338,13 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
             float part = 0.0f;                                   // advances the state and binds no output of its own)
             for (uint i = 0; i < KR; i++) part = fma(S[i][j], qv[TI][i], part);
             const float o = simd_sum(part);
-            if (lane == 0) o_part[(t0 + t) * p.out_stride + h * DV + s * SL + j] = o;
+            if (lane == 0) {
+#if FUSED_NORM
+              readout[t][s * SL + j] = o;
+#else
+              o_part[(t0 + t) * p.out_stride + h * DV + s * SL + j] = o;
+#endif
+            }
           }
 #endif
         }
@@ -329,6 +352,30 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
           for (uint j = 0; j < SL; j++) rec_out[((ulong)(h * DK + lane + 32u * i)) * DV + s * SL + j] = S[i][j];
         }
       }
+#if FUSED_NORM
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      for (uint t = sg % NSG; t < n; t += NSG) {
+        float ob[VR], ss = 0.0f;
+        for (uint i = 0; i < VR; i++) {
+          ob[i] = round_bf16(readout[t][lane + 32u * i]);
+          ss = fma(ob[i], ob[i], ss);
+        }
+        const float rstd = rsqrt(simd_sum(ss) / float(DV) + np.eps);
+        for (uint i = 0; i < VR; i++) {
+          const uint v = lane + 32u * i;
+          float y = round_bf16(ob[i] * rstd);
+          y = round_bf16(norm_w[v] * y);
+          const float zz = bf16f(z[(t0 + t) * np.in_stride + h * DV + v]);
+          y = round_bf16(y * silu_f(zz));
+#if PERM_OUT
+          final_out[(t0 + t) * p.out_stride + perm_dest(h * DV + v)] = bf16bits(y);
+#else
+          final_out[(t0 + t) * p.out_stride + h * DV + v] = bf16bits(y);
+#endif
+        }
+      }
+      if (t0 + TP < T) threadgroup_barrier(mem_flags::mem_threadgroup);
+#endif
     }
     // the new conv state: the last CW-1 inputs of the step (q/k channels once per key head, v channels per head),
     // written by the head's first slice group

@@ -187,3 +187,39 @@ def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d, kv):
     assert chunks == 8192 // (32 if d == 256 or adaptive else 64)
     assert prog.buffers[bindings[7]].nbytes >= kv * chunks * rows * d * 4
     assert prog.buffers[bindings[8]].nbytes >= kv * chunks * rows * 2 * 4
+
+
+@pytest.mark.parametrize("t", [1, 2, 3, 4, 6, 8])
+def test_fused_gdn_norm_waits_for_gate_and_preserves_state_writes(tmp_path, monkeypatch, t):
+    from test_nn_lowering import CFG
+
+    for key, value in (("linear_num_key_heads", 8), ("linear_num_value_heads", 16),
+                       ("linear_key_head_dim", 128), ("linear_value_head_dim", 128)):
+        monkeypatch.setitem(CFG["text_config"], key, value)
+    _checkpoint(tmp_path)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=32)
+    pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    profile = Profile.from_dict("fused", {"gpu_cores": 20, "nominal_gbps": 307,
+        "engine": {"family": "Apple10", "lane_order": "interleaved16", "accelerator": "on"}})
+    prog = compile_program(m, PackFile(tmp_path / "pack"), profile, t=t)
+    names = [op.name for op in prog.ops]
+    if t not in (4, 6, 8):
+        assert "gdn_mixer_norm" not in names
+        assert "gdn_mixer" in names and "gdn_norm" in names
+        return
+    assert "gdn_mixer" not in names and "gdn_norm" not in names
+    fused = next(op for op in prog.ops if op.name == "gdn_mixer_norm")
+    prep = next(op for op in prog.ops if op.name == "gdn_prepare")
+    assert fused.grid == (16, 1, 1) and fused.threadgroup == (1024, 1, 1)
+    assert fused.barrier_before and fused.meta["writes"] == [3, 14]
+    assert prep.meta["writes"] == [2, 8]
+    fb = {i: name for i, name, _ in fused.bindings}
+    pb = {i: name for i, name, _ in prep.bindings}
+    assert fb[2] == pb[2] and fb[8] == pb[8]
+    assert fb[3].endswith("rec_state")
+    assert prog.kernels[fused.kernel].macros["FUSED_NORM"] == "1"
+    before = prog.ops[:prog.ops.index(fused)]
+    assert any(any(i in op.meta.get("writes", []) and name == fb[13] for i, name, _ in op.bindings) for op in before)
+    after = prog.ops[prog.ops.index(fused) + 1:]
+    consumer = next(op for op in after if any(name == fb[14] for _, name, _ in op.bindings))
+    assert consumer.barrier_before

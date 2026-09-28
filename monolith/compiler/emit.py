@@ -74,6 +74,8 @@ class _Ctx:
     norm_scratch: Dict[Tuple[str, str, int], str] = field(default_factory=dict)   # (x, stat, rows) -> the normalized scratch
     perm_scratch: Dict[Tuple[Any, ...], str] = field(default_factory=dict)         # (input, stat, tm, wpw, tk, range) -> the permuted scratch
 
+    gdn_pending: Dict[str, Tuple[List[Tuple[int, str, int]], Dict[str, str]]] = field(default_factory=dict)
+
     # ---- helpers -----------------------------------------------------------------------------------------------
     def slab_info(self, name: str) -> PackInfo:
         for pk in self.packs:
@@ -824,7 +826,8 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     prepared_blocks = hv * (dv // 4)
     if prepared:
         macros.update(PREPARED="1", SPB="1u", SL="4u", TP="8u")
-    kmix = ctx.kernel("gdn", kernels.gdn_source(), "gdn_mixer", macros)
+    fuse_norm = (prepared and ctx.t in (4, 6, 8) and dk == dv == 128 and hv >= 16
+                 and len(o_part.consumers) == 1 and o_part.consumers[0].kind == "gdn_norm")
     main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
     prm = ctx.params("gdn", kernels.gdn_params(
         hv=hv, hk=hk, t_active=ctx.t, q_off=ps["in_proj_qkv"][1], k_off=ps["in_proj_qkv"][1] + kd, v_off=ps["in_proj_qkv"][1] + 2 * kd,
@@ -843,9 +846,16 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
                 (3 * ctx.t * hv, 1, 1), (32, 1, 1), "gdn_prepare", writes=[2, 8])
         prep_binding = [(8, prep, 0)]
     # the commit pass writes only the states: its output value is a placeholder (lower_round gives it a 4-byte one)
-    ctx.add(kmix, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (3, *ctx.buf(rs)), (4, *ctx.windows[conv_w.name]),
-                   (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, *ctx.buf(o_part)), (9, prm, 0), (15, st, 0)] + prep_binding,
-            grid, tg, op.kind, writes=[2, 3] if commit else ([3, 7] if prepared else [2, 3, 7]))
+    bindings = [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (3, *ctx.buf(rs)), (4, *ctx.windows[conv_w.name]),
+                (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, *ctx.buf(o_part)), (9, prm, 0), (15, st, 0)] + prep_binding
+    if fuse_norm:
+        # Wait for the norm's gate projection, then run one threadgroup per head.
+        # The sole read-out consumer is eliminated; state dependencies remain
+        # explicit on the combined dispatch for the barrier pass.
+        ctx.gdn_pending[o_part.name] = (bindings, dict(macros, FUSED_NORM="1"))
+    else:
+        kmix = ctx.kernel("gdn", kernels.gdn_source(), "gdn_mixer", macros)
+        ctx.add(kmix, bindings, grid, tg, op.kind, writes=[2, 3] if commit else ([3, 7] if prepared else [2, 3, 7]))
 
 
 def _gdn_norm(ctx: _Ctx, op: Op) -> None:
@@ -860,11 +870,21 @@ def _gdn_norm(ctx: _Ctx, op: Op) -> None:
     fused = _fused_permute(ctx, out)
     if fused:
         macros = dict(macros, **fused[1])
-    knorm = ctx.kernel("gdn", kernels.gdn_source(), "gdn_norm", macros)
     prm = ctx.params("gdn_norm", kernels.gdn_params(
         hv=hv, hk=1, t_active=ctx.t, q_off=0, k_off=0, v_off=0, z_off=0, a_off=0, b_off=0, in_stride=ctx.shape(z)[1], ab_stride=ctx.shape(z)[1],
         ab_separate=False, out_stride=hv * dv, n_sg=ctx.n_sg, key_dim=0, eps=float(a["eps"])))
     st = ctx.program.step_state
+    pending = ctx.gdn_pending.pop(o_part.name, None)
+    if pending is not None:
+        bindings, mix_macros = pending
+        if fused:
+            mix_macros.update(fused[1])
+        kmix = ctx.kernel("gdn", kernels.gdn_source(), "gdn_mixer", mix_macros)
+        ctx.add(kmix, bindings + [(11, prm, 0), (12, *ctx.windows[norm_w.name]), (13, *ctx.buf(z)),
+                                  (14, *((fused[0], 0) if fused else ctx.buf(out)))],
+                (hv, 1, 1), (32 * dv // 4, 1, 1), "gdn_mixer_norm", writes=[3, 14], perm_out=bool(fused))
+        return
+    knorm = ctx.kernel("gdn", kernels.gdn_source(), "gdn_norm", macros)
     ctx.add(knorm, [(0, *ctx.buf(o_part)), (1, *ctx.buf(z)), (2, *ctx.windows[norm_w.name]), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],
             (ctx.t * hv, 1, 1), (32, 1, 1), op.kind, writes=[3], perm_out=bool(fused))
 

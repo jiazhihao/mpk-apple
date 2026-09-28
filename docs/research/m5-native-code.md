@@ -365,3 +365,53 @@ independently observed session-reuse correctness issue #123 remain open.
 Raw samples and native metadata are the `adaptive_attention`, `gdn_conv_store`,
 `fixed_adaptive_attention`, `fixed_gdn_conv_store`, and `adaptive_and_conv_native`
 20260928 result files.
+
+
+## Fusing the prepared recurrence and gated normalization
+
+Prepared DK=DV=128 heads at compiled T=4/6/8 now use a combined recurrence and
+normalization dispatch when there are at least 16 value heads and the read-out
+has exactly one consumer. Each 1,024-thread group owns all 128 state columns of
+one head. It publishes the FP32 read-out into 4 KB of threadgroup memory, then
+uses the standalone norm's lane mapping and rounding order. The compiler defers
+the recurrence until its gate projection is available; its declared recurrent
+state and output writes preserve downstream barriers. Commit and other geometries
+retain their separate kernels.
+
+The exact native fused kernel uses 63 registers, zero scratch, 4,096 threadgroup
+bytes and 4,370 main-code bytes; the preceding recurrence alone used 60 registers,
+zero scratch/shared storage and 1,848 bytes. This combines two dispatches without
+changing the recurrence or norm arithmetic. An eight-column fused variant lost
+at T=8 and was rejected.
+
+Seven alternating production A/B pairs of 32 steps against 483a8e5:
+
+| T | Before µs/layer | Fused µs/layer |
+|---:|---:|---:|
+| 4 | 198.87 | 197.17 |
+| 6 | 200.91 | 200.04 |
+| 8 | 203.79 | 202.87 |
+
+Every pair improves. Outputs of all 18 layers and both kinds of state buffer are
+byte-identical. The subsequent paired MLX gate (7 × 48 steps) remains open:
+T=4 196.12/182.66 µs, T=6 199.11/183.01 µs, T=8 202.66/187.98 µs (MPK/MLX).
+Different absolute values across runs are not attributed to code changes.
+
+Metal validation passed 51 kernel/contract checks, including ten new exact
+fusion comparisons with filled state, continuation, zero/partial/full active
+lengths, separate scalar projections, output permutation, done predicates and
+multi-pass scratch reuse. Another 26 compiler/lowering checks passed, including
+fused selection, gate dependencies, declared state writes and output barriers.
+Raw samples and native metadata are the `gdn_fused_norm_ab`,
+`fixed_gdn_fused_norm` and `gdn_fused_norm_native` 20260928 result files.
+
+Further rejected experiments: delayed GDN query loads and vectorized float4
+state updates lost at T=8; smaller BF16 projection threadgroups and wider/narrower
+lane/prefetch combinations did not improve the layer. Attention first-key
+peeling and delaying value loads also lost. A 128-key matrix-attention tile
+exceeded the device's 32 KB threadgroup-memory limit and was not benchmarked.
+
+The real-model prefill layer oracle, twice-repeated 48-token greedy golden,
+sampling reproducibility check and speculative rollback golden also pass with
+Metal validation (four tests). The previously reported long-prompt session-reuse
+case in #123 was not part of this run and remains unresolved.
