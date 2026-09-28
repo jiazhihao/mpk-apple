@@ -207,9 +207,20 @@ def test_fused_gdn_norm_waits_for_gate_and_preserves_state_writes(tmp_path, monk
         "engine": {"family": "Apple10", "lane_order": "interleaved16", "accelerator": "on"}})
     prog = compile_program(m, PackFile(tmp_path / "pack"), profile, t=t)
     names = [op.name for op in prog.ops]
-    if t not in (1, 4, 6, 8):
+    if t != 1:
         assert "gdn_mixer_norm" not in names
         assert "gdn_mixer" in names and "gdn_norm" in names
+        if t in (4, 6, 8):
+            assert "gdn_prepare" not in names
+            core = next(op for op in prog.ops if op.name == "gdn_mixer")
+            constants = prog.kernels[core.kernel].macros
+            assert constants["LOCAL_PREPARE"] == "1"
+            assert core.meta["writes"] == [2, 3, 7]
+            groups, sl = (16, 4) if t == 4 else (32, 2 if t == 6 else 4)
+            assert core.grid == (16 * (128 // sl) // groups, 1, 1)
+            assert core.threadgroup == (32 * groups, 1, 1)
+            norm = next(op for op in prog.ops if op.name == "gdn_norm")
+            assert norm.barrier_before
         return
     assert "gdn_mixer" not in names and "gdn_norm" not in names
     fused = next(op for op in prog.ops if op.name == "gdn_mixer_norm")

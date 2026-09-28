@@ -352,7 +352,14 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
             v += bv[jump / 4u];
 #endif
 #endif
+#if BF16_STORAGE
+            // Preserve the stored BF16 bits instead of expanding each element
+            // to FP32 and rounding it back for the cooperative matrix operand.
+            const uint e = 4u * jump + qq;
+            bT[uint16_t(((jump * NS_B + s) << 2) | qq)] = as_type<bfloat2>(words[e / 8u][(e % 8u) / 2u])[e % 2u];
+#else
             bT[uint16_t(((jump * NS_B + s) << 2) | qq)] = bfloat(v);
+#endif
           }
       }
 #if EXP_MODE == 2

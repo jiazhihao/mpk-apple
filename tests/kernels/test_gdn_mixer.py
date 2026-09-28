@@ -36,7 +36,7 @@ def _module(hidden, hk, hv, dk, dv, seed):
 
 
 class Harness:
-    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False, perm_out=None, fused_norm=False, specialize=False, local_prepare=False):
+    def __init__(self, dev, m, t_max, *, ab_separate=False, slice_cols=8, slices_per_block=4, tokens_per_pass=None, prepared=False, perm_out=None, fused_norm=False, specialize=False, local_prepare=False, local_groups=None):
         """The engine's configuration: two state slots by step parity read from StepState (a single slot races when
         several value heads share a key head's conv window — the kernel's note)."""
         from monolith.core import StepStateLayout
@@ -44,7 +44,8 @@ class Harness:
         self.dev, self.m, self.ab_separate = dev, m, ab_separate
         self.prepared, self.fused_norm = prepared, fused_norm
         self.local_prepare = local_prepare
-        assert not local_prepare or fused_norm
+        assert not local_prepare or (prepared and slices_per_block == 1)
+        self.local_groups = local_groups or m.dv // slice_cols
         self.layout = StepStateLayout(t_max=max(8, t_max), gamma_max=7)
         macros = dict(kernels.gdn_macros(m.dk, m.dv, conv_width=CW, t=t_max, slice_cols=slice_cols, slices_per_block=slices_per_block,
                                          tokens_per_pass=tokens_per_pass, slots=2), STEP_STATE="1")
@@ -57,6 +58,7 @@ class Harness:
             macros["FUSED_NORM"] = "1"
         if local_prepare:
             macros["LOCAL_PREPARE"] = "1"
+            macros["LOCAL_GROUPS"] = f"{self.local_groups}u"
         self.source = kernels.gdn_source().replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl() + "\n", 1)
         self.macros, self.specialize = macros, specialize
         lib = nt.Library(dev, self.source, macros)
@@ -75,7 +77,7 @@ class Harness:
                     nt.Buffer(dev, (-np.exp(m.param("a_log").float().numpy())).astype(np.float32).tobytes()),
                     nt.Buffer(dev, m.param("dt_bias").float().numpy().astype(np.float32).tobytes()),
                     nt.Buffer(dev, m.param("norm_w").float().numpy().astype(np.float32).tobytes())]
-        self.n_sg = m.v_heads * m.dv // 4 if fused_norm else 12 * dev.info().gpu_cores
+        self.n_sg = m.v_heads * m.dv // slice_cols if local_prepare or fused_norm else 12 * dev.info().gpu_cores
 
     def set_state(self, state):                                              # into the slot the next pass reads
         slot = self.step_no & 1
@@ -126,6 +128,8 @@ class Harness:
         d2 = (nt.Dispatch().pipeline(self.pso_norm).buffer(0, self.o_part).buffer(1, mb).buffer(2, self.aux[3]).buffer(3, out)
               .bytes(4, params).buffer(15, self.st).grid(t * hv).threadgroup(32))
         ds = [d, d2]
+        if self.local_prepare:
+            d.grid(self.n_sg // self.local_groups).threadgroup(32 * self.local_groups)
         if self.fused_norm:
             d.bytes(11, params).buffer(12, self.aux[3]).buffer(13, mb).buffer(14, out).grid(hv).threadgroup(32 * m.dv // 4)
             ds = [d]
@@ -336,6 +340,26 @@ def test_fused_norm_matches_separate_passes(dev, active, tp, ab_separate, perm_o
     before = (h.conv_state.read(0, 2 * h.conv_bytes), h.rec_state.read(0, 2 * h.rec_bytes))
     assert not h.step(proj, done=True).any()
     assert before == (h.conv_state.read(0, 2 * h.conv_bytes), h.rec_state.read(0, 2 * h.rec_bytes))
+
+
+@pytest.mark.parametrize("sl,groups,tp", [(4, 16, 4), (2, 32, 6), (4, 32, 8), (2, 16, 3)])
+def test_local_column_groups_match_workspace_preparation(dev, sl, groups, tp):
+    """Split heads retain exclusive convolution writers and synchronize shared
+    preparation between token passes, including partial/empty steps and done."""
+    torch = pytest.importorskip("torch")
+    m, rng = _module(64, 8, 16, 128, 128, seed=83)
+    state = {"l.conv_state": torch.from_numpy(rng.normal(0, .2, (m.conv_dim, CW - 1)).astype(np.float32)).to(torch.bfloat16),
+             "l.rec_state": torch.from_numpy(rng.normal(0, .1, (16, 128, 128)).astype(np.float32))}
+    hs = [Harness(dev, m, 8, prepared=True, slice_cols=sl, slices_per_block=1, tokens_per_pass=tp,
+                  ab_separate=True, perm_out=(8, 64), local_prepare=local, local_groups=groups, specialize=True)
+          for local in (False, True)]
+    for h in hs:
+        h.set_state(state)
+    for active, done in [(8, False), (3, False), (1, False), (0, False), (8, True)]:
+        proj = _proj(rng, torch, 8, m.in_proj.n)
+        np.testing.assert_array_equal(*[h.step(proj, t_active=active, done=done) for h in hs])
+        for attr, size in (("conv_state", 2 * hs[0].conv_bytes), ("rec_state", 2 * hs[0].rec_bytes)):
+            assert getattr(hs[0], attr).read(0, size) == getattr(hs[1], attr).read(0, size)
 
 
 @pytest.mark.parametrize("prepared,fused,separate,local", [(False, False, False, False), (True, False, True, False), (True, True, False, False), (True, True, True, True)])

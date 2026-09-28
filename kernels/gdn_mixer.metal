@@ -44,8 +44,8 @@
 #ifndef LOCAL_PREPARE
 #define LOCAL_PREPARE 0
 #endif
-#if LOCAL_PREPARE && (!FUSED_NORM || !PREPARED || COMMIT)
-#error "local preparation needs a whole-head fused recurrence"
+#if LOCAL_PREPARE && (!PREPARED || COMMIT || SPB != 1)
+#error "local preparation needs one prepared state slice per SIMD group"
 #endif
 #ifndef PREPARED
 #define PREPARED 0
@@ -83,6 +83,15 @@
 #define VR (DV / 32u)
 #define NSL (DV / SL)
 #define NSG (NSL / SPB)
+#ifndef LOCAL_GROUPS
+#define LOCAL_GROUPS NSG
+#endif
+#if LOCAL_PREPARE && (NSG % LOCAL_GROUPS != 0 || LOCAL_GROUPS > 32)
+#error "local preparation groups must divide one head and fit a threadgroup"
+#endif
+#if LOCAL_PREPARE && FUSED_NORM && LOCAL_GROUPS != NSG
+#error "fused normalization requires a whole head in one threadgroup"
+#endif
 
 struct GdnParams {
   uint hv; uint hk; uint t_active; uint q_off;
@@ -245,9 +254,9 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
   // One whole head per threadgroup: state slices publish each token for its
   // gated RMSNorm, preserving the standalone norm's lane and summation order.
   threadgroup float readout[TP][DV];
+#endif
 #if LOCAL_PREPARE
   threadgroup float local_prep[TP * PREP_STRIDE];
-#endif
 #endif
   const uint sg = gid / sw;
   const uint rep = p.hv / p.hk;
@@ -289,11 +298,12 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
     for (uint t0 = 0; t0 < T; t0 += TP) {
       const uint n = min(TP, T - t0);
 #if LOCAL_PREPARE
-      // All SIMD groups in this threadgroup own the same head. Each job
-      // prepares one token's q, k or v, then all state slices share it.
-      for (uint job = grp; job < 3u * n; job += NSG)
+      // A threadgroup owns a whole head or a disjoint subset of its columns.
+      // Each subset shares preparation; only the first writes the conv state.
+      for (uint job = grp % LOCAL_GROUPS; job < 3u * n; job += LOCAL_GROUPS)
         prepare_token(proj, proj_ab, conv_in, conv_out, conv_w, neg_exp_a_log, dt_bias,
-                      p, t0 + job / 3u, T, h, kh, job % 3u, lane, local_prep + (job / 3u) * PREP_STRIDE);
+                      p, t0 + job / 3u, grp < LOCAL_GROUPS ? T : 0u, h, kh, job % 3u, lane,
+                      local_prep + (job / 3u) * PREP_STRIDE);
       threadgroup_barrier(mem_flags::mem_threadgroup);
 #endif
       // 1. conv + SiLU of this lane's channels for the pass's tokens
@@ -387,6 +397,9 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
           for (uint j = 0; j < SL; j++) rec_out[((ulong)(h * DK + lane + 32u * i)) * DV + s * SL + j] = S[i][j];
         }
       }
+#if LOCAL_PREPARE && !FUSED_NORM
+      if (t0 + TP < T) threadgroup_barrier(mem_flags::mem_threadgroup);
+#endif
 #if FUSED_NORM
       threadgroup_barrier(mem_flags::mem_threadgroup);
       for (uint t = sg % NSG; t < n; t += NSG) {

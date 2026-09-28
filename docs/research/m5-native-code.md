@@ -798,3 +798,53 @@ direct MPK/MLX comparison is not evidence of an MPK accuracy regression.
 `tools/bench/layer_oracle_audit.py` reproduces both references without timing.
 The timing benchmark still records/rejects the direct MLX mismatch; no threshold
 or projection arithmetic has been changed to conceal it.
+
+
+## Multi-token GDN overlap and native BF16 operands
+
+The whole-head recurrence/norm fusion remains faster at compiled T=1. At
+T=4/6/8, separating the final gated norm restores useful overlap between the
+recurrence and the gate projection. Preparation remains local to a threadgroup:
+16 groups cover four columns each at T=4; 32 groups cover two columns at T=6 or
+four at T=8. Split heads have exactly one convolution-state writer, disjoint
+recurrent-state columns, and a shared-memory barrier before preparation storage
+is reused for another token pass. Gated normalization retains its dependency
+on both recurrence and gate outputs.
+
+The BF16 matrix fill now copies stored BF16 bits directly into its cooperative
+operand, avoiding an FP32 expansion and conversion back. The BF16 format plugin
+explicitly declares this storage type; other eight-value formats do not inherit
+that interpretation. Same-day seven-pair A/B versus 5115d65, 48 replays of the
+18 distinct GDN layers, context 128:
+
+| T | Before → after µs/layer | Exact outputs and states |
+|---:|---:|---|
+| 1 | 176.26 → 176.27 | yes |
+| 4 | 192.21 → 190.92 | yes |
+| 6 | 193.53 → 189.41 | yes |
+| 8 | 195.97 → 191.61 | yes |
+
+T=6/8 improve in every pair. T=4 has two noisy slower candidate samples; raw
+samples are retained. This is an improvement against the previous implementation,
+not a claim that the MLX target is met. Kernel/barrier validation passes 234 cases
+with three skips under Metal shader validation. New exact-equivalence checks
+cover split heads, repeated token passes, shared key heads, separate scalar
+projections, filled initial state, continuation, partial/empty steps and done.
+All four selected real-model tests also pass under shader validation: per-layer
+oracles, 48 golden tokens twice, sampling, and the rejected-draft rollback path.
+
+Captured MLX 0.32.2 BF16 T=1 projections use 30 registers and 2,246–2,258 bytes
+of code for row-parallel variants, or 44 registers/2,602 bytes with a K reduction.
+Its recurrence uses 33 registers and 912 bytes. These are native compiler
+metadata and code sizes, not disassembled instruction listings. The differing
+fusion boundaries mean they cannot be compared directly with one MPK kernel's
+latency. A compact row-register BF16 prototype passed memory/output checks but
+was slower for the whole layer and was rejected.
+
+A Metal 4 submission prototype reused the identical ICB and kernels with explicit
+buffer/ICB/pipeline residency and queue/encoder barriers. Corrected toy replay
+matched 1,000-step state and tokens. The eight BF16 A/B cases showed lower host
+CPU work but no useful wall-latency improvement: GDN T=1 176.10/176.22 µs,
+T=4 191.90/192.00; attention T=1 152.98/153.40 and T=8 163.12/164.55. The prototype
+was removed. Shader instrumentation also crashed in Metal's report-decoding path;
+no production correctness claim relies on that experimental submission path.

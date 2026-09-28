@@ -838,10 +838,16 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     prepared_blocks = hv * (dv // 4)
     if prepared:
         macros.update(PREPARED="1", SPB="1u", SL="4u", TP="8u")
-    fuse_norm = (prepared and ctx.t in (1, 4, 6, 8) and dk == dv == 128 and hv >= 16
-                 and len(o_part.consumers) == 1 and o_part.consumers[0].kind == "gdn_norm")
-    if fuse_norm:
-        macros.update(LOCAL_PREPARE="1", TP=f"{min(8, ctx.t)}u")
+    local_prepare = (prepared and ctx.t in (1, 4, 6, 8) and dk == dv == 128 and hv >= 16
+                     and len(o_part.consumers) == 1 and o_part.consumers[0].kind == "gdn_norm")
+    fuse_norm = local_prepare and ctx.t == 1
+    local_groups = 16 if ctx.t == 4 else 32
+    if local_prepare:
+        # Multi-token recurrence can overlap the gate projection. Smaller slices
+        # at T=6 provide more independent work without duplicating device state.
+        sl = 2 if ctx.t == 6 else 4
+        prepared_blocks = hv * (dv // sl)
+        macros.update(LOCAL_PREPARE="1", LOCAL_GROUPS=f"{local_groups}u", SL=f"{sl}u", TP=f"{min(8, ctx.t)}u")
     main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
     prm = ctx.params("gdn", kernels.gdn_params(
         hv=hv, hk=hk, t_active=ctx.t, q_off=ps["in_proj_qkv"][1], k_off=ps["in_proj_qkv"][1] + kd, v_off=ps["in_proj_qkv"][1] + 2 * kd,
@@ -851,8 +857,10 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     grid, tg = ctx.crew_grid()
     if prepared:
         grid, tg = (-(-prepared_blocks // 4), 1, 1), (128, 1, 1)
+    if local_prepare:
+        grid, tg = (prepared_blocks // local_groups, 1, 1), (32 * local_groups, 1, 1)
     prep_binding = []
-    if prepared and not fuse_norm:
+    if prepared and not local_prepare:
         prep = ctx.scratch("gdn.prepared", ctx.t * hv * (2 * dk + dv + 2) * 4, shared=True)
         kp = ctx.kernel("gdn", kernels.gdn_source(), "gdn_prepare", macros, static_params=[("gdn", "p", prm)])
         ctx.add(kp, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (4, *ctx.windows[conv_w.name]),
@@ -869,7 +877,8 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
         ctx.gdn_pending[o_part.name] = (bindings, dict(macros, FUSED_NORM="1"))
     else:
         kmix = ctx.kernel("gdn", kernels.gdn_source(), "gdn_mixer", macros, static_params=[("gdn", "p", prm)])
-        ctx.add(kmix, bindings, grid, tg, op.kind, writes=[2, 3] if commit else ([3, 7] if prepared else [2, 3, 7]))
+        ctx.add(kmix, bindings, grid, tg, op.kind,
+                writes=[2, 3] if commit else ([3, 7] if prepared and not local_prepare else [2, 3, 7]))
 
 
 def _gdn_norm(ctx: _Ctx, op: Op) -> None:
