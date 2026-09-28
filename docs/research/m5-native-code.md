@@ -761,3 +761,40 @@ latency pair wins. Layer 24 at T=1/context 1024 reproduces cosine 0.9989583394;
 all other numerical checks pass. The command exits 1 as intended. Combined with
 the initial sweep, all 224 unique configurations have now been measured, but
 the original two latency misses and issue #124 are still unresolved.
+
+
+## Selective BF16 parameter specialization and numerical audit
+
+After shortening the BF16 activation lifetime, immutable-parameter specialization
+is beneficial on that path too. Plain norm-fed T=1 projections retain live
+parameter records; T=1 BF16 projections with packed activation operands now use
+the existing specialization mechanism. Seven alternating pairs measure GDN
+177.62→176.58 µs/layer (six pairs improve) and attention 154.08→153.00 (all pairs
+improve), with exact outputs. Native gate/up allocation increases 46→49 registers
+while some down-projection specializations fall 49→47; code size changes are
+small. Resource counts alone would not have predicted the measured result.
+All 207 selected compiler, projection and real-model checks pass with Metal
+validation, including greedy tokens, layer oracles and sampling.
+
+The MLX refresh before this last ~1 µs improvement still misses GDN at every
+configuration: T=1/4/6/8 at context 128 is 177.01/192.88/194.17/196.35 µs against
+173.28/183.32/183.35/188.85. BF16 attention still loses at short context for T=1
+(154.04/152.18) and T=4 (165.46/162.99); all six other cases win every pair.
+The strict target remains open.
+
+The two original isolated INT4 latency misses were rerun with nine alternating
+pairs of 64 steps after bound-resource residency was introduced. Layer 0,
+T=8/context 128 measures 72.34/128.96 µs and wins every pair. Layer 3,
+T=1/context 128 measures 55.23/129.08, but one pair narrowly loses. Its GPU time
+stays near 51 µs while wall latency ranges 55–130 µs, demonstrating host/queue
+variability. The original failed samples remain committed rather than replaced.
+
+The independent full-layer audit resolves the accuracy question for issue #124:
+with the same BF16 input and KV prefix, MPK versus the declared CPU contract
+oracle has cosine **0.999966** with BF16 dequantized weights and **0.999978** with
+FP32 dequantized weights. MLX versus those references has **0.998928/0.998935**.
+Thus MPK passes the declared 0.999 layer contract in this case; the failed
+direct MPK/MLX comparison is not evidence of an MPK accuracy regression.
+`tools/bench/layer_oracle_audit.py` reproduces both references without timing.
+The timing benchmark still records/rejects the direct MLX mismatch; no threshold
+or projection arithmetic has been changed to conceal it.

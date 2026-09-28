@@ -371,7 +371,8 @@ def _gemv(ctx: _Ctx, op: Op) -> None:
         n_sg, grid, tg = ctx.geometry(choice.grid_mode if choice else "crew", n_blocks)
         prm = ctx.params("gemv", kernels.gemv_params(n_rows, n_blocks, n_sg, tv, eps=eps, block0=block0,
                                                      stat_parts=ctx.stat_parts.get(stat.name, 1) if stat is not None else 1))
-        specialize = info.format in ("int4_affine", "nvfp4") or (info.format == "bf16" and tv > 1)
+        specialize = info.format in ("int4_affine", "nvfp4") or (
+            info.format == "bf16" and (tv > 1 or macros["X_PRECONVERT"] == "0"))
         k = ctx.kernel(f"gemv_T|{info.format}", kernels.gemv_source(info.format), "gemv_T", macros,
                        static_params=[("gemv", "p", prm)] if specialize else ())
         bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, *x_binding), (3, *ctx.buf(y)), (4, prm, 0)]
