@@ -347,3 +347,7 @@ H1–H10 of `docs/research/apple-gpu-probes.md §4`: they say which design decis
 
 * The plugin with `quantize` bit-exact to the converter, the round-trip / ULP / geometry rows in the contract tests,
   the kernel tests parametrized over the format, the M1 sweep rows in the study, a model on the format end to end.
+
+The [Llama-compatible package](llama-models.md) is a second worked example: Llama 3.2
+and SmolLM2 use unnormalized Q/K heads, model-owned rotary scaling and BF16 precision
+options while sharing the compiler and runtime with the Qwen packages.
