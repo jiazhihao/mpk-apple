@@ -157,7 +157,7 @@ class Gemm:
         self.wbuf, self.rsbuf = nt.Buffer(dev, self.data), nt.Buffer(dev, self.row_scales.tobytes())
 
     def run(self, x_bf16, *, t_active=None, norm=None, epilogue=None, residual=None, stat_out=False, out_bf16=None,
-            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None, ksplit=1):
+            round_residual=False, row_range=None, step_state=None, t_range=None, extra_macros=None, ksplit=1, conv=None):
         """``norm`` = (stat [T, parts] float32, parts, norm_w [K]); ``row_range`` = (start, count) in slab rows;
         ``step_state`` = (layout, values) with ``t_range`` = (lo, hi) for a predicated variant."""
         t_act = self.tm if t_active is None else t_active
@@ -189,7 +189,8 @@ class Gemm:
                                                min(384, pso.max_threads_per_threadgroup))
         n_blocks = -(-n_rows // self.info.rows)
         if self.function in ("gemv_bf16_small", "gemv_nvfp4_rows", "gemv_bf16_rows"):
-            n_sg, n_tg, tg = n_blocks * self.info.rows // 2, n_blocks, 16 * self.info.rows
+            rm = int(str(macros.get("BF_ROWS", "2")).rstrip("u")) if self.function == "gemv_bf16_rows" else 2
+            n_sg, n_tg, tg = n_blocks * self.info.rows // rm, n_blocks, 32 * self.info.rows // rm
         n_out = n_rows // 2 if epilogue == "silu_mul" else n_rows
         xp = nt.Buffer(self.dev, self.tm * self.k * 2)
         y = nt.Buffer(self.dev, self.tm * n_out * 4); y.fill(0)
@@ -205,6 +206,8 @@ class Gemm:
             d1.buffer(2, nt.Buffer(self.dev, x_bf16.tobytes()))
             d1.buffer(5, nt.Buffer(self.dev, np.asarray(norm[0], np.float32).tobytes()))
             d1.buffer(6, nt.Buffer(self.dev, np.asarray(norm[2], np.float32).tobytes()))
+        if conv is not None:
+            d1.buffer(10, conv[0]).buffer(11, nt.Buffer(self.dev, conv[1].tobytes()))
         if epilogue == "residual":
             d1.buffer(7, nt.Buffer(self.dev, residual.tobytes()))
         so = None

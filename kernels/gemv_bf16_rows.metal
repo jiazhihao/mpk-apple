@@ -4,7 +4,15 @@
 // Reuse a four-element activation vector across two output rows, with MPK's
 // packed weights, optional RMS normalization and fused epilogues.
 // Include after gemm_tile.metal. One threadgroup owns one R-row pack block.
+#ifndef BF_ROWS
 #define BF_ROWS 2u
+#endif
+#ifndef PROJ_CONV
+#define PROJ_CONV 0
+#endif
+#if PROJ_CONV && (!OUT_BF16 || !STEP_STATE || EPILOGUE != 0 || CONV_WIDTH < 2)
+#error "projection convolution requires a plain BF16 projection and two state slots"
+#endif
 static inline uint bf16_slot4(uint i) {
  return (i/(TK/4u))*(TK/4u)+(i%(TK/4u))/(TK/16u)+4u*(i%(TK/16u));
 }
@@ -16,6 +24,9 @@ kernel void gemv_bf16_rows(device const bfloat4* w [[buffer(0)]], device const f
  device float* y [[buffer(3)]],
 #endif
  constant GemmParams& p [[buffer(4)]],
+#if PROJ_CONV
+ device ushort* conv_state [[buffer(10)]], device const ushort* conv_w [[buffer(11)]],
+#endif
 #if DIRECT_NORM
  device const float* stat [[buffer(5)]], device const float* norm_w [[buffer(6)]],
 #endif
@@ -49,6 +60,7 @@ kernel void gemv_bf16_rows(device const bfloat4* w [[buffer(0)]], device const f
  const float rn=rsqrt(simd_sum((s0+s1)+(s2+s3))/float(K)+EPS);
 #endif
  float acc[BF_ROWS]={0};
+#pragma clang loop unroll_count(2)
  for(uint b=0;b<K/4u;b+=32u) {
   const uint k=b+lane;
 #if DIRECT_NORM
@@ -103,6 +115,26 @@ kernel void gemv_bf16_rows(device const bfloat4* w [[buffer(0)]], device const f
   float vr=round_bf16(v);
 #else
   float vr=v;
+#endif
+#if PROJ_CONV
+  if (o >= CONV_START && o < CONV_START + CONV_DIM) {
+   const uint c = o - CONV_START;
+   const uint stride = CONV_DIM * (CONV_WIDTH - 1u);
+   device const ushort* src = conv_state + (st->step & 1u) * stride + c * (CONV_WIDTH - 1u);
+   device ushort* dst = conv_state + ((st->step + 1u) & 1u) * stride + c * (CONV_WIDTH - 1u);
+   float sum = 0;
+#pragma clang loop unroll(full)
+   for (uint j = 0; j < CONV_WIDTH - 1u; j++)
+    sum = fma(as_type<float>(uint(conv_w[c * CONV_WIDTH + j]) << 16),
+              as_type<float>(uint(src[j]) << 16), sum);
+   sum = fma(as_type<float>(uint(conv_w[c * CONV_WIDTH + CONV_WIDTH - 1u]) << 16), vr, sum);
+   if (lane == 0) {
+    for (uint j = 0; j < CONV_WIDTH - 2u; j++) dst[j] = src[j + 1u];
+    // Preserve the raw BF16 projection for the next step's convolution window.
+    dst[CONV_WIDTH - 2u] = ushort(as_type<uint>(vr) >> 16);
+   }
+   vr = round_bf16(silu_f(round_bf16(sum)));
+  }
 #endif
   if(lane==0&&writer&&o<nout){
 #if PERM_OUT

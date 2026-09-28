@@ -895,3 +895,56 @@ All five selected real-model tests also pass with Metal validation: NVFP4
 prefill layers and the 48-token greedy golden, BF16 per-layer oracle, greedy
 golden twice, sampling reproducibility, and speculative rollback. The known
 long-prompt session-reuse issue #123 remains outside this passing selection.
+
+## Single-token projection/convolution fusion
+
+A sole GDN consumer can receive the convolution and SiLU directly from its
+BF16 input projection at compiled T=1. The projection preserves the raw BF16
+values in the opposite convolution-state slot and keeps the reference tap order,
+BF16 convolution boundary, and BF16 activation boundary. Other projection rows
+(scalar gates) remain raw. The recurrence consumes the activated intermediate
+and no longer writes the convolution state. Speculative programs retain raw
+projections for commit recomputation; multi-token programs retain their existing
+path. Selection follows format, geometry, consumer ownership and state layout,
+without model-name checks. The interpretation is local to one compilation.
+
+Seven alternating A/B pairs over the 18 distinct GDN layers measure
+174.94→172.76 µs/layer; captured outputs and both state buffers are byte-exact.
+Two-way unrolling of the BF16 row reduction also saves approximately 0.8 µs in
+the preceding paired experiment. Direct physical input addressing in the NVFP4
+row kernel saves 410.86→408.13 µs across all seven pairs, with exact outputs.
+The optional one-row BF16 geometry was tested but is not selected in production.
+
+The final same-input MLX refresh (9 pairs × 48 replays) gives:
+
+| T | Context | MPK µs/layer | MLX µs/layer | Every pair faster |
+|---:|---:|---:|---:|---|
+| 1 | 128 | 172.26 | 173.09 | yes |
+| 1 | 1024 | 172.61 | 173.15 | yes |
+| 4 | 128 | 190.89 | 183.05 | no |
+| 4 | 1024 | 191.18 | 183.04 | no |
+| 6 | 128 | 190.37 | 183.31 | no |
+| 6 | 1024 | 190.24 | 183.65 | no |
+| 8 | 128 | 192.06 | 188.35 | no |
+| 8 | 1024 | 192.08 | 188.62 | no |
+
+All numerical gates pass. These are streaming stack means per layer, not proof
+that each isolated layer passes. T=1 wins are narrow; the full target stays open.
+Validation passes 143 kernel/compiler checks under Metal instrumentation, plus
+five selected real-model checks covering layer oracles, greedy continuation,
+sampling and speculative rollback. The compiler test verifies state bindings,
+write ownership, barriers and reuse of the same IR across token counts and
+speculative/non-speculative compilation. The known #123 exclusion is unchanged.
+
+Rejected experiments are retained in the results: NVFP4 normalization inside
+the projection slows 409.25→422.33 µs even with exact outputs. Moving GDN decay
+outside its dot products or computing readout independently of the state update
+is neutral/slower at T=4/6 and offers no consistent T=8 gain. A T=4 projection/
+convolution prototype was also slower (191.73→192.20 µs, exact state/output).
+No such arithmetic or multi-token fusion is included.
+
+Exact final T=1 archives report 37–39 registers and zero scratch for the fused
+projection, with 2,838–2,898 code bytes. The recurrence/norm specialization reports
+70 registers, zero scratch and 2,056 threadgroup bytes. These are compiler
+resource metadata, not decoded instructions; lower whole-layer latency is the
+acceptance evidence. The archive report is `gdn_projection_conv_native`.

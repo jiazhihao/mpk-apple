@@ -242,3 +242,42 @@ def test_fused_gdn_norm_waits_for_gate_and_preserves_state_writes(tmp_path, monk
     after = prog.ops[prog.ops.index(fused) + 1:]
     consumer = next(op for op in after if any(name == fb[14] for _, name, _ in op.bindings))
     assert consumer.barrier_before
+
+
+def test_projection_convolution_owns_state_and_is_local_to_one_compilation(tmp_path, monkeypatch):
+    from test_nn_lowering import CFG
+    from monolith.core import Graph
+    from monolith.compiler import emit_program
+    from monolith.compiler.passes import DEFAULT_PASSES
+
+    for key, value in (("hidden_size", 1024), ("linear_num_key_heads", 8),
+                       ("linear_num_value_heads", 16), ("linear_key_head_dim", 128),
+                       ("linear_value_head_dim", 128)):
+        monkeypatch.setitem(CFG["text_config"], key, value)
+    _checkpoint(tmp_path)
+    model = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=32)
+    pack_model(model, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
+    profile = Profile.from_dict("projection_conv", {"gpu_cores": 20, "nominal_gbps": 307,
+        "engine": {"family": "Apple10", "lane_order": "interleaved16", "accelerator": "on"}})
+    graph = Graph("projection_conv")
+    model.lower(graph)
+    for transform in DEFAULT_PASSES:
+        transform(graph)
+    pack = PackFile(tmp_path / "pack")
+    # Reusing the IR must not leak the private intermediate's interpretation into
+    # another token count or a speculative program that replays raw projections.
+    for t, speculative in ((1, False), (4, False), (1, True), (1, False)):
+        prog = emit_program(graph, pack=pack, profile=profile, t=t, tail=None, speculative=speculative)
+        projections = [op for op in prog.ops if prog.kernels[op.kernel].macros.get("PROJ_CONV") == "1"]
+        cores = [op for op in prog.ops if prog.kernels[op.kernel].macros.get("PRECONVOLVED") == "1"]
+        if t != 1 or speculative:
+            assert not projections and not cores
+            continue
+        assert len(projections) == len(cores) == 1
+        projection, core = projections[0], cores[0]
+        pb = {i: (name, offset) for i, name, offset in projection.bindings}
+        cb = {i: (name, offset) for i, name, offset in core.bindings}
+        assert pb[10] == cb[2] and pb[11] == cb[4] and pb[15] == cb[15]
+        assert 10 in projection.meta["writes"] and 2 not in core.meta["writes"]
+        assert pb[3] == cb[0] and core.barrier_before
+        assert prog.ops.index(projection) < prog.ops.index(core)

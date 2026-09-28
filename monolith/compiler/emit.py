@@ -17,7 +17,7 @@ compiles to that count.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from .. import kernels
 from ..core.dtypes import DType
@@ -74,6 +74,7 @@ class _Ctx:
     norm_scratch: Dict[Tuple[str, str, int], str] = field(default_factory=dict)   # (x, stat, rows) -> the normalized scratch
     perm_scratch: Dict[Tuple[Any, ...], str] = field(default_factory=dict)         # (input, stat, tm, wpw, tk, range) -> the permuted scratch
 
+    preconvolved: Set[str] = field(default_factory=set)
     gdn_pending: Dict[str, Tuple[List[Tuple[int, str, int]], Dict[str, str]]] = field(default_factory=dict)
 
     # ---- helpers -----------------------------------------------------------------------------------------------
@@ -519,6 +520,37 @@ def _fused_permute(ctx: _Ctx, v: Value) -> Optional[Tuple[str, Dict[str, str]]]:
     return xp, macros
 
 
+def _projection_convolution(ctx: _Ctx, op: Op, info: PackInfo, hi: int, t_src: int):
+    """Fold a sole GDN consumer's single-token convolution into its BF16 projection.
+
+    The original projection rows still enter the opposite convolution-state slot.
+    Only the private intermediate is replaced by its convolved/activated rows.
+    Speculative programs keep raw projections for the later commit recomputation.
+    """
+    y = op.outputs[0]
+    if (ctx.speculative or ctx.t != 1 or hi != 1 or t_src != 0 or not _bf16_rows(info)
+            or op.attrs.get("epilogue") is not None or len(y.consumers) != 1):
+        return {}, []
+    core = y.consumers[0]
+    if core.kind != "gdn_mixer":
+        return {}, []
+    a = core.attrs
+    if a["dk"] != 128 or a["dv"] != 128 or a["v_heads"] < 16 or a["conv_width"] < 2:
+        return {}, []
+    qidx, start, channels = a["proj_segments"]["in_proj_qkv"]
+    if core.inputs[qidx] is not y or channels != 2 * a["k_heads"] * a["dk"] + a["v_heads"] * a["dv"]:
+        return {}, []
+    nproj = 1 + max(idx for idx, _, _ in a["proj_segments"].values())
+    state, _, weight, _, _ = core.inputs[nproj:]
+    if ctx.shape(state)[0] != 2:
+        return {}, []
+    ctx.preconvolved.add(y.name)
+    macros = dict(STEP_STATE="1", PROJ_CONV="1", CONV_START=str(start),
+                  CONV_DIM=str(channels), CONV_WIDTH=str(a["conv_width"]))
+    bindings = [(10, *ctx.buf(state)), (11, *ctx.windows[weight.name]), (15, ctx.program.step_state, 0)]
+    return macros, bindings
+
+
 def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_src: int,
                block0: int, n_blocks: int, n_rows: int, nbytes: int, vgroup: Optional[int]) -> None:
     """The tile dispatch of a GEMV for the T in ``t_range`` (design §5.7 predication): the input goes through
@@ -552,7 +584,8 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
     nvfp4_rows = _nvfp4_rows(info) and hi == 1
     bf16_rows = _bf16_rows(info) and hi == 1
     direct_norm = bf16_rows and stat is not None
-    tmac = dict(ctx.t_macros(hi, t_src))
+    conv_macros, conv_bindings = _projection_convolution(ctx, op, info, hi, t_src)
+    tmac = dict(ctx.t_macros(hi, t_src), **conv_macros)
     if predicated:
         tmac["T_LO"], tmac["T_HI"] = str(lo), str(hi)
     kdim = ctx.shape(x)[1]
@@ -605,6 +638,9 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
                    static_params=[("gemm", "p", prm)] if info.format in ("int4_affine", "nvfp4", "bf16") else ())
     bindings = [(0, *ctx.windows[w.name]), (1, *ctx.row_scales[w.name]), (2, *(xb if direct_norm else (xp, 0))), (3, *y_binding), (4, prm, 0)]
     writes = [3]
+    if conv_bindings:
+        bindings += conv_bindings
+        writes.append(10)
     if direct_norm:
         bindings += [(5, *ctx.buf(stat)), (6, *ctx.windows[nw.name])]
     if residual is not None:
@@ -877,6 +913,9 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
         prepared_blocks = hv * (dv // sl)
         macros.update(LOCAL_PREPARE="1", LOCAL_GROUPS=f"{local_groups}u", SL=f"{sl}u", TP=f"{min(8, ctx.t)}u")
     main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
+    preconvolved = not commit and main.name in ctx.preconvolved
+    if preconvolved:
+        macros["PRECONVOLVED"] = "1"
     prm = ctx.params("gdn", kernels.gdn_params(
         hv=hv, hk=hk, t_active=ctx.t, q_off=ps["in_proj_qkv"][1], k_off=ps["in_proj_qkv"][1] + kd, v_off=ps["in_proj_qkv"][1] + 2 * kd,
         z_off=0, a_off=ps["in_proj_a"][1], b_off=ps["in_proj_b"][1], in_stride=ctx.shape(main)[1],
@@ -906,7 +945,7 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     else:
         kmix = ctx.kernel("gdn", kernels.gdn_source(), "gdn_mixer", macros, static_params=[("gdn", "p", prm)])
         ctx.add(kmix, bindings, grid, tg, op.kind,
-                writes=[2, 3] if commit else ([3, 7] if prepared and not local_prepare else [2, 3, 7]))
+                writes=[2, 3] if commit else ([3, 7] if preconvolved or (prepared and not local_prepare) else [2, 3, 7]))
 
 
 def _gdn_norm(ctx: _Ctx, op: Op) -> None:
@@ -935,7 +974,7 @@ def _gdn_norm(ctx: _Ctx, op: Op) -> None:
                           static_params=[("gdn", "p", mix_prm), ("gdn", "np", prm)])
         ctx.add(kmix, bindings + [(11, prm, 0), (12, *ctx.windows[norm_w.name]), (13, *ctx.buf(z)),
                                   (14, *((fused[0], 0) if fused else ctx.buf(out)))],
-                (hv, 1, 1), (32 * dv // 4, 1, 1), "gdn_mixer_norm", writes=[2, 3, 14], perm_out=bool(fused))
+                (hv, 1, 1), (32 * dv // 4, 1, 1), "gdn_mixer_norm", writes=[3, 14] if mix_macros.get("PRECONVOLVED") == "1" else [2, 3, 14], perm_out=bool(fused))
         return
     knorm = ctx.kernel("gdn", kernels.gdn_source(), "gdn_norm", macros, static_params=[("gdn", "p", prm)])
     ctx.add(knorm, [(0, *ctx.buf(o_part)), (1, *ctx.buf(z)), (2, *ctx.windows[norm_w.name]), (3, *((fused[0], 0) if fused else ctx.buf(out))), (4, prm, 0), (15, st, 0)],

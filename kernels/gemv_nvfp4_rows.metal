@@ -6,9 +6,10 @@
 // are implemented here. Include after gemm_tile.metal for shared helpers.
 // One threadgroup owns R rows; each SIMD-group reduces two output rows.
 #define NV_ROWS 2u
-static inline uint nvfp4_slot4(uint n) {
- const uint l=n/KL,o=n%KL,j=o/WPW,e=o%WPW;
- const uint p=j*32u*WPW+l*WPW+e,kt=p/TK,r=p%TK,mq=r/(TK/4u),r2=r%(TK/4u);
+// The physical weight-column order maps directly to the matrix input tile.
+// Avoid a round trip through the pack's logical (lane, word, element) columns.
+static inline uint nvfp4_slot4(uint p) {
+ const uint kt=p/TK,r=p%TK,mq=r/(TK/4u),r2=r%(TK/4u);
  return (kt*TK+(r2&3u)+((mq&1u)<<2)+((mq>>1)<<3)+((r2>>2)<<4))/4u;
 }
 kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const float* row_scale [[buffer(1)]],
@@ -45,10 +46,10 @@ kernel void gemv_nvfp4_rows(device const uint4* w [[buffer(0)]], device const fl
 #pragma clang loop unroll_count(2)
  for(uint base=0;base<K;base+=32u*16u) {
   const uint phys=base+lane*16u,ln=(phys%(32u*WPW))/WPW,j=phys/(32u*WPW),sub=(phys%WPW)/16u;
-  const uint k0=ln*KL+j*WPW+sub*16u,local_g=j*2u+sub;
+  const uint local_g=j*2u+sub;
   float4 x[4];
 #pragma clang loop unroll(full)
-  for(uint v=0;v<4;v++)x[v]=float4(xp[nvfp4_slot4(k0+v*4u)]);
+  for(uint v=0;v<4;v++)x[v]=float4(xp[nvfp4_slot4(phys+v*4u)]);
 #pragma clang loop unroll(full)
   for(uint r=0;r<NV_ROWS;r++) {
    const uint rr=r0+r;

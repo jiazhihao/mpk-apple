@@ -57,6 +57,12 @@
 #define TREG TP
 #define TI t
 #endif
+#ifndef PRECONVOLVED
+#define PRECONVOLVED 0
+#endif
+#if PRECONVOLVED && (!PREPARED || COMMIT)
+#error "preconvolved rows require a prepared forward recurrence"
+#endif
 #define PREP_STRIDE (2u * DK + DV + 2u)
 #ifndef SL
 #define SL 8u
@@ -127,6 +133,9 @@ static inline void conv_channel(device const ushort* proj, uint in_stride, devic
 }
 
 static inline void conv_state_update(device const ushort* proj, uint in_stride, device const ushort* src, device ushort* dst, uint c, uint T) {
+#if PRECONVOLVED
+  return;
+#endif
   // Only the final CW-1 inputs survive; copy them directly, including any
   // retained prefix when the step is shorter than the convolution window.
   for (uint j = 0; j < CW - 1u; j++) {
@@ -145,6 +154,9 @@ static inline float pick(thread const float* arr, uint i) {         // arr[i] wi
 // A prepared token only needs the convolution window ending at that token.
 static inline float conv_at(device const ushort* proj, uint stride, device const ushort* state,
                             device const ushort* weight, uint channel, uint token) {
+#if PRECONVOLVED
+  return bf16f(proj[token * stride + channel]);
+#endif
   float acc = 0.0f;
 #pragma clang loop unroll(full)
   for (uint tap = 0; tap < CW; tap++) {

@@ -9,10 +9,11 @@ from monolith.formats.fp import bf16_to_f32, f32_to_bf16
 from tests.kernels.test_gemm_tile import Gemm, _rbf, _norm_inputs, EPS, dev
 
 
+@pytest.mark.parametrize("rows_per_sg", [1, 2])
 @pytest.mark.parametrize("k,rows,parts", [(1024, 8, 1), (2048, 16, 65), (3584, 16, 448)])
 @pytest.mark.parametrize("epilogue", [None, "residual", "silu_mul"])
 @pytest.mark.parametrize("out_bf16", [False, True])
-def test_bf16_rows_norm_and_fusions(dev, k, rows, parts, epilogue, out_bf16):
+def test_bf16_rows_norm_and_fusions(dev, k, rows, parts, epilogue, out_bf16, rows_per_sg):
     g = Gemm(dev, "bf16", 96, k, 8, rows=rows, function="gemv_bf16_rows")
     rng = np.random.default_rng(97)
     x, nw, stat, xnorm = _norm_inputs(rng, 8, k)
@@ -25,7 +26,7 @@ def test_bf16_rows_norm_and_fusions(dev, k, rows, parts, epilogue, out_bf16):
     out, stat_out = g.run(x, t_active=1, epilogue=epilogue, residual=residual, out_bf16=out_bf16,
                           stat_out=True, round_residual=epilogue == "residual", row_range=(start, count),
                           norm=(pieces, parts, nw),
-                          extra_macros=dict(DIRECT_NORM="1", STAT_PARTS=str(parts), EPS=str(EPS)))
+                          extra_macros=dict(DIRECT_NORM="1", STAT_PARTS=str(parts), EPS=str(EPS), BF_ROWS=str(rows_per_sg)))
     assert not np.any(out[1:]) and not np.any(stat_out[1:])
     prod = xnorm[:1].astype(np.float64) @ g.w[start:start + count].T
     if epilogue == "residual":
@@ -65,3 +66,44 @@ def test_bf16_rows_permutation_and_state_sources(dev):
                            ({"t_this_step": 1, "done": 1}, (0, 1)), ({"t_this_step": 1}, (1, 4))]:
         out, stat = g.run(x, out_bf16=True, stat_out=True, step_state=(layout, values), t_range=trange)
         assert not np.any(out) and not np.any(stat)
+
+
+@pytest.mark.parametrize("rows,width,step", [(8, 2, 0), (16, 4, 0), (16, 4, 1)])
+@pytest.mark.parametrize("active,done", [(1, 0), (0, 0), (1, 1)])
+def test_bf16_rows_projection_convolution_state(dev, rows, width, step, active, done):
+    """Projection writes raw BF16 rows to state, convolved rows to its private output."""
+    from monolith.runtime import _native as nt
+    g = Gemm(dev, "bf16", 96, 1024, 8, rows=rows, function="gemv_bf16_rows")
+    rng = np.random.default_rng(41)
+    x = f32_to_bf16(rng.normal(0, .1, (8, 1024)).astype(np.float32))
+    layout = StepStateLayout(t_max=8, gamma_max=7)
+    # A nonzero projection range and convolution interval leave two kinds of tails.
+    start, dim, count = 8, 64, 77
+    state = f32_to_bf16(rng.normal(0, .1, (2, dim, width - 1)).astype(np.float32))
+    weight = f32_to_bf16(rng.normal(0, .1, (dim, width)).astype(np.float32))
+    sb = nt.Buffer(dev, state.tobytes())
+    kwargs = dict(out_bf16=True, row_range=(16, count), step_state=(layout, dict(step=step, t_this_step=active, done=done)), t_range=(0, 1))
+    # Use an interval fully inside the tail range: channels [8,72), not slab rows.
+    raw, _ = g.run(x, **kwargs)
+    out, _ = g.run(x, conv=(sb, weight), extra_macros=dict(PROJ_CONV="1", CONV_START=str(start),
+                   CONV_DIM=str(dim), CONV_WIDTH=str(width)), **kwargs)
+    got_state = np.frombuffer(sb.read(0, state.nbytes), np.uint16).reshape(state.shape)
+    expected = state.copy()
+    if not active or done:
+        assert not np.any(out)
+        assert np.array_equal(got_state, expected)
+        return
+    rd, wr = step & 1, (step + 1) & 1
+    win = np.concatenate([bf16_to_f32(state[rd]), raw[0, start:start + dim, None]], axis=1)
+    conv = np.zeros(dim, np.float32)
+    wf = bf16_to_f32(weight)
+    for j in range(width):
+        conv = (win[:, j].astype(np.float64) * wf[:, j] + conv.astype(np.float64)).astype(np.float32)
+    conv = _rbf(conv)
+    ref = raw.copy()
+    ref[0, start:start + dim] = _rbf(conv / (1 + np.exp(-conv)))
+    assert check_against_oracle(out[:1], ref[:1]).ok_rounded()
+    assert np.array_equal(out[:, :start], raw[:, :start])
+    assert np.array_equal(out[:, start + dim:], raw[:, start + dim:])
+    expected[wr] = f32_to_bf16(win[:, 1:])
+    assert np.array_equal(got_state, expected)
