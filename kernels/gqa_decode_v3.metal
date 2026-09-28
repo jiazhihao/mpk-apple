@@ -66,12 +66,26 @@ kernel void gqa_decode_v3(device const ushort* qkvg [[buffer(0)]], device ushort
     // this SIMD-group's keys: s, s + NSG3, … — each scored and folded into the running (m, d, o)
     float m_run = -INFINITY, d_run = 0.0f, o_run[DL];
     for (uint e = 0; e < DL; e++) o_run[e] = 0.0f;
-    for (uint key = sgi; key < ctx; key += NSG3) {
+    uint key = sgi;
+    for (; key < position; key += NSG3) {
       float kf[DL], vf[DL];
-      if (key < position) {
-        load_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, kf);
-        load_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, vf);
-      } else {                                                   // one of the step's new keys: from the projection
+      load_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, kf);
+      load_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, vf);
+      float dot = 0.0f;
+      for (uint e = 0; e < DL; e++) dot = fma(q[e], kf[e], dot);
+      dot = simd_sum(dot);
+      const float sc = round_bf16(round_bf16(dot) * p.scaling);   // causal inside the step
+      if (sc != -INFINITY) {
+        const float m_new = max(m_run, sc);
+        const float a = (m_run == -INFINITY) ? 0.0f : exp(m_run - m_new);
+        const float pr = exp(sc - m_new), pb = round_bf16(pr);
+        d_run = fma(d_run, a, pr);
+        for (uint e = 0; e < DL; e++) o_run[e] = fma(pb, vf[e], o_run[e] * a);
+        m_run = m_new;
+      }
+    }
+    for (; key < ctx; key += NSG3) {
+      float kf[DL], vf[DL];
         const uint tk = key - position;
         load_dl(qkvg + tk * p.in_stride + p.k_off + j * D + lane * DL, kf);
         norm_rope(kf, k_norm, cos_t + key * D, sin_t + key * D, p.eps, lane);
@@ -80,7 +94,6 @@ kernel void gqa_decode_v3(device const ushort* qkvg [[buffer(0)]], device ushort
           store_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, kf);
           copy_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, qkvg + tk * p.in_stride + p.v_off + j * D + lane * DL);
         }
-      }
       float dot = 0.0f;
       for (uint e = 0; e < DL; e++) dot = fma(q[e], kf[e], dot);
       dot = simd_sum(dot);

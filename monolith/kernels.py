@@ -222,7 +222,7 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
                 scale_cache: Optional[bool] = None) -> Dict[str, str]:
     """The specialization of gemm_tile for one slab geometry, ``tm`` token rows (8, 16 or 32 — the accelerator's
     16-row minimum makes 8 cost what 16 costs; the operation's T_act ≤ tm is a run-time parameter), the tile shape
-    ``tn × tk`` (64×64, 32×128 or 16×256: 4096 weights, one per thread register; the measured default per ``tm``) and
+    ``tn × tk`` (64×64, 32×128, 16×256, 16×128 or 16×64) and
     the GEMV fusions it takes over (``epilogue`` residual | silu_mul, ``stat_out``, ``round_before_residual``; the
     input norm is applied by x_permute on the way in). ``ksplit`` > 1: one row tile per threadgroup of that many
     SIMD-groups, each a contiguous K slice, the partials reduced through threadgroup memory (``gemm_geometry``).
@@ -231,7 +231,8 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
     f = FORMATS.get(info.format)
     wpw = int(f.weights_per_word)
     if tn is None or tk is None:
-        tn, tk = gemm_tile_shape(tm)
+        # Small INT4 and BF16 projections benefit from fewer live operand registers (#113).
+        tn, tk = (16, 64) if ((info.format == "int4_affine" and info.k <= 3072) or (info.format == "bf16" and info.k <= 4096)) and tm <= 16 else gemm_tile_shape(tm)
     if info.rows not in (8, 16):
         raise ValueError(f"gemm_tile: R={info.rows} must be 8 or 16 (the epilogues index pack blocks)")
     if info.lanes_per_word > 1:
@@ -240,8 +241,8 @@ def gemm_macros(info: PackInfo, *, tm: int, out_bf16: bool = False, tn: Optional
         raise ValueError(f"gemm_tile: unknown epilogue {epilogue!r}")
     if round_before_residual and epilogue != "residual":
         raise ValueError("gemm_tile: round_before_residual needs the residual epilogue")
-    if (tn, tk) not in ((64, 64), (32, 128), (16, 256)):
-        raise ValueError(f"gemm_tile: tile {tn}x{tk} is not one of 64x64, 32x128, 16x256")
+    if (tn, tk) not in ((64, 64), (32, 128), (16, 256), (16, 128), (16, 64)):
+        raise ValueError(f"gemm_tile: tile {tn}x{tk} is not one of 64x64, 32x128, 16x256, 16x128, 16x64")
     if info.k % (32 * wpw) or info.k % tk or tk % wpw:
         raise ValueError(f"gemm_tile: K must be a multiple of {32 * wpw} and of {tk} for {info.format} (K={info.k})")
     if tn % info.rows:
@@ -415,11 +416,14 @@ def macro_key(macros: Mapping[str, str]) -> str:
 
 # ---- attention ----------------------------------------------------------------------------------------------------
 
-def gqa_source(v2: bool = False, steal: bool = False, v3: bool = False) -> str:
+def gqa_source(v2: bool = False, steal: bool = False, v3: bool = False, mma: bool = False) -> str:
     """The attention kernels: the shared helpers + v1 (``gqa_decode`` / ``gqa_merge``, with the DRAFT variant), v2
     (``gqa_decode_v2`` / ``gqa_merge_v2``: the long-context structure of design §5.6, #34) or v3 (``gqa_decode_v3``:
-    core and merge in one dispatch, a threadgroup per query row — the few-rows kernel, #113)."""
+    core and merge in one dispatch, a threadgroup per query row — the few-rows kernel, #113).
+    ``mma`` uses MSL 4 tensor operations and the v1 merge; compile with MSL_TENSOR_OPS."""
     src = PRELUDE + PERM_OUT_MSL + template("gqa_common.metal") + "\n"
+    if mma:
+        return src + template("gqa_decode.metal") + "\n" + template("gqa_decode_mma.metal")
     if steal:
         src += template("common/steal.metal") + "\n"                                   # the claim protocol (#44), v1 only
     return src + template("gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))

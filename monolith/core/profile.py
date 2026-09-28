@@ -29,9 +29,7 @@ class Profile:
     threadgroups_per_core: int = 1
     sibling_order: str = "either"     # "alu_first" | "bus_first" | "either"
     max_cb_ms: float = 16.0
-    attention: str = "v1"             # the attention kernel: "v1" (block = kv head × chunk × row group), "v2" (§5.6 v2, #34), "v3" (core and
-                                      # merge in one dispatch, a threadgroup per query row, #113) or "auto" = v3, which measured faster than
-                                      # v2's core + merge and than v1 at every query-row count (2–32) and context (128–8192 keys) on the M5 Pro
+    attention: str = "v1"             # v1 / v2 / v3 / mma; auto chooses M5 matrix tiles at T >= 4, otherwise v3
     attention_rows: int = 4           # v1's query rows per pass over a chunk (RBMAX): more rows stream the chunk fewer times, at register cost
     attention_v2_threadgroups: int = 2  # v2's threadgroups per core (its blocks are threadgroups: two per core hide the latency of one)
     accelerator: str = "off"          # "on": T > 1 GEMVs run on the tensor-ops tile (gemm_tile, #50/#51) above accelerator_min_t
@@ -82,8 +80,8 @@ class Profile:
             raise ValueError(f"profile {name}: engine.lane_order must be 'contiguous' or 'interleaved16'")
         if eng.get("scale_placement", "inline") not in ("inline", "block"):
             raise ValueError(f"profile {name}: engine.scale_placement must be 'inline' or 'block'")
-        if eng.get("attention", "v1") not in ("v1", "v2", "v3", "auto"):
-            raise ValueError(f"profile {name}: engine.attention must be 'v1', 'v2', 'v3' or 'auto'")
+        if eng.get("attention", "v1") not in ("v1", "v2", "v3", "mma", "auto"):
+            raise ValueError(f"profile {name}: engine.attention must be 'v1', 'v2', 'v3', 'mma' or 'auto'")
         if int(eng.get("attention_rows", 4)) not in (1, 2, 4, 8, 16):
             raise ValueError(f"profile {name}: engine.attention_rows must be 1, 2, 4, 8 or 16")
         if int(eng.get("attention_v2_threadgroups", 2)) not in (1, 2, 3, 4):

@@ -214,7 +214,7 @@ def test_accelerator_plan_in_the_round_program(pair):
     assert [o.meta.get("t_variant") for o in gate_up] == [1, 8] and [o.meta["t_range"] for o in gate_up] == [[0, 1], [1, 8]]
     shader, tile = gate_up
     assert not shader.meta.get("accelerator") and prog.kernels[shader.kernel].function == "gemv_T" and prog.kernels[shader.kernel].macros["T_HI"] == "1"
-    assert tile.meta["accelerator"] and tile.meta["tm"] == 8 and tile.meta["tile"] == [16, 256]
+    assert tile.meta["accelerator"] and tile.meta["tm"] == 8 and tile.meta["tile"] == [16, 64]
     km = prog.kernels[tile.kernel]
     assert km.function == "gemm_tile" and km.language_version == kernels.MSL_TENSOR_OPS
     assert km.macros["EPILOGUE"] == "2" and km.macros["T_LO"] == "1" and km.macros["T_HI"] == "8" and km.macros["STEP_STATE"] == "1"

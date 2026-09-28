@@ -35,6 +35,17 @@
 // (hv > hk), the v-head blocks sharing a key head's conv window race on it — a block that finishes first overwrites
 // the window a slower sibling is still reading (seen as a flaky oracle test under GPU contention). SLOTS=1 is a
 // bench-only mode for hv == hk.
+#ifndef PREPARED
+#define PREPARED 0
+#endif
+#if PREPARED
+#define TREG 1u
+#define TI 0u
+#else
+#define TREG TP
+#define TI t
+#endif
+#define PREP_STRIDE (2u * DK + DV + 2u)
 #ifndef SL
 #define SL 8u
 #endif
@@ -95,13 +106,13 @@ static inline void conv_channel(device const ushort* proj, uint in_stride, devic
 }
 
 static inline void conv_state_update(device const ushort* proj, uint in_stride, device const ushort* src, device ushort* dst, uint c, uint T) {
-  ushort win[CW - 1u];
-  for (uint j = 0; j < CW - 1u; j++) win[j] = src[c * (CW - 1u) + j];
-  for (uint t = 0; t < T; t++) {
-    for (uint j = 0; j + 1u < CW - 1u; j++) win[j] = win[j + 1u];
-    win[CW - 2u] = proj[t * in_stride + c];
+  // Only the final CW-1 inputs survive; copy them directly, including any
+  // retained prefix when the step is shorter than the convolution window.
+  for (uint j = 0; j < CW - 1u; j++) {
+    const uint pos = T + j;
+    dst[c * (CW - 1u) + j] = pos < CW - 1u ? src[c * (CW - 1u) + pos]
+                                                   : proj[(pos - (CW - 1u)) * in_stride + c];
   }
-  for (uint j = 0; j < CW - 1u; j++) dst[c * (CW - 1u) + j] = win[j];
 }
 
 static inline float pick(thread const float* arr, uint i) {         // arr[i] with a compile-time-indexed body
@@ -110,10 +121,63 @@ static inline float pick(thread const float* arr, uint i) {         // arr[i] wi
   return r;
 }
 
+// Compute the convolution and normalization once per (token, value head),
+// rather than once per state-column block. The recurrence keeps the same FP32 order.
+kernel void gdn_prepare(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
+                        device const ushort* conv_state [[buffer(2)]], device const ushort* conv_w [[buffer(4)]],
+                        device const float* neg_exp_a_log [[buffer(5)]], device const float* dt_bias [[buffer(6)]],
+                        device float* prepared [[buffer(8)]], constant GdnParams& p [[buffer(9)]],
+#if STEP_STATE
+                        device const StepState* st [[buffer(15)]],
+#endif
+                        uint sg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+#if STEP_STATE
+  if (st->done) return;
+  const uint T = st->t_this_step;
+#else
+  const uint T = p.t_active;
+#endif
+  const uint t = sg / p.hv, h = sg % p.hv, kh = h / (p.hv / p.hk);
+  if (t >= T) return;
+#if SLOTS == 2u
+  conv_state += (st->step & 1u) * (2u * p.key_dim + p.hv * DV) * (CW - 1u);
+#endif
+  float qv[KR], kv[KR], vv[VR], y[1];
+  device const ushort* pq = proj + p.q_off;
+  for (uint i = 0; i < KR; i++) {
+    conv_channel(pq, p.in_stride, conv_state, conv_w, kh * DK + lane + 32u * i, t, 1, y);
+    qv[i] = y[0];
+    conv_channel(pq, p.in_stride, conv_state, conv_w, p.key_dim + kh * DK + lane + 32u * i, t, 1, y);
+    kv[i] = y[0];
+  }
+  for (uint i = 0; i < VR; i++) {
+    conv_channel(pq, p.in_stride, conv_state, conv_w, 2u * p.key_dim + h * DV + lane + 32u * i, t, 1, y);
+    vv[i] = y[0];
+  }
+  float sq = 0.0f, sk = 0.0f;
+  for (uint i = 0; i < KR; i++) { sq = fma(qv[i], qv[i], sq); sk = fma(kv[i], kv[i], sk); }
+  sq = simd_sum(sq); sk = simd_sum(sk);
+  const float rq = rsqrt(sq + 1e-6f), rk = rsqrt(sk + 1e-6f), scale = sqrt(float(DK));
+  device float* dst = prepared + (t * p.hv + h) * PREP_STRIDE;
+  for (uint i = 0; i < KR; i++) { dst[lane + 32u * i] = (qv[i] * rq) / scale; dst[DK + lane + 32u * i] = kv[i] * rk; }
+  for (uint i = 0; i < VR; i++) dst[2u * DK + lane + 32u * i] = vv[i];
+  if (lane == 0) {
+    device const ushort* ab = p.ab_separate ? proj_ab : proj;
+    const uint stride = p.ab_separate ? p.ab_stride : p.in_stride;
+    const float a = bf16f(ab[t * stride + p.a_off + h]), b = bf16f(ab[t * stride + p.b_off + h]);
+    dst[2u * DK + DV] = round_bf16(1.0f / (1.0f + exp(-b)));
+    dst[2u * DK + DV + 1u] = exp(neg_exp_a_log[h] * softplus_f(a + dt_bias[h]));
+  }
+}
+
 kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const ushort* proj_ab [[buffer(1)]],
                       device ushort* conv_state [[buffer(2)]], device float* rec_state [[buffer(3)]],
                       device const ushort* conv_w [[buffer(4)]], device const float* neg_exp_a_log [[buffer(5)]],
                       device const float* dt_bias [[buffer(6)]], device float* o_part [[buffer(7)]],
+
+#if PREPARED
+                      device const float* prepared [[buffer(8)]],
+#endif
                       constant GdnParams& p [[buffer(9)]],
 #if STEP_STATE
                       device const StepState* st [[buffer(15)]],
@@ -159,7 +223,9 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
     for (uint t0 = 0; t0 < T; t0 += TP) {
       const uint n = min(TP, T - t0);
       // 1. conv + SiLU of this lane's channels for the pass's tokens
-      float qv[TP][KR], kv[TP][KR], vv[TP][VR];
+      float qv[TREG][KR], kv[TREG][KR], vv[TREG][VR];
+      float beta[TREG], eg[TREG];
+#if !PREPARED
       for (uint i = 0; i < KR; i++) {
         float y[TP];
         conv_channel(pq, p.in_stride, conv_in, conv_w, kh * DK + lane + 32u * i, t0, n, y);
@@ -173,7 +239,6 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
         for (uint t = 0; t < TP; t++) vv[t][i] = y[t];
       }
       // 2. per-token scalars and the q/k L2 norms
-      float beta[TP], eg[TP];
       for (uint t = 0; t < TP; t++) {
         if (t < n) {
           const uint tt = t0 + t;
@@ -193,38 +258,49 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
           for (uint i = 0; i < KR; i++) { qv[t][i] = 0.0f; kv[t][i] = 0.0f; }
         }
       }
+#endif
       // 3. the recurrence over this block's state slices
       for (uint s = grp * SPB; s < (grp + 1u) * SPB; s++) {
         float S[KR][SL];
         for (uint i = 0; i < KR; i++) {                        // the first pass reads the step's input slot, later passes the slot the block writes
-          device const float* row = ((t0 == 0u) ? rec_in : (device const float*)rec_out) + ((ulong)(h * DK + lane + 32u * i)) * DV + s * SL;
-          for (uint j = 0; j < SL; j++) S[i][j] = row[j];
+          device const float* state = (t0 == 0u) ? rec_in : (device const float*)rec_out;
+          for (uint j = 0; j < SL; j++) S[i][j] = state[((ulong)(h * DK + lane + 32u * i)) * DV + s * SL + j];
         }
         for (uint t = 0; t < TP; t++) {
           if (t >= n) break;
-          for (uint i = 0; i < KR; i++) for (uint j = 0; j < SL; j++) S[i][j] *= eg[t];
+#if PREPARED
+          device const float* src = prepared + ((t0 + t) * p.hv + h) * PREP_STRIDE;
+          for (uint i = 0; i < KR; i++) {
+            qv[0][i] = src[lane + 32u * i]; kv[0][i] = src[DK + lane + 32u * i];
+          }
+          beta[0] = src[2u * DK + DV]; eg[0] = src[2u * DK + DV + 1u];
+#endif
+          for (uint i = 0; i < KR; i++) for (uint j = 0; j < SL; j++) S[i][j] *= eg[TI];
           float delta[SL];
           for (uint j = 0; j < SL; j++) {
             float part = 0.0f;
-            for (uint i = 0; i < KR; i++) part = fma(S[i][j], kv[t][i], part);
+            for (uint i = 0; i < KR; i++) part = fma(S[i][j], kv[TI][i], part);
             const float kvm = simd_sum(part);
             const uint v = s * SL + j;
-            const float vt = simd_shuffle(pick(vv[t], v / 32u), ushort(v % 32u));
-            delta[j] = (vt - kvm) * beta[t];
+#if PREPARED
+            const float vt = src[2u * DK + v];
+#else
+            const float vt = simd_shuffle(pick(vv[TI], v / 32u), ushort(v % 32u));
+#endif
+            delta[j] = (vt - kvm) * beta[TI];
           }
-          for (uint i = 0; i < KR; i++) for (uint j = 0; j < SL; j++) S[i][j] = fma(kv[t][i], delta[j], S[i][j]);
+          for (uint i = 0; i < KR; i++) for (uint j = 0; j < SL; j++) S[i][j] = fma(kv[TI][i], delta[j], S[i][j]);
 #if !COMMIT
           for (uint j = 0; j < SL; j++) {                        // the read-out: the step's pass only (the commit pass
             float part = 0.0f;                                   // advances the state and binds no output of its own)
-            for (uint i = 0; i < KR; i++) part = fma(S[i][j], qv[t][i], part);
+            for (uint i = 0; i < KR; i++) part = fma(S[i][j], qv[TI][i], part);
             const float o = simd_sum(part);
             if (lane == 0) o_part[(t0 + t) * p.out_stride + h * DV + s * SL + j] = o;
           }
 #endif
         }
         for (uint i = 0; i < KR; i++) {
-          device float* row = rec_out + ((ulong)(h * DK + lane + 32u * i)) * DV + s * SL;
-          for (uint j = 0; j < SL; j++) row[j] = S[i][j];
+          for (uint j = 0; j < SL; j++) rec_out[((ulong)(h * DK + lane + 32u * i)) * DV + s * SL + j] = S[i][j];
         }
       }
     }

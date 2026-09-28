@@ -57,7 +57,7 @@ class _Ctx:
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
-    attention: str = "v1"                                                 # the attention kernel (profile / override): v1 | v2 | v3 | auto (= v3)
+    attention: str = "v1"                                                 # v1 | v2 | v3 | mma | auto (M5 verification tiles, otherwise v3)
     attn_rows: int = 4                                                    # v1's query rows per pass (the profile's attention_rows)
     attn_v2_tg: int = 2                                                   # v2's threadgroups per core (the profile's attention_v2_threadgroups)
     accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
@@ -570,18 +570,22 @@ def _gemm_tile(ctx: _Ctx, op: Op, info: PackInfo, t_range: Tuple[int, int], t_sr
             row_range=[block0 * info.rows, n_rows] if op.attrs.get("row_range") is not None else None)
 
 
-def _gqa_src(ctx: _Ctx, v2: bool = False, v3: bool = False) -> str:
+def _gqa_src(ctx: _Ctx, v2: bool = False, v3: bool = False, mma: bool = False) -> str:
+    if mma:
+        return kernels.gqa_source(mma=True).replace(kernels.PRELUDE, kernels.PRELUDE + ctx.layout.to_msl() + "\n", 1)
     return kernels.PRELUDE + kernels.PERM_OUT_MSL + ctx.layout.to_msl() + "\n" + kernels.template("gqa_common.metal") + "\n" + kernels.template(
         "gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
 
 
-def _gqa_kernel(ctx: _Ctx, heads: int, kv: int, lm_mode: int = 0, t_c: Optional[int] = None) -> str:
-    """The attention kernel of an op: the profile's (or the override's) ``v1`` / ``v2`` / ``v3``, or ``auto`` = v3 — core
-    and merge in one dispatch, a threadgroup per query row — which measured faster than v2's core + merge and than v1
-    at every query-row count (2–32) and context (128–8192 keys) tried on the M5 Pro (decode-kernels.md §11.1). v2
-    (up to 32 rows, no LM modes) and v1 stay as explicit choices; ``t_c`` is the rows the op compiles to (``rows_of``:
-    the static program's T, a dynamic program's t_max, an LM drafter's chain step's one row)."""
+def _gqa_kernel(ctx: _Ctx, heads: int, kv: int, lm_mode: int = 0, t_c: Optional[int] = None, d: int = 128) -> str:
+    """Use M5 matrix tiles for verification blocks of at least four tokens and D=128/256.
+    The single-row v3 kernel remains the decode path; explicit overrides support A/B runs.
+    ``t_c`` is the op's compiled row count, including LM drafter row sources."""
     rows = (heads // kv) * (ctx.t if t_c is None else t_c)
+    if ctx.attention == "mma":
+        return "mma" if d in (128, 256) else "v3"
+    if ctx.attention == "auto" and ctx.accelerator == "on" and d in (128, 256) and (ctx.t if t_c is None else t_c) >= 4:
+        return "mma"
     if ctx.attention in ("v3", "auto"):
         return "v3"
     if ctx.attention == "v2":
@@ -608,6 +612,10 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows, lm_mode=lm_mode, chain_i=chain_i), STEP_STATE="1"), ctx.n_sg, chunk
 
 
+def _gqa_mma_chunk(d: int) -> int:
+    return 32 if d == 256 else 64
+
+
 def _gqa(ctx: _Ctx, op: Op) -> None:
     """The attention core: partials per (kv head, chunk, row) into the op's two output values (a shared workspace
     across the layers; the barrier pass orders its reuse)."""
@@ -617,32 +625,44 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
-    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0])
+    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0], d)
     if kind == "v3":
         return                                                    # core and merge are one dispatch: the merge's handler emits it (it holds the output and the gate)
     v2 = kind == "v2"
     macros, n_sg, chunk = _gqa_geometry(ctx, a, ctx_max, v2)
-    kd = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_decode_v2" if v2 else "gqa_decode", macros)
+    if kind == "mma":
+        n_sg, chunk = ctx.cores * 4, _gqa_mma_chunk(d)
+        macros = dict(macros, FIXED_CHUNK="1", MMA_SG="8", CH=str(chunk))
+    kd = ctx.kernel("gqa", _gqa_src(ctx, v2, mma=kind == "mma"), "gqa_decode_mma" if kind == "mma" else "gqa_decode_v2" if v2 else "gqa_decode", macros,
+                    kernels.MSL_TENSOR_OPS if kind == "mma" else 0)
     rep = heads // kv
     t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
     rows_max = rep * t_c
-    n_chunks_max = _gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, chunk, n_sg)   # the merge derives the same count
+    n_chunks_max = _gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, chunk, n_sg, fixed=kind == "mma")   # the merge derives the same count
     prm = ctx.params("gqa", kernels.gqa_params(
         heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
         v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
         scaling=float(a["scaling"]), has_gate=False, n_chunks_max=n_chunks_max, rows_max=rows_max))
     st = ctx.program.step_state
     grid, tg = ((n_sg, 1, 1), (ctx.tg, 1, 1)) if v2 else ctx.crew_grid()          # v2: one threadgroup per block, n_sg of them
+    if kind == "mma":
+        grid, tg = (n_sg, 1, 1), (256, 1, 1)
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *ctx.buf(part_o)), (8, *ctx.buf(part_md)), (9, prm, 0), (15, st, 0)],
-            grid, tg, op.kind, writes=[1, 2, 7, 8], attention="v2" if v2 else "v1")
+            grid, tg, op.kind, writes=[1, 2, 7, 8], attention=kind)
 
 
-def _gqa_chunk_capacity(ctx: _Ctx, part_o: Value, part_md: Value, ctx_max: int, kv: int, rep: int, d: int, chunk: int, n_sg: int) -> int:
+def _gqa_chunk_capacity(ctx: _Ctx, part_o: Value, part_md: Value, ctx_max: int, kv: int, rep: int, d: int, chunk: int, n_sg: int, *, fixed: bool = False) -> int:
     """The chunk count the core's and the merge's params carry: the run-time chunk rule (``pick_chunk``, bounded by
     ``n_chunks_max``) for this dispatch's crew, capped at the partial values the layer allotted — it sized them for a
     crew of ``GQA_CREW_MAX`` SIMD-groups, and a larger profile (more cores, two threadgroups per core) would otherwise
     ask for more chunks than they hold. The values must hold the chunks of the compiled ``chunk`` at least."""
+    if fixed:
+        chunks = -(-ctx_max // chunk)
+        rows = ctx.shape(part_o)[0] * rep
+        for value, width in ((part_o, d), (part_md, 2)):
+            ctx.program.buffers[value.name].nbytes = max(ctx.program.buffers[value.name].nbytes, kv * chunks * rows * width * 4)
+        return chunks
     cap_o, cap_md = ctx.shape(part_o)[1] // (kv * rep * d), ctx.shape(part_md)[1] // (kv * rep * 2)
     cap = min(cap_o, cap_md)
     if cap < -(-ctx_max // chunk):
@@ -658,7 +678,7 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     out = op.outputs[0]
     a = op.attrs
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
-    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0])
+    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0], d)
     if kind == "v3":
         _gqa_v3(ctx, op)
         return
@@ -667,11 +687,14 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     core = part_o.producer
     ctx_max = ctx.shape(core.inputs[1])[0] if core is not None else 0
     macros, n_sg, chunk = _gqa_geometry(ctx, dict(a, chunk=core.attrs.get("chunk", 64) if core is not None else 64), ctx_max, v2)
+    if kind == "mma":
+        n_sg, chunk = ctx.cores * 4, _gqa_mma_chunk(d)
+        macros = dict(macros, FIXED_CHUNK="1", CH=str(chunk))
     fused = _fused_permute(ctx, out)                              # o_proj's tile reads the merge's output: written in its order
     if fused:
         macros = dict(macros, **fused[1])
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros)
-    n_chunks_max = (_gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, chunk, n_sg) if core is not None
+    n_chunks_max = (_gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, chunk, n_sg, fixed=kind == "mma") if core is not None
                     else ctx.shape(part_o)[1] // (kv * rep * d))
     t_c, _ = ctx.rows_of(op)
     prm = ctx.params("gqa_merge", kernels.gqa_params(
@@ -779,17 +802,30 @@ def _gdn(ctx: _Ctx, op: Op) -> None:
     if ctx.shape(cs)[0] != 2 or ctx.shape(rs)[0] != 2:
         raise ValueError(f"gdn_mixer: the states need two slots (StateEntry.checkpoints = 2), got {ctx.shape(cs)} / {ctx.shape(rs)}")
     macros = _gdn_macros(ctx, a, commit)
+    prepared = not commit and ctx.t > 1 and ctx.accelerator == "on"
+    if prepared:
+        macros.update(PREPARED="1", SPB="1u", SL="1u", TP="8u")
     kmix = ctx.kernel("gdn", kernels.gdn_source(), "gdn_mixer", macros)
     main, abv = projs[ps["in_proj_qkv"][0]], projs[ps["in_proj_a"][0]]
     prm = ctx.params("gdn", kernels.gdn_params(
         hv=hv, hk=hk, t_active=ctx.t, q_off=ps["in_proj_qkv"][1], k_off=ps["in_proj_qkv"][1] + kd, v_off=ps["in_proj_qkv"][1] + 2 * kd,
         z_off=0, a_off=ps["in_proj_a"][1], b_off=ps["in_proj_b"][1], in_stride=ctx.shape(main)[1],
-        ab_stride=ctx.shape(abv)[1], ab_separate=ab_separate, out_stride=hv * dv, n_sg=ctx.n_sg, key_dim=kd, eps=float(a["eps"])))
+        ab_stride=ctx.shape(abv)[1], ab_separate=ab_separate, out_stride=hv * dv, n_sg=hv * dv if prepared else ctx.n_sg, key_dim=kd, eps=float(a["eps"])))
     st = ctx.program.step_state
     grid, tg = ctx.crew_grid()
+    if prepared:
+        grid, tg = (-(-(hv * dv) // 4), 1, 1), (128, 1, 1)
+    prep_binding = []
+    if prepared:
+        prep = ctx.scratch("gdn.prepared", ctx.t * hv * (2 * dk + dv + 2) * 4, shared=True)
+        kp = ctx.kernel("gdn", kernels.gdn_source(), "gdn_prepare", macros)
+        ctx.add(kp, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (4, *ctx.windows[conv_w.name]),
+                     (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (8, prep, 0), (9, prm, 0), (15, st, 0)],
+                (ctx.t * hv, 1, 1), (32, 1, 1), "gdn_prepare", writes=[8])
+        prep_binding = [(8, prep, 0)]
     # the commit pass writes only the states: its output value is a placeholder (lower_round gives it a 4-byte one)
     ctx.add(kmix, [(0, *ctx.buf(main)), (1, *ctx.buf(abv)), (2, *ctx.buf(cs)), (3, *ctx.buf(rs)), (4, *ctx.windows[conv_w.name]),
-                   (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, *ctx.buf(o_part)), (9, prm, 0), (15, st, 0)],
+                   (5, *ctx.windows[a_log.name]), (6, *ctx.windows[dt_bias.name]), (7, *ctx.buf(o_part)), (9, prm, 0), (15, st, 0)] + prep_binding,
             grid, tg, op.kind, writes=[2, 3] if commit else [2, 3, 7])
 
 
@@ -1039,6 +1075,14 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
         elif v.is_weight or v.is_const:
             if v.name not in ctx.windows:
                 raise KeyError(f"emit_program: the pack has no entry for {v.name!r}")
+            if v.is_const:
+                aux = next((pk.aux[v.name] for pk in packs if v.name in pk.aux), None)
+                if aux is not None and _value_bytes(v, t) > int(aux["nbytes"]):
+                    raise ValueError(
+                        f"emit_program: constant {v.name!r} needs {_value_bytes(v, t)} bytes "
+                        f"for shape {v.shape}, but its pack entry has only {aux['nbytes']} bytes "
+                        f"(shape {aux['shape']}); repack with the requested context capacity"
+                    )
     program.buffers[program.step_state] = BufferSpec(layout.size, layout.pack({"t_this_step": t}), "step_state")
     program.buffers[program.ring] = BufferSpec(ring_capacity * 8, None, "ring")
     order = list(g.ops)

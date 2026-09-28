@@ -42,6 +42,9 @@
 // independent of T, so every T's rows sum in the same order (a drafter's chain row and the target's verify row of
 // one position agree to the bit).
 static inline uint pick_chunk(uint ctx, uint kv_heads, uint rep, uint n_sg, uint n_chunks_max) {
+#if FIXED_CHUNK
+  return CH;
+#endif
   const uint n_rg1 = (rep + RBMAX - 1u) / RBMAX;
   uint ch = CH;
   while (ch > 16u) {
