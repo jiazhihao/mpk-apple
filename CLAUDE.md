@@ -110,10 +110,13 @@ that requests 16 partials per round — level with MLX's `quantized_matmul` per 
 (~0.65 µs per pipeline switch, the barriers, ~2 µs per dispatch), not the pack's file mapping or the StepState read.
 Per layer at T = 1 over 128 tokens of context the 0.6B is **level with MLX (60–61 vs 59–60 µs across runs; the step
 2.06–2.09 vs 2.06–2.07 ms)** and the 8B 1.09× (441 vs 403; the step 17.1 ms, 0.91× mlx-lm); over 1024 tokens 1.29×
-and 1.10×; at T = 4 the 0.6B 1.50× (the tile on its small slabs) and the 8B 1.11×; at T = 8 the 0.6B 1.11× and the
-8B **0.60× / 0.71×** — what remains of the layer gate (every layer strictly faster than MLX's): the NVFP4 shader's
-last 10 % to MLX's streaming rate on the 8B at T = 1, the tile on 1–3.5 MB slabs at T = 4, and the attention over long
-contexts (a per-kv-head v3 block with rep rows) (§11.1).
+and 1.10×; at T = 4 the 0.6B 1.45× (the tile on its small slabs) and the 8B 1.12×; at T = 8 the 0.6B 1.14× (1.03× per step)
+and the 8B **0.67×** — the layer gate (every layer strictly faster than MLX's) is open on the 8B's dependency chain
+(~2–4 µs per dispatch of switch, barrier and cold start, and an attention nothing overlaps, where MLX's concurrent
+stream hides its small kernels: our GEMV kernels are at its rate or better per shape) and on the small model's tile at
+T = 4 (~5 µs of fixed cost per dispatch on 1–3.5 MB slabs); a slab prefetch beside the attention (a ~16 MB last-level
+cache exists) and rows-per-block attention were measured and rejected; over 1024 tokens MLX's per-layer slope is not
+linear in the layer count, so the step ratio is the comparison there (§11.1).
 
 ## Read these, in this order
 

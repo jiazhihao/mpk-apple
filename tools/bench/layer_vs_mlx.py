@@ -275,9 +275,12 @@ def main() -> int:
         sess.buffers = None                                                # the pack's file-backed windows and the arenas go with the session:
         del sess                                                           # two 8B sessions beside mlx-lm's model paged the pack out (16 s steps)
         gc.collect()
-    # the per-layer slopes
-    print("\n| model | T | ctx | ours ms / layer (GPU) | ours (wall) | mlx-lm ms / layer (wall) | ours / mlx | ours step (all layers, wall) | mlx step |")
-    print("|---|---|---|---|---|---|---|---|---|")
+    # the per-layer slopes; with three or more layer counts, every consecutive pair's slope — a slope is only a per-layer
+    # cost where the step is linear in the layer count (mlx-lm's is not over a 1024-token context: 28 / 21 / 14 layers of
+    # the 0.6B gave 25 and 90 µs per layer for the two pairs while ours gave 76 and 76; decode-kernels.md §11.1), so the
+    # step ratio at the full layer count is printed beside it
+    print("\n| model | T | ctx | ours ms / layer (GPU) | ours (wall) | mlx-lm ms / layer (wall) | ours / mlx | ours step (all layers, wall) | mlx step | step ratio |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     if len(layers) >= 2:
         k1, k2 = layers[0], layers[1]
         for t in ts:
@@ -287,10 +290,21 @@ def main() -> int:
                 so_g = (o1["gpu"] - o2["gpu"]) / (k1 - k2)
                 so_w = (o1["wall"] - o2["wall"]) / (k1 - k2)
                 sm = (m1["wall"] - m2["wall"]) / (k1 - k2) if mlx_model is not None else float("nan")
-                print(f"| {name} | {t} | {c} | {so_g * 1e3:.1f} µs | {so_w * 1e3:.1f} µs | {sm * 1e3:.1f} µs | {so_w / sm if sm else float('nan'):.2f} | {o1['wall']:.3f} ms | {m1['wall']:.3f} ms |")
+                sr = o1["wall"] / m1["wall"] if mlx_model is not None and m1["wall"] else float("nan")
+                print(f"| {name} | {t} | {c} | {so_g * 1e3:.1f} µs | {so_w * 1e3:.1f} µs | {sm * 1e3:.1f} µs | {so_w / sm if sm else float('nan'):.2f} | {o1['wall']:.3f} ms | {m1['wall']:.3f} ms | {sr:.2f} |")
+                if len(layers) >= 3:
+                    pairs = []
+                    for ka, kb in zip(layers, layers[1:]):
+                        oa, ob = results[("ours", ka, t, c)], results[("ours", kb, t, c)]
+                        ma, mb = results[("mlx", ka, t, c)], results[("mlx", kb, t, c)]
+                        pairs.append((ka, kb, (oa["wall"] - ob["wall"]) / (ka - kb) * 1e3,
+                                      (ma["wall"] - mb["wall"]) / (ka - kb) * 1e3 if mlx_model is not None else float("nan")))
+                    print("  pairwise slopes (µs / layer, ours / mlx-lm): " + "; ".join(f"{ka}→{kb}: {so:.1f} / {sm_:.1f}" for ka, kb, so, sm_ in pairs)
+                          + ("  — mlx-lm non-linear: read the step ratio" if mlx_model is not None and max(sm_ for *_, sm_ in pairs) > 1.5 * max(1e-9, min(sm_ for *_, sm_ in pairs)) else ""))
                 rows.append({"chip": info.name, "date": time.strftime("%Y-%m-%d %H:%M"), "model": name, "T": t, "ctx": c, "slope": True,
                              "ours_layer_gpu_ms": round(so_g, 5), "ours_layer_wall_ms": round(so_w, 5), "mlx_layer_wall_ms": round(sm, 5),
-                             "ours_intercept_ms": round(o1["wall"] - so_w * k1, 4), "mlx_intercept_ms": round(m1["wall"] - sm * k1, 4) if mlx_model is not None else None})
+                             "ours_intercept_ms": round(o1["wall"] - so_w * k1, 4), "mlx_intercept_ms": round(m1["wall"] - sm * k1, 4) if mlx_model is not None else None,
+                             "step_ratio": round(sr, 4), "layers": list(layers)})
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         with open(a.out, "a") as f:

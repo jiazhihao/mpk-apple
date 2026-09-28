@@ -1119,3 +1119,45 @@ at T = 1 at both contexts (its long-context slope is an artifact of MLX's own no
 tokens is 2.51 ms against our 2.45) and at T = 8 level (4.00 vs 3.96); the 8B step is 0.91× at T = 1 and 1.6× at
 T = 8. Open: the 8B at T = 1 (the NVFP4 shader's 250–265 GB/s against MLX's ~290), the small model at T = 4 (the
 tile on small slabs), and the attention over long contexts (a per-kv-head v3 block with rep rows).
+
+
+**Is the slope a per-layer cost?** Measured at three layer counts (28 / 21 / 14 of the 0.6B, 36 / 27 / 18 of the 8B,
+the same protocol, 2026-09-27 [M]): ours is linear to a few per cent at every T and context (0.6B, T = 1, 1024 tokens:
+76 / 76 µs for the two pairs; T = 4: 158 / 149; 8B, T = 1: 441 / 456; T = 8: 559 / 549), MLX's is linear over 128
+tokens (0.6B T = 1: 59 / 62; 8B T = 1: 412 / 411) and **not over 1024** (0.6B T = 1: 25 / 90 µs per layer for the two
+pairs; T = 4: 67 / 110; T = 8: 125 / 163): its step over a long context carries a cost that does not scale with the
+layer count, which the two-point slope moves in and out of the per-layer number. So over 1024 tokens the slope ratio is
+not a comparison of layers, and the bench prints every pairwise slope and the **step ratio** (our step over MLX's at
+the full layer count) beside it. By the step over 1024 tokens the 0.6B is at 0.97× MLX at T = 1 (2.50 vs 2.58 ms; 0.82×
+at 21 layers, 0.81× at 14), 1.50× at T = 4 and 1.23× at T = 8; the 8B 1.10× at T = 1, 1.14× at T = 4, 0.71× at T = 8.
+Over 128 tokens the slope and the step agree: 0.6B T = 1 1.03–1.07× by slope and 1.01× by step, T = 4 1.56× / 1.37×,
+T = 8 1.11× / 1.01×; 8B T = 1 1.07–1.11× / 1.09×, T = 4 1.06–1.16× / 1.13×, T = 8 0.66× / 0.63×.
+
+**The bus under the attention.** A ~16–24 MB last-level cache exists (apple-gpu-probes.md §1: 4–16 MB re-read at
+400–540 GB/s) and the attention at T = 1 leaves the bus idle for 8–12 µs per layer, so a prefetch of the next GEMV's
+slab beside it was tried (a read-only streaming dispatch, un-barriered after the attention, the GEMV barriered behind
+both): +27 µs per layer at full crew and worse at smaller ones — the 9.4 MB slab takes 35 µs to stream, the attention's
+window holds a quarter of it, and the GEMV waits for the whole prefetch. Design D14 (no weight pre-staging across
+dependencies) stands, now with this measurement.
+
+
+**Two more attention and tile experiments, both negative** (2026-09-27 [M]). (1) v3 with RB query rows per block (a
+kv head's rows in groups of RB, a key read once serving RB rows, the fold row by row): numerics at 1 ulp, but the time
+is the same as one row per block at every geometry — 0.6B at 16 rows over 128 keys 22.6 → 21.3 µs at best (RB 4, 16
+SIMD-groups), the 8B at 32 rows 40.0 → 38.4, and RB 8 is 1.4–3× slower (registers); over 1024 keys the K/V re-read it
+removes buys 2–10 %. The per-key work scales with the rows either way, so the kernel stays at one row per block. (2) The
+tile at TM = 8 with TN 32 × TK 128 instead of 16 × 256, every geometry, on the 0.6B's slabs and the 8B's 4096-row
+ones: never faster than the K-split at 16 × 256 (0.6B qkv 17.2 vs 17.3 µs, o 13.4 vs 10.5, gate + up 23.0 vs 22.5,
+down 17.9 vs 13.6; 8B o 44.5 vs 42.4). The permute's statistic fold now requests 16 partials per round like the
+GEMV's (3.4 µs per permute on the 8B, from ~4). The layer at T = 4 / 8 after these: 0.6B 105 / 133 µs (MLX 72 / 117:
+1.45× / 1.14×; per step 1.36× / 1.03×), 8B 491 / 562 (MLX 439 / 835: 1.12× / 0.67×).
+
+**Where the gate stands, structurally.** The GEMV kernels are at MLX's rate or better per shape at T = 1 (0.6B: 11.6 /
+6.2 / 17.0 / 8.5 µs vs 10.9 / 5.7 / 17.1 / 8.3; 8B: 0.94–1.13× of `qmv`) and the tile path at T = 4 on the 8B is faster
+than MLX's `qmm` (451 vs ~470–510 µs of GEMVs per layer); the attention at T = 1 is 5–8 µs isolated against MLX's ~6.
+What keeps the 8B's layer at 1.07–1.13× of MLX's at T = 1 and T = 4 is the serialized chain: five to seven dispatches per
+layer, each paying ~2–4 µs of pipeline switch, barrier and cold start (measured one by one, §11.1 above), an attention
+that nothing overlaps, and at T > 1 the permute dispatches — MLX's concurrent stream hides its own small kernels
+behind its GEMVs. What keeps the 0.6B at 1.45× at T = 4 is the tile's ~5 µs of fixed cost per dispatch on 1–3.5 MB
+slabs against MLX's compact `qmm` (~3 µs fixed): a small-T GEMV of a different design. Per step — what a token pays
+— the 0.6B is under MLX at T = 1 and level at T = 8, the 8B ahead 1.5× at T = 8 and behind 9–13 % at T = 1 and T = 4.

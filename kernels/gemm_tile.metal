@@ -432,6 +432,9 @@ kernel void gemm_tile(device const uint4* w [[buffer(0)]], device const float* r
 #define PERM_SG 4u
 #endif
 #define PERM_UNROLL 4u
+#ifndef PERM_FOLD_LOADS
+#define PERM_FOLD_LOADS 16u          // the norm fold's loads requested per round (divides by 4)
+#endif
 struct XPermParams { uint k; uint t_active; uint tm; uint wpw; uint tk; uint stat_parts; float eps; uint pad; };
 
 static inline uint perm_source(uint i) {                                  // the original column of slot i
@@ -472,9 +475,16 @@ kernel void x_permute(device const ushort* x [[buffer(0)]],
     return;
   }
 #if PERM_NORM
-  float ssq = 0.0f;
-  for (uint i = lane; i < p.stat_parts; i += 32u) ssq += stat[t * p.stat_parts + i];
-  ssq = simd_sum(ssq);
+  // the statistic's partials folded FOLD_LOADS loads per round (as gemv_T's fold: a row-split producer leaves up to 2048
+  // per token, one load latency per 32 of them was the dispatch's critical path), four accumulators in a fixed order
+  float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f;
+  device const float* sp = stat + t * p.stat_parts;
+  for (uint base = lane; base < p.stat_parts; base += 32u * PERM_FOLD_LOADS) {
+    float v[PERM_FOLD_LOADS];
+    for (uint u = 0; u < PERM_FOLD_LOADS; u++) { const uint i = base + 32u * u; v[u] = (i < p.stat_parts) ? sp[i] : 0.0f; }
+    for (uint u = 0; u < PERM_FOLD_LOADS; u += 4u) { s0 += v[u]; s1 += v[u + 1u]; s2 += v[u + 2u]; s3 += v[u + 3u]; }
+  }
+  const float ssq = simd_sum((s0 + s1) + (s2 + s3));
   const float r = rsqrt(ssq / float(K) + p.eps);
 #endif
   device const ushort* row = x + (ulong)t * K;
