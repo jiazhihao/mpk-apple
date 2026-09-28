@@ -98,3 +98,35 @@ def test_markov_head_bytes():
     rng = np.random.default_rng(0)
     _, info, _ = pack_spec(random_spec("nvfp4", 1024, 256, rng), PackLayout(rows=16, scale_placement="block"))
     assert info.nbytes / 1024 == 128 + 32 == 160 and info.unit_bytes == 4 and info.scale_region_bytes == 16 * 32
+
+
+@pytest.mark.parametrize("k", [256, 512, 1024, 2048])
+@pytest.mark.parametrize("lane_order", ["contiguous", "interleaved16"])
+def test_shared_affine_scales_preserve_payload_and_dequantization(k, lane_order):
+    spec = random_spec("int4_affine", 37, k, np.random.default_rng(19))
+    old, old_info, _ = pack_spec(spec, PackLayout(rows=8, lane_order=lane_order, scale_placement="block", share_scales=False))
+    new, info, _ = pack_spec(spec, PackLayout(rows=8, lane_order=lane_order, scale_placement="block"))
+    assert info.scale_lane_divisor == (max(1, 64 // (k // 32)) if info.scale_placement == "block" else 1)
+    assert info.nbytes <= old_info.nbytes
+    if info.scale_lane_divisor > 1:
+        assert info.scale_region_bytes * info.scale_lane_divisor == old_info.scale_region_bytes
+    a, b = unpack_blm(old, old_info), unpack_blm(new, info)
+    assert all(np.array_equal(x, y) for x, y in zip(a, b))
+    assert np.array_equal(FORMATS.get("int4_affine").dequantize(FORMATS.get("int4_affine").unpack_pack(new, info)),
+                          FORMATS.get("int4_affine").dequantize(spec))
+    if info.scale_placement != "block":
+        return
+    for row in (0, 7, 8, 36):
+        for lane in range(32):
+            off = info.scale_offset(row // 8, row % 8, lane)
+            assert new[off:off + info.scale_bytes] == b[1][row, lane].tobytes()
+
+
+def test_shared_scale_metadata_rejects_invalid_geometry():
+    from dataclasses import replace
+    _, info, _ = pack_spec(random_spec("int4_affine", 17, 1024, np.random.default_rng(19)),
+                           PackLayout(scale_placement="block"))
+    for kwargs in ({"scale_lane_divisor": 3}, {"scale_lane_divisor": 4}, {"scale_group": 32},
+                   {"scale_placement": "inline"}, {"scale_bytes": 8}):
+        with pytest.raises(ValueError):
+            replace(info, **kwargs)

@@ -409,7 +409,7 @@ def test_ksplit_live_token_partials(dev, monkeypatch, fmt, tokens, persistent):
     assert np.allclose(stat[:tokens], expected, rtol=1e-4, atol=1e-3)
 
 
-@pytest.mark.parametrize("fmt,k", [("nvfp4", 4096), ("nvfp4", 5120), ("int8", 4096), ("int4_affine", 4096), ("nvfp4", 2048)])
+@pytest.mark.parametrize("fmt,k", [("nvfp4", 4096), ("nvfp4", 5120), ("int8", 4096), ("int4_affine", 4096), ("int4_affine", 1024), ("nvfp4", 2048)])
 @pytest.mark.parametrize("ksplit", [1, 2])
 def test_gemm_tile_block_scale_placement(dev, fmt, k, ksplit):
     """The tile's cooperative fill reading the block's scale region (#101), with and without the scale cache and the K-split."""

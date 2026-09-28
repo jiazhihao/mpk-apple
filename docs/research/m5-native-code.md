@@ -238,3 +238,65 @@ shader validation: contracts, matrix and GDN kernel tests, the 25 new BF16 SIMD
 cases, and the real-model speculative rollback golden. The real-model layer
 oracle and twice-repeated 48-token short golden also passed. The independently
 reproduced session-reuse issue above remains open.
+
+## Shared affine scale runs
+
+The K=1024 affine INT4 pack stored each 64-column group's scale/bias pair twice:
+its two 32-column lane stripes carried separate copies. Sharing that run removes
+64 bytes per weight row without changing payload order or arithmetic. On the
+0.6B checkpoint, the pack shrinks from 372,015,104 to 343,932,928 bytes, including
+the embedding. The decoder alone sheds 655,360 bytes per layer.
+
+`scale_lane_divisor` records the address rule explicitly. New manifests use
+version 2 so an older reader refuses them; this reader still supports version 1.
+The packer verifies identical scale bytes before dropping copies. GEMV, matrix
+fill, embedding gather, unpacking and the autotuner use the same metadata. The
+sharing decision is based on format and stripe/group geometry, not model identity.
+Only affine INT4 opts in; no unmeasured NVFP4 layout change is included.
+
+With identical tuning decisions, seven alternating AB/BA pairs of 32 steps,
+random BF16 input and nonzero KV prefix, all 28 layer outputs are byte-identical:
+
+| T | Context | Original µs/layer | Shared scales µs/layer |
+|---:|---:|---:|---:|
+| 1 | 128 | 60.74 | 58.85 |
+| 4 | 128 | 85.37 | 82.40 |
+| 4 | 1024 | 108.14 | 103.97 |
+| 8 | 128 | 86.76 | 83.31 |
+
+Every paired sample improves. The actual QKV native specialization retains
+71 registers, zero scratch, 256 shared bytes and 3,808 code bytes; gate/up retains
+85 registers, zero scratch and 3,840 shared bytes (8,392 → 8,406 code bytes).
+The measured gain is consistent with lower weight traffic, not reduced register
+allocation. This is resource/byte evidence, not decoded ISA or a hardware counter.
+
+With fresh tuning of the compact layout, the paired MLX gate is still open:
+
+| T | Context | MPK µs/layer | MLX µs/layer | MPK faster in every pair |
+|---:|---:|---:|---:|---|
+| 1 | 128 | 58.97 | 57.48 | False |
+| 1 | 1024 | 71.57 | 68.18 | False |
+| 4 | 128 | 80.84 | 71.35 | False |
+| 4 | 1024 | 102.51 | 94.86 | False |
+| 6 | 128 | 81.51 | 87.32 | True |
+| 6 | 1024 | 105.03 | 120.17 | True |
+| 8 | 128 | 82.94 | 103.28 | True |
+| 8 | 1024 | 107.78 | 146.38 | True |
+
+These are streaming stack means, not proof that every individual layer wins.
+The minimum same-input per-layer cosine against MLX is above 0.9999. Two
+additional generation comparisons (5- and 19-token prompts, 32 generated tokens
+each) match the old pack exactly. Validation: 154 contract tests and 274 kernel
+tests passed, 3 kernel tests skipped, with Metal shader validation enabled.
+Raw samples and native reports are `apple-m5-pro-20c_shared_scales_*_20260928.jsonl`
+and `apple-m5-pro-20c_fixed_shared_scales_20260928.jsonl` in the results directory.
+
+Repack with `tools/pack_weights.py --scale-placement block`; add
+`--no-share-scales` for a controlled old-layout pack. Existing pack directories
+are not silently rewritten.
+
+A separate attention experiment reduced v3's reduction storage to one component
+at a time, matching MLX's smaller allocation but adding barriers. It regressed
+T=1 by about 1 µs and T=4 short-context by about 4 µs. Transposing the full buffer
+also regressed. Neither change is retained: smaller allocation alone is not a
+latency result.

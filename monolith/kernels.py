@@ -77,6 +77,7 @@ def unit_geometry(info: PackInfo, f=None) -> Dict[str, str]:
             raise ValueError(f"decode kernels: {info.format}'s scale run of {s} bytes is not whole {unit_bytes}-byte scales")
         g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": "0", "SCALE_UOFF": "0", "SCALE_WORDS": str(info.scale_words),
              "SCALE_PLACEMENT": "1", "SCALE_RUN": f"{s}u", "SCALE_UNIT_BYTES": f"{unit_bytes}u",
+             "SCALE_LANE_DIVISOR": f"{info.scale_lane_divisor}u",
              "SCALE_REGION_WORDS": f"{info.scale_region_bytes // 16}u"}
     else:
         g = {"PAYLOAD_WORDS": str(-(-p // 16)), "SCALE_W0": str(p // 16), "SCALE_UOFF": str((p % 16) // 4),

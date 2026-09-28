@@ -22,6 +22,7 @@ class PackLayout:
     lane_order: str = "interleaved16"
     lanes: int = 32
     scale_placement: str = "inline"
+    share_scales: bool = True  # affine INT4 block scales: store a group once when several lane stripes share it
 
     def __post_init__(self) -> None:
         if self.lane_order not in ("contiguous", "interleaved16"):

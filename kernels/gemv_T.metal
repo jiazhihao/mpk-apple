@@ -154,13 +154,16 @@ static inline uint4 sub_word(uint4 q, uint lane) {
   return q;
 #endif
 }
+#ifndef SCALE_LANE_DIVISOR
+#define SCALE_LANE_DIVISOR 1u
+#endif
 #ifndef SCALE_PLACEMENT
 #define SCALE_PLACEMENT 0            // 1: the block's scales in their own region after its payload words (blm.py, #101):
 #endif                               //    lane ln's row r scales start (ln * SCALE_RUN) % 16 bytes into word SCALE_WORD(ln, r, 0)
 #if SCALE_PLACEMENT
 #define SCALE_BASE (R * 32u * PAYLOAD_WORDS / LANES_PER_WORD)          // the block's payload words (sub-word units share words)
-#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * 32u * SCALE_RUN + (ln) * SCALE_RUN) / 16u + (s))
-#define SCALE_SOFF(ln) ((((ln) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
+#define SCALE_WORD(ln, r, s) (SCALE_BASE + ((r) * (32u / SCALE_LANE_DIVISOR) * SCALE_RUN + ((ln) / SCALE_LANE_DIVISOR) * SCALE_RUN) / 16u + (s))
+#define SCALE_SOFF(ln) (((((ln) / SCALE_LANE_DIVISOR) * SCALE_RUN) % 16u) / SCALE_UNIT_BYTES)
 #else
 #define SCALE_WORD(ln, r, s) unit_word((ln), (r), SCALE_W0 + (s))
 #define SCALE_SOFF(ln) 0u

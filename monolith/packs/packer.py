@@ -23,7 +23,7 @@ from ..formats.safetensors_reader import SafetensorsDir
 from . import transforms
 
 ALIGN = 16384
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2  # shared scale runs; version 1 packs remain readable
 _NP_OF = {"F32": np.float32, "F16": np.float16, "BF16": np.uint16, "I32": np.int32, "I64": np.int64, "U8": np.uint8}
 
 
@@ -158,6 +158,7 @@ class Packer:
             "rows": r, "unit_bytes": info.unit_bytes, "payload_bytes": info.payload_bytes, "scale_bytes": info.scale_bytes,
             "lane_order": info.lane_order, "scale_group": info.scale_group, "n_blocks": info.n_blocks, "scale_placement": info.scale_placement,
             "scale_unit_bytes": info.scale_unit_bytes, "scale_dtype": info.scale_dtype,
+            "scale_lane_divisor": info.scale_lane_divisor,
             "row_scales_offset": rs_off, "row_perm": req.row_perm is not None,
             "segments": [dict(s.describe(), rows=int(nr), tensor_scale=float(sc)) for s, nr, sc in zip(req.segments, seg_rows, scale_of_seg)],
         }
@@ -224,8 +225,10 @@ class PackFile:
         self.dir = Path(directory)
         with open(self.dir / "manifest.json") as f:
             self.manifest = json.load(f)
-        if self.manifest.get("version") != MANIFEST_VERSION:
+        if self.manifest.get("version") not in (1, MANIFEST_VERSION):
             raise ValueError(f"unsupported manifest version {self.manifest.get('version')}")
+        if self.manifest["version"] == 1 and any(s.get("scale_lane_divisor", 1) != 1 for s in self.manifest["slabs"]):
+            raise ValueError("shared scale runs require manifest version 2")
         self._mm = np.memmap(self.dir / self.manifest["pack"], dtype=np.uint8, mode="r")
         self.slabs = {s["name"]: s for s in self.manifest["slabs"]}
         self.aux = {a["name"]: a for a in self.manifest["aux"]}
@@ -235,7 +238,8 @@ class PackFile:
         return PackInfo(s["format"], s["n"], s["k"], s["rows"], s["unit_bytes"], s["payload_bytes"], s["scale_bytes"],
                         s["lane_order"], s["n_blocks"], 1.0, s["scale_group"], s.get("scale_placement", "inline"),
                         int(s.get("scale_unit_bytes", 8 if (s["format"] == "int4_affine" and s["scale_bytes"]) else 0)),   # older INT4 packs: FP32 pairs
-                        s.get("scale_dtype", "bf16" if (s["format"] == "int4_affine" and s["scale_bytes"] and int(s.get("scale_unit_bytes", 8)) == 4) else ""))   # 4-byte pairs before scale_dtype: BF16
+                        s.get("scale_dtype", "bf16" if (s["format"] == "int4_affine" and s["scale_bytes"] and int(s.get("scale_unit_bytes", 8)) == 4) else ""),   # 4-byte pairs before scale_dtype: BF16
+                        int(s.get("scale_lane_divisor", 1)))
 
     def slab_bytes(self, name: str) -> np.ndarray:
         s = self.slabs[name]

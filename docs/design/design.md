@@ -345,7 +345,11 @@ checkpoint index, drafter context length), `done`, `error`, token-ring head.
   a 4- or 8-byte payload (K = 256 or 512 for NVFP4) is not padded to a word either: 4 or 2 lanes share one
   (`LANES_PER_WORD`, the shader GEMV's `sub_word` select) and a stripe narrower than a scale group carries the group's
   scale once per lane — the DSpark Markov head's 151936 × 256 in NVFP4 is 24 MB instead of 78. The placement is a
-  profile value. Next: MXFP4, GGUF K-quants.
+  profile value. Manifest version 2 also records `scale_lane_divisor`: affine INT4 groups shared by adjacent
+  narrow stripes are stored once in the block region (K = 1024: 64 scale bytes per row instead of 128).
+  Payload order and dequantization stay unchanged; the reader accepts version 1 with a divisor of 1.
+  `PackLayout.share_scales=False` / `pack_weights.py --no-share-scales` retains the original layout for comparisons.
+  Next: MXFP4, GGUF K-quants.
 * **State.** KV cache per attention layer (BF16 in v1; FP8/INT8 later — at long context KV traffic overtakes the
   weights); GDN recurrent state FP32 `[48,128,128]` + conv state, each with `γ+1` checkpoint slots for speculative
   rollback; the drafter's injected-context KV (5 layers × 8 KV heads × 128 × K and V ≈ 20 KB per committed token,
