@@ -625,5 +625,28 @@
         }
       }
     }
+  },
+  "mlx_step_followup": {
+    "date": "2026-09-29",
+    "versions": {
+      "mlx": "0.32.1",
+      "mlx-lm": "0.32.0"
+    },
+    "generator_source_sha256": "5a57043b5a6497450bce14447db3caf570ffdd22adaab34e659b31aceddda522",
+    "mode": "Direct unmodified mlx_lm.generate.speculative_generate_step; num_draft_tokens=7, max_tokens=128, greedy default sampler, default unquantized KV caches, prefill_step_size=512. Same NVFP4 target and affine INT4 drafter checkpoints as Monolith/vLLM. No HTTP server or detokenization inside the measured intervals.",
+    "timing": "Timestamp each non-draft token yield (round end). Inspect suspended generator locals num_draft and n to identify full rounds. Consecutive full-seven round boundaries include cache rewind, drafting, target verification, acceptance, GPU waits and native Python loop/consumer overhead. First round and shortened tail rounds excluded. Median of five request-average step times per context; rep 0 excluded as warmup.",
+    "validation": "18 requests returned all 128 tokens with expected prompt counts; accepted-token counts reconcile with emitted tokens at every recorded boundary; all intervals and request means recomputed from raw timestamps.",
+    "command": [
+      "/tmp/mpk-serving-tools/vllm-env/bin/python",
+      "tools/bench/mlx_spec_step_latency.py",
+      "--model",
+      "/Users/zhihaojia/models/mlx-Qwen3-8B-nvfp4",
+      "--drafter",
+      "/Users/zhihaojia/models/mlx-community-Qwen3-0.6B-4bit",
+      "--prompts",
+      "tools/bench/results/qwen8b-serving-decode-20260929/prompts.json",
+      "--out",
+      "/tmp/mpk-serving-results/mlx-lm-n7-steps.jsonl"
+    ]
   }
 }

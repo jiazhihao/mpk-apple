@@ -4,6 +4,8 @@ For full-model single-request decode against vLLM-Metal, llama.cpp Metal and
 Ollama, use `single_request_latency.py`. It records native decode counters,
 warmups and generated text. See the [Qwen3 8B comparison](../../docs/research/qwen8b-serving-decode.md)
 for measured results, exact prompts and pinned server settings.
+`mlx_spec_step_latency.py` adds direct MLX-LM full N=7 round timing with the same
+prompts, excluding prefill and shortened tail rounds.
 
 `gemv_bench.py` runs the production-shaped `kernels/gemv_T.metal` (assembled by `monolith.kernels` from a format plugin's
 decode snippet and a pack geometry) on the target's shapes, checks every run against the exact format oracle (the leaf-op

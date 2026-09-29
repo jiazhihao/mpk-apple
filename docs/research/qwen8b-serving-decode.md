@@ -57,10 +57,12 @@ milliseconds per full step, with five measured requests per context:
 | Engine | 126 | 1,023 | 4,095 |
 |---|---:|---:|---:|
 | Monolith | **53.57** | **58.18** | **74.92** |
+| MLX-LM (direct) | 54.87 | 62.48 | 82.88 |
 | vLLM-Metal | 62.65 | 71.07 | 100.00 |
 | llama.cpp Metal | 91.38 | 96.37 | 116.43 |
 
-Monolith's step latency is 14.5%, 18.1%, and 25.1% lower than vLLM-Metal's;
+Monolith's step latency is 2.4%, 6.9%, and 9.6% lower than direct MLX-LM's,
+and 14.5%, 18.1%, and 25.1% lower than vLLM-Metal's;
 it is 41.4%, 39.6%, and 35.7% lower than llama.cpp's. The target/drafter
 quantization differences described above still apply. These step costs explain
 part of the per-token gap independently of differences in accepted tokens per
@@ -83,11 +85,40 @@ accepted-token sums exactly match the response counters. Instrumentation and
 native timer boundaries differ, so this is an engine-cycle comparison rather
 than a synchronized GPU-only microbenchmark.
 
+The direct MLX-LM baseline uses MLX 0.32.1 / mlx-lm 0.32.0 from the same pinned
+environment as vLLM-Metal, with the same NVFP4 target and affine INT4 drafter.
+[Its benchmark](../../tools/bench/mlx_spec_step_latency.py) consumes the
+unmodified `speculative_generate_step` generator, using default greedy sampling,
+fresh unquantized KV caches and 512-token prefill chunks. It timestamps each
+non-draft token yield (the end of a round) and reads the suspended generator's
+`num_draft` local to exclude shortened tail rounds. Consecutive full-round
+intervals include cache rollback, drafting, target verification, acceptance,
+GPU waits and Python overhead. The first round is excluded with prefill;
+detokenization is outside the timed loop. This is direct MLX-LM, not an HTTP
+server. The native generator source hash is preserved because the instrumentation
+depends on its round-end yield and local-variable conventions.
+
+All 18 MLX requests returned 128 tokens. Boundary acceptance counts reconcile
+with emitted-token counts, and every interval and mean was recomputed from the
+saved timestamps. Request-average MLX ranges were 54.69–54.92, 62.39–62.58, and
+82.85–83.05 ms at the three contexts. The short-context advantage is small;
+these sequential engine blocks do not establish a universal performance ranking.
+
 The [step evidence](../../tools/bench/results/qwen8b-serving-decode-20260929/steps.jsonl)
 retains request averages, iteration counts and llama.cpp's individual acceptance
 timestamps. The directory also contains both new runs' raw responses and counter
 snapshots; `methodology.json` records the follow-up launches. Original per-token
 results above are unchanged.
+The [MLX records](../../tools/bench/results/qwen8b-serving-decode-20260929/mlx-lm-n7-steps.jsonl)
+separately retain every round-end boundary, timed interval and generated token.
+
+```bash
+python tools/bench/mlx_spec_step_latency.py \
+  --model /path/to/mlx-Qwen3-8B-nvfp4 \
+  --drafter /path/to/mlx-community-Qwen3-0.6B-4bit \
+  --prompts tools/bench/results/qwen8b-serving-decode-20260929/prompts.json \
+  --out /tmp/mlx-n7-steps.jsonl
+```
 
 ## Measurement and comparability
 
