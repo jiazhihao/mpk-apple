@@ -6,6 +6,10 @@ warmups and generated text. See the [Qwen3 8B comparison](../../docs/research/qw
 for measured results, exact prompts and pinned server settings.
 `mlx_spec_step_latency.py` adds direct MLX-LM full N=7 round timing with the same
 prompts, excluding prefill and shortened tail rounds.
+`profile_spec_round.py` splits the existing N=7 dispatch stream into timed stages
+and compares against unsplit controls. Optional `--cache` reuses saved tuning
+choices and leaves cache misses at default, without searching. The serving
+adapter originally disabled autotuning; its archived results are labeled accordingly.
 
 `gemv_bench.py` runs the production-shaped `kernels/gemv_T.metal` (assembled by `monolith.kernels` from a format plugin's
 decode snippet and a pack geometry) on the target's shapes, checks every run against the exact format oracle (the leaf-op

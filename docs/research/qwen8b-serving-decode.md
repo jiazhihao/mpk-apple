@@ -3,11 +3,17 @@
 Measured 2026-09-29 on the 20-core Apple M5 Pro, 24 GB, macOS 26.5.1.
 Monolith revision `03a4252` (the input-normalization fusion branch).
 
-**Plain Monolith has the lowest decode latency in this screen.** Against
+**Correction: the original Monolith serving runs disabled autotuning, unlike
+the earlier layer benchmark and the normal Session default.** Reusing available
+cached choices reduces the short-context N=7 round from 53.57 to **35.83 ms**.
+The tables below preserve the original untuned measurements; the component audit
+below records the correction. Longer contexts have not been rerun with tuning.
+
+Plain Monolith has the lowest plain-decode latency in the original screen. Against
 vLLM-Metal with the same NVFP4 checkpoint, its median latency is 4.3%, 6.8%,
 and 6.9% lower at the three context lengths. llama.cpp and Ollama are close to
-each other. Fixed N=7 speculation slows all three tested speculative engines on
-this prompt set; a faster verification layer does not guarantee faster generation.
+each other. With the original untuned Monolith configuration, fixed N=7 speculation
+slows all three tested speculative engines on this prompt set; a faster verification layer does not guarantee faster generation.
 
 ## Decode results
 
@@ -20,11 +26,11 @@ vocabulary head and sampling, rather than fixed-T layer replays.
 
 | Engine / mode | Target format | 126 | 1,023 | 4,095 |
 |---|---|---:|---:|---:|
-| Monolith plain | NVFP4 | **17.56** | **18.35** | **20.68** |
+| Monolith plain (autotune off) | NVFP4 | **17.56** | **18.35** | **20.68** |
 | vLLM-Metal plain | NVFP4 | 18.35 | 19.70 | 22.22 |
 | llama.cpp Metal plain | Q4_K_M | 20.95 | 21.24 | 23.05 |
 | Ollama plain | Q4_K_M | 20.70 | 21.25 | 23.00 |
-| Monolith N=7 | NVFP4 | 24.89 | 21.53 | 31.26 |
+| Monolith N=7 (autotune off) | NVFP4 | 24.89 | 21.53 | 31.26 |
 | vLLM-Metal N=7 | NVFP4 | 27.70 | 26.83 | 41.72 |
 | llama.cpp Metal N=7 | Q4_K_M | 39.57 | 41.01 | 44.65 |
 
@@ -39,7 +45,7 @@ The same Qwen3 0.6B affine INT4 drafter is used by Monolith and vLLM-Metal.
 llama.cpp uses the official Qwen3 0.6B Q8_0 GGUF drafter, so its speculative
 comparison also includes a different draft quantization.
 
-For Monolith, N=7 increases median latency by 42%, 17%, and 51%. Across measured
+For Monolith with autotuning disabled, N=7 increases median latency by 42%, 17%, and 51%. Across measured
 requests, it accepts only 1.22, 1.66, and 1.44 of seven proposed tokens per round
 at these contexts. Drafting plus verification costs more than the work saved.
 Monolith N=7 is still 10%, 20%, and 25% lower latency than vLLM-Metal N=7 here.
@@ -56,7 +62,7 @@ milliseconds per full step, with five measured requests per context:
 
 | Engine | 126 | 1,023 | 4,095 |
 |---|---:|---:|---:|
-| Monolith | **53.57** | **58.18** | **74.92** |
+| Monolith (autotune off) | **53.57** | **58.18** | **74.92** |
 | MLX-LM (direct) | 54.87 | 62.48 | 82.88 |
 | vLLM-Metal | 62.65 | 71.07 | 100.00 |
 | llama.cpp Metal | 91.38 | 96.37 | 116.43 |
@@ -129,7 +135,10 @@ latency reduction. That benchmark excludes drafting, embeddings, the vocabulary
 head, sampling and acceptance, and runs fixed-T layers on seeded inputs/cache
 prefixes. Its minima cannot be compared directly with this report's median
 full-round times of 53.57 / 54.87 ms at a 126-token prompt. Generation also uses
-dynamic execution and growing real KV state. The full-round result does not
+dynamic execution and growing real KV state. Crucially, the serving adapter
+hardcoded `autotune=False`, while the layer harness used the default
+`autotune=True`. The original explanation omitted this configuration mismatch;
+it was not just a difference in timing scope. The full-round result does not
 establish that MLX's target-layer kernels suddenly became faster, and subtraction
 across these harnesses cannot isolate the cost of drafting or scheduling.
 
@@ -147,8 +156,65 @@ with all 18 output token sequences identical and an identical speculative-loop
 AST. Sequential runs do not isolate package effects from timing drift, but this
 check does not support a large environment-driven improvement. The
 [old-environment raw records](../../tools/bench/results/qwen8b-serving-decode-20260929/mlx-lm-n7-old-env.jsonl)
-and methodology preserve the audit. A matched component profile is still needed
-to assign the full-round gap to draft work, the head, or dynamic execution.
+and methodology preserve the audit. The following component profile identifies
+the much larger Monolith configuration effect.
+
+## Draft-cost and tuning audit
+
+The drafter is Qwen3 0.6B affine INT4: 28 layers, width 1,024 and a
+151,936-token vocabulary. Seven sequential autoregressive proposals traverse
+196 decoder layers and evaluate the vocabulary head seven times. The target
+verifies up to eight positions together, sharing weight reads across positions;
+parameter count alone therefore does not predict the draft/verify cost ratio.
+
+The same short-context dispatch stream was profiled with autotuning off, then
+with available saved choices reused. Cache misses retained default choices;
+**this is a partial cache-reuse probe, not a fresh complete autotuning search**.
+Both use unchanged checkpoints, packs, gamma, verification length and prefill.
+Approximate GPU milliseconds per round:
+
+| Component | Autotune off | Reuse cached choices |
+|---|---:|---:|
+| Target embedding and 36 decoder layers | 25.01 | 17.92 |
+| Target vocabulary head and sampling | 1.57 | 1.64 |
+| Seven draft decoder passes | 23.92 | 13.69 |
+| Seven draft heads and sampling | 3.65 | 3.00 |
+| Acceptance and selection | 0.02 | 0.02 |
+| Unsplit control, GPU time | 53.78 | 35.86 |
+
+Each stage is a contiguous subset of the original compiled dispatches, with the
+same buffers and bindings, timed in a separate ICB. Six alternating whole/split
+pairs replay four real rounds from a 126-token prompt. All paired committed-token
+lists match. Splitting increases total GPU time by about 0.9% / 1.8%, so stage
+medians are approximate and do not sum exactly to the unsplit total. Split host
+wall time is not used to attribute production latency.
+
+Drafting costs about **27.6 ms untuned, 16.7 ms with cached choices**, or roughly
+3.9 / 2.4 ms per proposal. Most of the draft cost is matrix projections, not
+acceptance or rollback. Cached choices select better row/K splits and launch
+geometries, fuse draft normalization, and restore the target's K-split geometry
+that enables the persistent fused projection schedule. The program shrinks from
+1,892 to 1,493 dispatches. No kernel implementation changed for this probe.
+
+A separate full-generation check uses the original six short-context prompts,
+128 output tokens, one excluded warmup and five measured requests. It measures
+**35.83 ms per full round**, down **33.1%** from 53.57; all rounds use N=7.
+Median decode latency is 16.63 ms/output token. Only two of five measured output
+texts match the untuned run, so per-token gains also include changed acceptance;
+this is not an accuracy validation. The 1,023/4,095-token tuned cases and tuned
+plain decoding remain unmeasured. The historical 17.75 ms number was tuned
+fixed-T target decoder work alone, not the target stage of the 53.57 ms run.
+
+[Raw stage samples](../../tools/bench/results/qwen8b-serving-decode-20260929/round-stage-profile.json),
+[cached-choice stage samples](../../tools/bench/results/qwen8b-serving-decode-20260929/round-stage-profile-tuned.json),
+[full-generation records](../../tools/bench/results/qwen8b-serving-decode-20260929/round-cached-generation.json)
+and [summary](../../tools/bench/results/qwen8b-serving-decode-20260929/round-profile-summary.json)
+preserve this audit. The [probe](../../tools/bench/profile_spec_round.py) accepts
+`--model`, `--pack`, `--drafter`, `--drafter-pack`, `--prompts` and `--out`;
+packs must support 4,608 context tokens. Run once without `--cache`, then once
+with `--cache tools/bench/results/qwen8b-serving-decode-20260929/round-cached-choices.json`.
+The archived cache retains choices and their timing fields, omitting the unused
+candidate-variant history. No runtime cache search is performed by this probe.
 
 ## Measurement and comparability
 
@@ -226,8 +292,9 @@ prompt cache, and `cache_prompt=false` per request. Ollama disables saved prompt
 caching and receives an untimed unrelated one-token primer before each request
 to replace the active slot; nonzero cached-prompt counts abort the client.
 
-All engines allow 4,608 context tokens. Monolith uses commuted normalization and
-no runtime autotuning. Its prior target/draft packed weights were preserved;
+All engines allow 4,608 context tokens. The original Monolith table uses commuted
+normalization with autotuning disabled, including cached choices; that is not the
+normal Session default. The cache-reuse audit above is reported separately. Its prior target/draft packed weights were preserved;
 only longer RoPE tables were appended, with byte-identical old prefixes. Plain
 prefill chunks are 128 tokens. N=7 uses 64-token prefill chunks because the
 128-token speculative prefill arena exceeded the GPU working set before any
