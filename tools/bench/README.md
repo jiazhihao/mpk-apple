@@ -11,6 +11,13 @@ and compares against unsplit controls. Optional `--cache` reuses saved tuning
 choices and leaves cache misses at default, without searching. The serving
 adapter originally disabled autotuning; its archived results are labeled accordingly.
 
+`long_context_tune.py` screens Qwen3 8B plain/N=7 decode at 4K and 8K using
+identical prefills, then `--generate --autotune` validates fresh full generations.
+See the [long-context tuning report](../../docs/research/qwen8b-long-context-tuning.md)
+for the selected configuration and saved M5 Pro choices. The serving adapter now
+accepts `--autotune`, `--attention` and `--max-context`; omitting `--autotune`
+retains its historical untuned behavior.
+
 `gemv_bench.py` runs the production-shaped `kernels/gemv_T.metal` (assembled by `monolith.kernels` from a format plugin's
 decode snippet and a pack geometry) on the target's shapes, checks every run against the exact format oracle (the leaf-op
 gate: ≤ 2 BF16 ULPs at the output's magnitude, float32 accumulation noise < 1e-4), and streams ≥ 2 GB of identical packs

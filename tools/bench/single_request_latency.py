@@ -22,8 +22,9 @@ def serve(args):
     from monolith.generate import load_session
 
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
-    session = load_session(args.model, args.pack, max_context=4608,
-                           temperature=0, autotune=False, commute_norm=True,
+    session = load_session(args.model, args.pack, max_context=args.max_context,
+                           temperature=0, autotune=args.autotune, commute_norm=True,
+                           attention=args.attention,
                            prefill_chunk_size=args.prefill_chunk_size,
                            drafter_dir=args.drafter, drafter_pack=args.drafter_pack,
                            drafter_kind='lm', drafter_options={'gamma': 7},
@@ -43,7 +44,9 @@ def serve(args):
         wall = time.perf_counter() - start
         return dict(text=tokenizer.decode(result.tokens),
                     usage=dict(prompt_tokens=len(ids), completion_tokens=len(result.tokens)),
-                    engine=dict(prefill_gpu_ms=result.prefill_ms,
+                    engine=dict(autotune=args.autotune, attention=args.attention or session.profile.attention,
+                                max_context=args.max_context,
+                                prefill_gpu_ms=result.prefill_ms,
                                 decode_gpu_ms=result.decode_ms,
                                 decode_wall_ms=result.decode_wall_ms,
                                 generation_wall_ms=wall * 1000,
@@ -146,6 +149,10 @@ def main():
     parser.add_argument('--serve-monolith', action='store_true')
     parser.add_argument('--port', type=int, default=18100)
     parser.add_argument('--prefill-chunk-size', type=int, default=128)
+    parser.add_argument('--max-context', type=int, default=4608)
+    parser.add_argument('--autotune', action='store_true',
+                        help='Enable projection tuning/cache reuse in the Monolith adapter')
+    parser.add_argument('--attention', choices=['auto', 'v1', 'v2', 'v3', 'mma'])
     parser.add_argument('--pack')
     parser.add_argument('--drafter')
     parser.add_argument('--drafter-pack')
