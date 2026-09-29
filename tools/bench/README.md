@@ -4,8 +4,10 @@ For full-model single-request decode against vLLM-Metal, llama.cpp Metal and
 Ollama, use `single_request_latency.py`. It records native decode counters,
 warmups and generated text. See the [Qwen3 8B comparison](../../docs/research/qwen8b-serving-decode.md)
 for measured results, exact prompts and pinned server settings.
-`mlx_spec_step_latency.py` adds direct MLX-LM full N=7 round timing with the same
-prompts, excluding prefill and shortened tail rounds.
+`mlx_spec_step_latency.py` adds direct MLX-LM plain decode (`--mode plain`) and
+full N=7 round timing with the same prompts, excluding prefill and shortened tail
+rounds. It retains per-token timestamps; `--prefill-step-size` supports a matched
+prefill check against Monolith as well as the native generator defaults.
 `profile_spec_round.py` splits the existing N=7 dispatch stream into timed stages
 and compares against unsplit controls. Optional `--cache` reuses saved tuning
 choices and leaves cache misses at default, without searching. The serving

@@ -4,7 +4,9 @@ Measured 2026-09-29 on Apple M5 Pro, 20 GPU cores, 24 GB, macOS 26.5.1.
 Uses the implementation measured in the [serving comparison](qwen8b-serving-decode.md),
 with unchanged NVFP4 target and Qwen3 0.6B affine INT4 draft weights. This study
 completes missing projection-tuning entries and tests attention choices at long
-context. No production kernel or default selection rule changes.
+context. No production kernel or default selection rule changes. The fresh
+[MLX-LM comparison](#comparison-with-mlx-lm) below confirms an N=7 advantage,
+but not a meaningful plain-decode advantage.
 
 ## Selected configuration
 
@@ -77,9 +79,87 @@ workload. The tuning reduces the round cost; it does not establish a useful
 speculation speedup here. [Issue #133](https://github.com/jiazhihao/mpk-apple/issues/133)
 tracks that remaining policy/acceptance problem. The prior report's untuned plain
 run used 128-token prefill chunks and smaller cache capacity, so use this study's
-controlled screen when attributing changes to tuning. MLX/vLLM/llama.cpp were not
-rerun at 8K in this tuning study.
+controlled screen when attributing changes to tuning. The following follow-up measures MLX-LM at both contexts; vLLM/llama.cpp
+were not rerun at 8K.
 
+
+## Comparison with MLX-LM
+
+A fresh comparison uses MLX 0.32.1 / mlx-lm 0.32.0, the same checkpoints, exact
+input token IDs, greedy sampling, unquantized full KV and 128 outputs. There is
+one resident engine and one request at a time. Engine order reverses at 8K.
+Both native MLX prefill defaults and 64-token chunks matching Monolith are tested.
+Each primary/sensitivity cell has five measured prompts plus an excluded warmup.
+
+### N=7: the advantage holds
+
+Median request-average wall milliseconds per full N=7 round:
+
+| Engine/configuration | 4K | 8K |
+|---|---:|---:|
+| Monolith, fresh comparison | **58.51** | **72.92** |
+| MLX-LM, native prefill 512 | 83.38 | 99.86 |
+| MLX-LM, matched prefill 64 | 75.21 | 99.60 |
+
+Monolith's round latency is **22.2% / 26.8% lower than the faster MLX setting**.
+Its per-output latency is 24.18 / 30.93 ms, versus MLX's best tested per-output
+medians of 30.32 / 36.77 ms (prefill64 at 4K, native512 at 8K). That is a
+**20.3% / 15.9%** output-latency reduction on this workload. Acceptance and output
+sequences differ, so this is not a claim of output equivalence.
+
+Timer endpoints need care. MLX round intervals exclude the first round and
+shortened tail; Monolith's request average includes a terminal round that can
+skip the next draft chain. To bound that benefit, divide Monolith's entire decode
+wall time by `rounds-1`, charging all terminal/queued work to the preceding full
+cycles. The resulting conservative medians are **59.59 / 74.30 ms**, still
+**20.8% / 25.4% below** the faster MLX round baseline. Every one of the ten
+measured prompt pairs wins under this conservative bound against both MLX
+settings, and also wins in per-output latency.
+
+MLX per-output latency is first-to-last native token-yield time divided by 127;
+Monolith uses its native decode-pump wall time. MLX's first yield follows a whole
+verification round, potentially excluding computation for several tokens in its
+first burst, whereas Monolith's prefill emits one token. The additional
+`full_steps_ms_per_token` counter records MLX's whole-round time divided by the
+tokens emitted within those intervals; raw timestamps and all counters reconcile.
+
+### Plain decode: near parity
+
+Absolute timings shifted between sequential blocks, including Monolith, despite
+unchanged packs/cache and identical Monolith output/acceptance sequences on all
+24 rerun requests. The primary comparison measured 20.67 / 23.63 ms/token for
+Monolith versus 20.89 / 23.50 for MLX. A later control repeated both MLX prefill
+sizes and Monolith, with three measured prompts plus warmup per cell:
+
+| Engine/configuration | 4K ms/token | 8K ms/token |
+|---|---:|---:|
+| Monolith | 18.30 | 21.19 |
+| MLX-LM, native prefill 2048 | 18.69 | 21.07 |
+| MLX-LM, prefill 64 | 18.68 | 21.09 |
+
+Both MLX prefill sizes converge in this later control; the earlier large change
+cannot be attributed to prefill size alone. Monolith's small 4K plain lead and
+slight 8K deficit are below the design's 3% promotion margin. **A general
+plain-decode advantage is not established.** Do not combine the older Monolith
+timing with a slower MLX block to claim a larger lead. The N=7 gap survives even
+comparison against the fastest tested MLX block and the terminal-round bound.
+
+All **96 requests** (78 measured, 18 warmups) returned 128 tokens. Exact
+cross-engine full-output matches occur on only 1/10 plain and 2/10 speculative
+primary prompt pairs; changing MLX prefill size also changes most continuations.
+[Raw comparison records, token hashes, counter checks and launches](../../tools/bench/results/qwen8b-long-context-20260929/mlx-comparison/)
+retain the complete evidence. These results establish the N=7 advantage on this
+workload at 4K/8K; they do not generalize to every prompt family or longer context.
+
+```bash
+python tools/bench/mlx_spec_step_latency.py --mode n7 \
+  --model /path/to/mlx-Qwen3-8B-nvfp4 \
+  --drafter /path/to/mlx-community-Qwen3-0.6B-4bit \
+  --prompts tools/bench/results/qwen8b-long-context-20260929/prompts.json \
+  --out /tmp/mlx-long-n7.jsonl
+# Use --mode plain without --drafter for plain decode.
+# Add --prefill-step-size 64 for the matched-prefill check.
+```
 
 ## Reproduction
 
