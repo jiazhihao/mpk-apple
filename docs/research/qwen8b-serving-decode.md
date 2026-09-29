@@ -7,7 +7,8 @@ Monolith revision `03a4252` (the input-normalization fusion branch).
 the earlier layer benchmark and the normal Session default.** Reusing available
 cached choices reduces the short-context N=7 round from 53.57 to **35.83 ms**.
 The tables below preserve the original untuned measurements; the component audit
-below records the correction. Longer contexts have not been rerun with tuning.
+below records the correction. The [long-context follow-up](qwen8b-long-context-tuning.md) now records tuned
+4K/8K plain and N=7 results.
 
 Plain Monolith has the lowest plain-decode latency in the original screen. Against
 vLLM-Metal with the same NVFP4 checkpoint, its median latency is 4.3%, 6.8%,
@@ -201,8 +202,8 @@ A separate full-generation check uses the original six short-context prompts,
 **35.83 ms per full round**, down **33.1%** from 53.57; all rounds use N=7.
 Median decode latency is 16.63 ms/output token. Only two of five measured output
 texts match the untuned run, so per-token gains also include changed acceptance;
-this is not an accuracy validation. The 1,023/4,095-token tuned cases and tuned
-plain decoding remain unmeasured. The historical 17.75 ms number was tuned
+this is not an accuracy validation. The 1,023-token tuned case remains unmeasured. Tuned 4K/8K and plain decoding
+are covered by the [long-context follow-up](qwen8b-long-context-tuning.md). The historical 17.75 ms number was tuned
 fixed-T target decoder work alone, not the target stage of the 53.57 ms run.
 
 [Raw stage samples](../../tools/bench/results/qwen8b-serving-decode-20260929/round-stage-profile.json),
