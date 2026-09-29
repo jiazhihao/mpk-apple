@@ -120,6 +120,36 @@ python tools/bench/mlx_spec_step_latency.py \
   --out /tmp/mlx-n7-steps.jsonl
 ```
 
+## Why the MLX gap differs from earlier reports
+
+The earlier [normalization-fusion comparison](norm-projection-fusion.md) at
+N=7/context 128 reported 493.06 / 914.26 microseconds per target decoder layer
+for Monolith / MLX. Across 36 layers that is 17.75 / 32.91 ms, about a 46%
+latency reduction. That benchmark excludes drafting, embeddings, the vocabulary
+head, sampling and acceptance, and runs fixed-T layers on seeded inputs/cache
+prefixes. Its minima cannot be compared directly with this report's median
+full-round times of 53.57 / 54.87 ms at a 126-token prompt. Generation also uses
+dynamic execution and growing real KV state. The full-round result does not
+establish that MLX's target-layer kernels suddenly became faster, and subtraction
+across these harnesses cannot isolate the cost of drafting or scheduling.
+
+The software environments also differ. To check that confounder, the exact new
+MLX step benchmark was rerun with the earlier environment, retaining the same
+checkpoints, prompts, 128 outputs, warmup and repetition counts:
+
+| Environment | 126 | 1,023 | 4,095 |
+|---|---:|---:|---:|
+| Earlier: Python 3.13, MLX 0.32.2, mlx-lm 0.31.3 | 55.32 | 63.11 | 83.65 |
+| Serving study: Python 3.12, MLX 0.32.1, mlx-lm 0.32.0 | 54.87 | 62.48 | 82.88 |
+
+Units are median request-average ms/full step. The difference is only 0.8–1.0%,
+with all 18 output token sequences identical and an identical speculative-loop
+AST. Sequential runs do not isolate package effects from timing drift, but this
+check does not support a large environment-driven improvement. The
+[old-environment raw records](../../tools/bench/results/qwen8b-serving-decode-20260929/mlx-lm-n7-old-env.jsonl)
+and methodology preserve the audit. A matched component profile is still needed
+to assign the full-round gap to draft work, the head, or dynamic execution.
+
 ## Measurement and comparability
 
 One engine was resident at a time, with one serial request. Every shape had one

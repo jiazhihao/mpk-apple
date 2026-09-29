@@ -648,5 +648,43 @@
       "--out",
       "/tmp/mpk-serving-results/mlx-lm-n7-steps.jsonl"
     ]
+  },
+  "mlx_environment_audit": {
+    "date": "2026-09-29",
+    "old_environment": {
+      "python": "3.13",
+      "mlx": "0.32.2",
+      "mlx-lm": "0.31.3"
+    },
+    "new_environment": {
+      "python": "3.12",
+      "mlx": "0.32.1",
+      "mlx-lm": "0.32.0"
+    },
+    "method": "Same mlx_spec_step_latency.py, checkpoints, saved prompts, 128 outputs, one warmup/five measurements per context; only Python environment changed. Sequential blocks, so small differences are not causally attributable solely to package versions.",
+    "speculative_loop_ast_identical": true,
+    "identical_output_sequences": 18,
+    "requests": 18,
+    "summary": [
+      {
+        "prompt_tokens": 126,
+        "old_environment_ms": 55.32238220957179,
+        "new_environment_ms": 54.865484768435216,
+        "new_vs_old_percent": -0.8258817189139789
+      },
+      {
+        "prompt_tokens": 1023,
+        "old_environment_ms": 63.108326705828816,
+        "new_environment_ms": 62.48121428680385,
+        "new_vs_old_percent": -0.9937078857250814
+      },
+      {
+        "prompt_tokens": 4095,
+        "old_environment_ms": 83.65456422810287,
+        "new_environment_ms": 82.87886259433358,
+        "new_vs_old_percent": -0.927267556680067
+      }
+    ],
+    "old_generator_source_sha256": "270778ad53eaca55a8533d82e6752660fe5d2605c4aa0879b48a50a91f69345f"
   }
 }
