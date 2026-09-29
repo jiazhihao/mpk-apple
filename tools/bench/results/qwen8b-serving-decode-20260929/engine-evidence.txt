@@ -1,0 +1,316 @@
+### llama-plain
+0.37.467.418 I slot print_timing: id  0 | task 0 | prompt eval time =     293.83 ms /   126 tokens (    2.33 ms per token,   428.82 tokens per second)
+0.37.467.421 I slot print_timing: id  0 | task 0 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.37.576.875 I slot print_timing: id  0 | task 2 | prompt eval time =     108.26 ms /   126 tokens (    0.86 ms per token,  1163.90 tokens per second)
+0.37.576.877 I slot print_timing: id  0 | task 2 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.37.686.866 I slot print_timing: id  0 | task 4 | prompt eval time =     109.08 ms /   126 tokens (    0.87 ms per token,  1155.09 tokens per second)
+0.37.686.869 I slot print_timing: id  0 | task 4 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.37.796.883 I slot print_timing: id  0 | task 6 | prompt eval time =     109.05 ms /   126 tokens (    0.87 ms per token,  1155.47 tokens per second)
+0.37.796.885 I slot print_timing: id  0 | task 6 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.37.904.743 I slot print_timing: id  0 | task 8 | prompt eval time =     107.11 ms /   126 tokens (    0.85 ms per token,  1176.37 tokens per second)
+0.37.904.744 I slot print_timing: id  0 | task 8 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.38.014.271 I slot print_timing: id  0 | task 10 | prompt eval time =     108.70 ms /   126 tokens (    0.86 ms per token,  1159.17 tokens per second)
+0.38.014.273 I slot print_timing: id  0 | task 10 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.40.761.543 I slot print_timing: id  0 | task 12 | prompt eval time =     107.44 ms /   126 tokens (    0.85 ms per token,  1172.80 tokens per second)
+0.40.761.547 I slot print_timing: id  0 | task 12 |        eval time =    2638.88 ms /   128 tokens (   20.78 ms per token,    48.13 tokens per second)
+0.43.503.355 I slot print_timing: id  0 | task 141 | prompt eval time =     109.66 ms /   126 tokens (    0.87 ms per token,  1149.00 tokens per second)
+0.43.503.357 I slot print_timing: id  0 | task 141 |        eval time =    2630.79 ms /   128 tokens (   20.71 ms per token,    48.27 tokens per second)
+0.46.277.219 I slot print_timing: id  0 | task 270 | prompt eval time =     112.25 ms /   126 tokens (    0.89 ms per token,  1122.47 tokens per second)
+0.46.277.222 I slot print_timing: id  0 | task 270 |        eval time =    2660.58 ms /   128 tokens (   20.95 ms per token,    47.73 tokens per second)
+0.49.055.701 I slot print_timing: id  0 | task 399 | prompt eval time =     111.10 ms /   126 tokens (    0.88 ms per token,  1134.10 tokens per second)
+0.49.055.704 I slot print_timing: id  0 | task 399 |        eval time =    2666.22 ms /   128 tokens (   20.99 ms per token,    47.63 tokens per second)
+0.51.812.881 I slot print_timing: id  0 | task 528 | prompt eval time =     111.02 ms /   126 tokens (    0.88 ms per token,  1134.94 tokens per second)
+0.51.812.883 I slot print_timing: id  0 | task 528 |        eval time =    2644.62 ms /   128 tokens (   20.82 ms per token,    48.02 tokens per second)
+0.54.584.884 I slot print_timing: id  0 | task 657 | prompt eval time =     110.38 ms /   126 tokens (    0.88 ms per token,  1141.50 tokens per second)
+0.54.584.887 I slot print_timing: id  0 | task 657 |        eval time =    2660.60 ms /   128 tokens (   20.95 ms per token,    47.73 tokens per second)
+0.55.492.497 I slot print_timing: id  0 | task 786 | prompt eval time =     905.22 ms /  1023 tokens (    0.88 ms per token,  1130.11 tokens per second)
+0.55.492.500 I slot print_timing: id  0 | task 786 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.56.350.783 I slot print_timing: id  0 | task 788 | prompt eval time =     856.58 ms /  1023 tokens (    0.84 ms per token,  1194.28 tokens per second)
+0.56.350.786 I slot print_timing: id  0 | task 788 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.57.209.074 I slot print_timing: id  0 | task 790 | prompt eval time =     856.53 ms /  1023 tokens (    0.84 ms per token,  1194.36 tokens per second)
+0.57.209.076 I slot print_timing: id  0 | task 790 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.58.066.366 I slot print_timing: id  0 | task 792 | prompt eval time =     855.72 ms /  1023 tokens (    0.84 ms per token,  1195.49 tokens per second)
+0.58.066.368 I slot print_timing: id  0 | task 792 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.58.925.324 I slot print_timing: id  0 | task 794 | prompt eval time =     857.37 ms /  1023 tokens (    0.84 ms per token,  1193.18 tokens per second)
+0.58.925.326 I slot print_timing: id  0 | task 794 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.59.783.183 I slot print_timing: id  0 | task 796 | prompt eval time =     856.08 ms /  1023 tokens (    0.84 ms per token,  1194.98 tokens per second)
+0.59.783.186 I slot print_timing: id  0 | task 796 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+1.03.375.523 I slot print_timing: id  0 | task 798 | prompt eval time =     856.25 ms /  1023 tokens (    0.84 ms per token,  1194.75 tokens per second)
+1.03.375.525 I slot print_timing: id  0 | task 798 |        eval time =    2734.44 ms /   128 tokens (   21.53 ms per token,    46.44 tokens per second)
+1.06.950.397 I slot print_timing: id  0 | task 927 | prompt eval time =     859.42 ms /  1023 tokens (    0.84 ms per token,  1190.33 tokens per second)
+1.06.950.400 I slot print_timing: id  0 | task 927 |        eval time =    2713.78 ms /   128 tokens (   21.37 ms per token,    46.80 tokens per second)
+1.10.507.658 I slot print_timing: id  0 | task 1056 | prompt eval time =     852.22 ms /  1023 tokens (    0.83 ms per token,  1200.40 tokens per second)
+1.10.507.660 I slot print_timing: id  0 | task 1056 |        eval time =    2702.39 ms /   128 tokens (   21.28 ms per token,    47.00 tokens per second)
+1.14.063.418 I slot print_timing: id  0 | task 1185 | prompt eval time =     857.65 ms /  1023 tokens (    0.84 ms per token,  1192.79 tokens per second)
+1.14.063.420 I slot print_timing: id  0 | task 1185 |        eval time =    2696.40 ms /   128 tokens (   21.23 ms per token,    47.10 tokens per second)
+1.17.613.352 I slot print_timing: id  0 | task 1314 | prompt eval time =     852.16 ms /  1023 tokens (    0.83 ms per token,  1200.48 tokens per second)
+1.17.613.354 I slot print_timing: id  0 | task 1314 |        eval time =    2695.99 ms /   128 tokens (   21.23 ms per token,    47.11 tokens per second)
+1.21.173.203 I slot print_timing: id  0 | task 1443 | prompt eval time =     860.20 ms /  1023 tokens (    0.84 ms per token,  1189.26 tokens per second)
+1.21.173.205 I slot print_timing: id  0 | task 1443 |        eval time =    2697.83 ms /   128 tokens (   21.24 ms per token,    47.07 tokens per second)
+1.25.317.577 I slot print_timing: id  0 | task 1572 | prompt eval time =    4140.68 ms /  4095 tokens (    1.01 ms per token,   988.97 tokens per second)
+1.25.317.580 I slot print_timing: id  0 | task 1572 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+1.29.489.283 I slot print_timing: id  0 | task 1575 | prompt eval time =    4167.92 ms /  4095 tokens (    1.02 ms per token,   982.50 tokens per second)
+1.29.489.286 I slot print_timing: id  0 | task 1575 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+1.33.677.003 I slot print_timing: id  0 | task 1578 | prompt eval time =    4183.96 ms /  4095 tokens (    1.02 ms per token,   978.74 tokens per second)
+1.33.677.006 I slot print_timing: id  0 | task 1578 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+1.37.877.740 I slot print_timing: id  0 | task 1581 | prompt eval time =    4197.04 ms /  4095 tokens (    1.02 ms per token,   975.69 tokens per second)
+1.37.877.742 I slot print_timing: id  0 | task 1581 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+1.42.048.109 I slot print_timing: id  0 | task 1584 | prompt eval time =    4166.59 ms /  4095 tokens (    1.02 ms per token,   982.82 tokens per second)
+1.42.048.112 I slot print_timing: id  0 | task 1584 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+1.46.182.982 I slot print_timing: id  0 | task 1587 | prompt eval time =    4131.11 ms /  4095 tokens (    1.01 ms per token,   991.26 tokens per second)
+1.46.182.984 I slot print_timing: id  0 | task 1587 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+1.53.289.902 I slot print_timing: id  0 | task 1590 | prompt eval time =    4113.98 ms /  4095 tokens (    1.00 ms per token,   995.39 tokens per second)
+1.53.289.904 I slot print_timing: id  0 | task 1590 |        eval time =    2989.03 ms /   128 tokens (   23.54 ms per token,    42.49 tokens per second)
+2.00.314.064 I slot print_timing: id  0 | task 1720 | prompt eval time =    4094.72 ms /  4095 tokens (    1.00 ms per token,  1000.07 tokens per second)
+2.00.314.066 I slot print_timing: id  0 | task 1720 |        eval time =    2925.72 ms /   128 tokens (   23.04 ms per token,    43.41 tokens per second)
+2.07.344.210 I slot print_timing: id  0 | task 1850 | prompt eval time =    4099.26 ms /  4095 tokens (    1.00 ms per token,   998.96 tokens per second)
+2.07.344.212 I slot print_timing: id  0 | task 1850 |        eval time =    2927.17 ms /   128 tokens (   23.05 ms per token,    43.39 tokens per second)
+2.14.375.433 I slot print_timing: id  0 | task 1980 | prompt eval time =    4100.58 ms /  4095 tokens (    1.00 ms per token,   998.64 tokens per second)
+2.14.375.436 I slot print_timing: id  0 | task 1980 |        eval time =    2926.81 ms /   128 tokens (   23.05 ms per token,    43.39 tokens per second)
+2.21.414.296 I slot print_timing: id  0 | task 2110 | prompt eval time =    4103.94 ms /  4095 tokens (    1.00 ms per token,   997.82 tokens per second)
+2.21.414.298 I slot print_timing: id  0 | task 2110 |        eval time =    2931.24 ms /   128 tokens (   23.08 ms per token,    43.33 tokens per second)
+2.28.453.654 I slot print_timing: id  0 | task 2240 | prompt eval time =    4105.66 ms /  4095 tokens (    1.00 ms per token,   997.40 tokens per second)
+2.28.453.658 I slot print_timing: id  0 | task 2240 |        eval time =    2929.85 ms /   128 tokens (   23.07 ms per token,    43.35 tokens per second)
+
+### ollama-plain
+time=2026-09-29T11:29:19.423-04:00 level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=Metal compute=0.0 name=MTL0 description="Apple M5 Pro" libdirs="" driver=0.0 pci_id="" type=iGPU total="17.8 GiB" available="17.8 GiB"
+time=2026-09-29T11:29:21.281-04:00 level=INFO source=sched.go:625 msg="gpu memory" id=0 library=Metal available="17.3 GiB" free="17.8 GiB" minimum="512.0 MiB" overhead="0 B"
+load_tensors: offloaded 37/37 layers to GPU
+slot print_timing: id  0 | task 0 | prompt eval time =      22.81 ms /     1 tokens (   22.81 ms per token,    43.84 tokens per second)
+slot print_timing: id  0 | task 0 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 2 | prompt eval time =     110.19 ms /   126 tokens (    0.87 ms per token,  1143.47 tokens per second)
+slot print_timing: id  0 | task 2 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 4 | prompt eval time =      21.15 ms /     1 tokens (   21.15 ms per token,    47.28 tokens per second)
+slot print_timing: id  0 | task 4 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 6 | prompt eval time =     110.70 ms /   126 tokens (    0.88 ms per token,  1138.22 tokens per second)
+slot print_timing: id  0 | task 6 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 8 | prompt eval time =      22.06 ms /     1 tokens (   22.06 ms per token,    45.33 tokens per second)
+slot print_timing: id  0 | task 8 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 10 | prompt eval time =     110.41 ms /   126 tokens (    0.88 ms per token,  1141.22 tokens per second)
+slot print_timing: id  0 | task 10 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 12 | prompt eval time =      22.07 ms /     1 tokens (   22.07 ms per token,    45.30 tokens per second)
+slot print_timing: id  0 | task 12 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 14 | prompt eval time =     109.67 ms /   126 tokens (    0.87 ms per token,  1148.86 tokens per second)
+slot print_timing: id  0 | task 14 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 16 | prompt eval time =      21.79 ms /     1 tokens (   21.79 ms per token,    45.89 tokens per second)
+slot print_timing: id  0 | task 16 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 18 | prompt eval time =     111.76 ms /   126 tokens (    0.89 ms per token,  1127.39 tokens per second)
+slot print_timing: id  0 | task 18 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 20 | prompt eval time =      22.14 ms /     1 tokens (   22.14 ms per token,    45.17 tokens per second)
+slot print_timing: id  0 | task 20 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 22 | prompt eval time =     110.59 ms /   126 tokens (    0.88 ms per token,  1139.34 tokens per second)
+slot print_timing: id  0 | task 22 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 24 | prompt eval time =      22.52 ms /     1 tokens (   22.52 ms per token,    44.40 tokens per second)
+slot print_timing: id  0 | task 24 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 26 | prompt eval time =     109.17 ms /   126 tokens (    0.87 ms per token,  1154.17 tokens per second)
+slot print_timing: id  0 | task 26 |        eval time =    2626.24 ms /   128 tokens (   20.68 ms per token,    48.36 tokens per second)
+slot print_timing: id  0 | task 155 | prompt eval time =      20.59 ms /     1 tokens (   20.59 ms per token,    48.56 tokens per second)
+slot print_timing: id  0 | task 155 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 157 | prompt eval time =     110.69 ms /   126 tokens (    0.88 ms per token,  1138.26 tokens per second)
+slot print_timing: id  0 | task 157 |        eval time =    2619.22 ms /   128 tokens (   20.62 ms per token,    48.49 tokens per second)
+slot print_timing: id  0 | task 286 | prompt eval time =      21.24 ms /     1 tokens (   21.24 ms per token,    47.09 tokens per second)
+slot print_timing: id  0 | task 286 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 288 | prompt eval time =     108.75 ms /   126 tokens (    0.86 ms per token,  1158.63 tokens per second)
+slot print_timing: id  0 | task 288 |        eval time =    2631.63 ms /   128 tokens (   20.72 ms per token,    48.26 tokens per second)
+slot print_timing: id  0 | task 417 | prompt eval time =      21.17 ms /     1 tokens (   21.17 ms per token,    47.23 tokens per second)
+slot print_timing: id  0 | task 417 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 419 | prompt eval time =     109.32 ms /   126 tokens (    0.87 ms per token,  1152.58 tokens per second)
+slot print_timing: id  0 | task 419 |        eval time =    2625.26 ms /   128 tokens (   20.67 ms per token,    48.38 tokens per second)
+slot print_timing: id  0 | task 548 | prompt eval time =      21.29 ms /     1 tokens (   21.29 ms per token,    46.96 tokens per second)
+slot print_timing: id  0 | task 548 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 550 | prompt eval time =     109.26 ms /   126 tokens (    0.87 ms per token,  1153.24 tokens per second)
+slot print_timing: id  0 | task 550 |        eval time =    2629.25 ms /   128 tokens (   20.70 ms per token,    48.30 tokens per second)
+slot print_timing: id  0 | task 679 | prompt eval time =      20.55 ms /     1 tokens (   20.55 ms per token,    48.65 tokens per second)
+slot print_timing: id  0 | task 679 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 681 | prompt eval time =     109.01 ms /   126 tokens (    0.87 ms per token,  1155.86 tokens per second)
+slot print_timing: id  0 | task 681 |        eval time =    2635.75 ms /   128 tokens (   20.75 ms per token,    48.18 tokens per second)
+slot print_timing: id  0 | task 810 | prompt eval time =      21.80 ms /     1 tokens (   21.80 ms per token,    45.87 tokens per second)
+slot print_timing: id  0 | task 810 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 812 | prompt eval time =     868.08 ms /  1023 tokens (    0.85 ms per token,  1178.47 tokens per second)
+slot print_timing: id  0 | task 812 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 814 | prompt eval time =      21.31 ms /     1 tokens (   21.31 ms per token,    46.92 tokens per second)
+slot print_timing: id  0 | task 814 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 816 | prompt eval time =     865.31 ms /  1023 tokens (    0.85 ms per token,  1182.23 tokens per second)
+slot print_timing: id  0 | task 816 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 818 | prompt eval time =      21.54 ms /     1 tokens (   21.54 ms per token,    46.42 tokens per second)
+slot print_timing: id  0 | task 818 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 820 | prompt eval time =     865.17 ms /  1023 tokens (    0.85 ms per token,  1182.43 tokens per second)
+slot print_timing: id  0 | task 820 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 822 | prompt eval time =      21.44 ms /     1 tokens (   21.44 ms per token,    46.64 tokens per second)
+slot print_timing: id  0 | task 822 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 824 | prompt eval time =     866.45 ms /  1023 tokens (    0.85 ms per token,  1180.68 tokens per second)
+slot print_timing: id  0 | task 824 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 826 | prompt eval time =      22.20 ms /     1 tokens (   22.20 ms per token,    45.04 tokens per second)
+slot print_timing: id  0 | task 826 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 828 | prompt eval time =     863.28 ms /  1023 tokens (    0.84 ms per token,  1185.01 tokens per second)
+slot print_timing: id  0 | task 828 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 830 | prompt eval time =      21.02 ms /     1 tokens (   21.02 ms per token,    47.58 tokens per second)
+slot print_timing: id  0 | task 830 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 832 | prompt eval time =     856.81 ms /  1023 tokens (    0.84 ms per token,  1193.97 tokens per second)
+slot print_timing: id  0 | task 832 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 834 | prompt eval time =      21.24 ms /     1 tokens (   21.24 ms per token,    47.09 tokens per second)
+slot print_timing: id  0 | task 834 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 836 | prompt eval time =     871.73 ms /  1023 tokens (    0.85 ms per token,  1173.53 tokens per second)
+slot print_timing: id  0 | task 836 |        eval time =    2688.09 ms /   128 tokens (   21.17 ms per token,    47.25 tokens per second)
+slot print_timing: id  0 | task 965 | prompt eval time =      22.32 ms /     1 tokens (   22.32 ms per token,    44.80 tokens per second)
+slot print_timing: id  0 | task 965 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 967 | prompt eval time =     864.82 ms /  1023 tokens (    0.85 ms per token,  1182.91 tokens per second)
+slot print_timing: id  0 | task 967 |        eval time =    2716.94 ms /   128 tokens (   21.39 ms per token,    46.74 tokens per second)
+slot print_timing: id  0 | task 1096 | prompt eval time =      22.72 ms /     1 tokens (   22.72 ms per token,    44.02 tokens per second)
+slot print_timing: id  0 | task 1096 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1098 | prompt eval time =     884.71 ms /  1023 tokens (    0.86 ms per token,  1156.32 tokens per second)
+slot print_timing: id  0 | task 1098 |        eval time =    2700.94 ms /   128 tokens (   21.27 ms per token,    47.02 tokens per second)
+slot print_timing: id  0 | task 1227 | prompt eval time =      23.07 ms /     1 tokens (   23.07 ms per token,    43.35 tokens per second)
+slot print_timing: id  0 | task 1227 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1229 | prompt eval time =     870.00 ms /  1023 tokens (    0.85 ms per token,  1175.86 tokens per second)
+slot print_timing: id  0 | task 1229 |        eval time =    2699.21 ms /   128 tokens (   21.25 ms per token,    47.05 tokens per second)
+slot print_timing: id  0 | task 1358 | prompt eval time =      21.34 ms /     1 tokens (   21.34 ms per token,    46.85 tokens per second)
+slot print_timing: id  0 | task 1358 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1360 | prompt eval time =     871.06 ms /  1023 tokens (    0.85 ms per token,  1174.44 tokens per second)
+slot print_timing: id  0 | task 1360 |        eval time =    2686.45 ms /   128 tokens (   21.15 ms per token,    47.27 tokens per second)
+slot print_timing: id  0 | task 1489 | prompt eval time =      21.34 ms /     1 tokens (   21.34 ms per token,    46.85 tokens per second)
+slot print_timing: id  0 | task 1489 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1491 | prompt eval time =     875.67 ms /  1023 tokens (    0.86 ms per token,  1168.25 tokens per second)
+slot print_timing: id  0 | task 1491 |        eval time =    2685.46 ms /   128 tokens (   21.15 ms per token,    47.29 tokens per second)
+slot print_timing: id  0 | task 1620 | prompt eval time =      22.05 ms /     1 tokens (   22.05 ms per token,    45.35 tokens per second)
+slot print_timing: id  0 | task 1620 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1622 | prompt eval time =    4166.36 ms /  4095 tokens (    1.02 ms per token,   982.87 tokens per second)
+slot print_timing: id  0 | task 1622 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1627 | prompt eval time =      23.47 ms /     1 tokens (   23.47 ms per token,    42.61 tokens per second)
+slot print_timing: id  0 | task 1627 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1629 | prompt eval time =    4213.35 ms /  4095 tokens (    1.03 ms per token,   971.91 tokens per second)
+slot print_timing: id  0 | task 1629 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1634 | prompt eval time =      22.86 ms /     1 tokens (   22.86 ms per token,    43.75 tokens per second)
+slot print_timing: id  0 | task 1634 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1636 | prompt eval time =    4242.94 ms /  4095 tokens (    1.04 ms per token,   965.13 tokens per second)
+slot print_timing: id  0 | task 1636 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1641 | prompt eval time =      23.07 ms /     1 tokens (   23.07 ms per token,    43.34 tokens per second)
+slot print_timing: id  0 | task 1641 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1643 | prompt eval time =    4232.15 ms /  4095 tokens (    1.03 ms per token,   967.59 tokens per second)
+slot print_timing: id  0 | task 1643 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1648 | prompt eval time =      23.25 ms /     1 tokens (   23.25 ms per token,    43.01 tokens per second)
+slot print_timing: id  0 | task 1648 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1650 | prompt eval time =    4223.14 ms /  4095 tokens (    1.03 ms per token,   969.66 tokens per second)
+slot print_timing: id  0 | task 1650 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1655 | prompt eval time =      22.99 ms /     1 tokens (   22.99 ms per token,    43.50 tokens per second)
+slot print_timing: id  0 | task 1655 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1657 | prompt eval time =    4197.23 ms /  4095 tokens (    1.02 ms per token,   975.64 tokens per second)
+slot print_timing: id  0 | task 1657 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1662 | prompt eval time =      22.40 ms /     1 tokens (   22.40 ms per token,    44.64 tokens per second)
+slot print_timing: id  0 | task 1662 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1664 | prompt eval time =    4183.17 ms /  4095 tokens (    1.02 ms per token,   978.92 tokens per second)
+slot print_timing: id  0 | task 1664 |        eval time =    2917.43 ms /   128 tokens (   22.97 ms per token,    43.53 tokens per second)
+slot print_timing: id  0 | task 1796 | prompt eval time =      22.31 ms /     1 tokens (   22.31 ms per token,    44.82 tokens per second)
+slot print_timing: id  0 | task 1796 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1798 | prompt eval time =    4160.95 ms /  4095 tokens (    1.02 ms per token,   984.15 tokens per second)
+slot print_timing: id  0 | task 1798 |        eval time =    2917.72 ms /   128 tokens (   22.97 ms per token,    43.53 tokens per second)
+slot print_timing: id  0 | task 1930 | prompt eval time =      22.65 ms /     1 tokens (   22.65 ms per token,    44.15 tokens per second)
+slot print_timing: id  0 | task 1930 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 1932 | prompt eval time =    4140.01 ms /  4095 tokens (    1.01 ms per token,   989.13 tokens per second)
+slot print_timing: id  0 | task 1932 |        eval time =    2944.69 ms /   128 tokens (   23.19 ms per token,    43.13 tokens per second)
+slot print_timing: id  0 | task 2064 | prompt eval time =      22.75 ms /     1 tokens (   22.75 ms per token,    43.96 tokens per second)
+slot print_timing: id  0 | task 2064 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 2066 | prompt eval time =    4141.05 ms /  4095 tokens (    1.01 ms per token,   988.88 tokens per second)
+slot print_timing: id  0 | task 2066 |        eval time =    2919.37 ms /   128 tokens (   22.99 ms per token,    43.50 tokens per second)
+slot print_timing: id  0 | task 2198 | prompt eval time =      21.16 ms /     1 tokens (   21.16 ms per token,    47.26 tokens per second)
+slot print_timing: id  0 | task 2198 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 2200 | prompt eval time =    4135.13 ms /  4095 tokens (    1.01 ms per token,   990.30 tokens per second)
+slot print_timing: id  0 | task 2200 |        eval time =    2920.83 ms /   128 tokens (   23.00 ms per token,    43.48 tokens per second)
+slot print_timing: id  0 | task 2332 | prompt eval time =      21.46 ms /     1 tokens (   21.46 ms per token,    46.61 tokens per second)
+slot print_timing: id  0 | task 2332 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+slot print_timing: id  0 | task 2334 | prompt eval time =    4134.73 ms /  4095 tokens (    1.01 ms per token,   990.39 tokens per second)
+slot print_timing: id  0 | task 2334 |        eval time =    2923.81 ms /   128 tokens (   23.02 ms per token,    43.44 tokens per second)
+
+### vllm-decode-plain
+(APIServer pid=58493) INFO 09-29 11:42:09 [platform.py:757] Metal: chunked prefill enabled (paged attention), max_num_batched_tokens=2048
+(APIServer pid=58493) INFO 09-29 11:42:09 [platform.py:852] Metal memory: 25.8GB total, 16.8GB available
+(EngineCore pid=58502) INFO 09-29 11:42:13 [utils.py:82] Set Metal wired_limit to 17.8 GB
+(EngineCore pid=58502) INFO 09-29 11:42:16 [__init__.py:300] Native paged-attention Metal kernels loaded
+(EngineCore pid=58502) INFO 09-29 11:42:16 [sdpa.py:92] Shared attention cache: 1794 blocks, 3.94 GiB across 36 Metal regions
+(EngineCore pid=58502) INFO 09-29 11:42:16 [__init__.py:319] Warming up v2 paged-attention Metal kernels...
+(EngineCore pid=58502) INFO 09-29 11:42:16 [__init__.py:327] Paged-attention Metal kernel warm-up complete
+(EngineCore pid=58502) INFO 09-29 11:42:16 [platform.py:757] Metal: chunked prefill enabled (paged attention), max_num_batched_tokens=2048
+(EngineCore pid=58502) INFO 09-29 11:42:16 [platform.py:852] Metal memory: 25.8GB total, 6.3GB available
+(EngineCore pid=58502) INFO 09-29 11:43:25 [worker.py:406] Metal worker shutdown complete
+
+### monolith-n7
+
+
+### vllm-n7
+(APIServer pid=58572) INFO 09-29 11:43:32 [platform.py:757] Metal: chunked prefill enabled (paged attention), max_num_batched_tokens=2048
+(APIServer pid=58572) INFO 09-29 11:43:32 [platform.py:852] Metal memory: 25.8GB total, 16.4GB available
+(EngineCore pid=58578) INFO 09-29 11:43:36 [utils.py:82] Set Metal wired_limit to 17.8 GB
+(EngineCore pid=58578) INFO 09-29 11:43:39 [__init__.py:319] Warming up v2 paged-attention Metal kernels...
+(EngineCore pid=58578) INFO 09-29 11:43:39 [__init__.py:300] Native paged-attention Metal kernels loaded
+(EngineCore pid=58578) INFO 09-29 11:43:39 [__init__.py:327] Paged-attention Metal kernel warm-up complete
+(EngineCore pid=58578) INFO 09-29 11:43:40 [platform.py:757] Metal: chunked prefill enabled (paged attention), max_num_batched_tokens=2048
+(EngineCore pid=58578) INFO 09-29 11:43:40 [platform.py:852] Metal memory: 25.8GB total, 5.3GB available
+(APIServer pid=58572) INFO 09-29 11:43:50 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.22, Accepted throughput: 15.39 tokens/s, Drafted throughput: 88.42 tokens/s, Accepted: 162 tokens, Drafted: 931 tokens, Per-position acceptance rate: 0.541, 0.346, 0.135, 0.098, 0.045, 0.038, 0.015, Avg Draft acceptance rate: 17.4%
+(APIServer pid=58572) INFO 09-29 11:44:00 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.41, Accepted throughput: 21.49 tokens/s, Drafted throughput: 106.37 tokens/s, Accepted: 215 tokens, Drafted: 1064 tokens, Per-position acceptance rate: 0.559, 0.368, 0.191, 0.151, 0.072, 0.046, 0.026, Avg Draft acceptance rate: 20.2%
+(APIServer pid=58572) INFO 09-29 11:44:10 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.13, Accepted throughput: 14.20 tokens/s, Drafted throughput: 88.19 tokens/s, Accepted: 142 tokens, Drafted: 882 tokens, Per-position acceptance rate: 0.540, 0.317, 0.143, 0.079, 0.032, 0.016, 0.000, Avg Draft acceptance rate: 16.1%
+(APIServer pid=58572) INFO 09-29 11:44:20 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.50, Accepted throughput: 18.19 tokens/s, Drafted throughput: 84.67 tokens/s, Accepted: 182 tokens, Drafted: 847 tokens, Per-position acceptance rate: 0.645, 0.430, 0.215, 0.132, 0.050, 0.033, 0.000, Avg Draft acceptance rate: 21.5%
+(APIServer pid=58572) INFO 09-29 11:44:30 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.75, Accepted throughput: 20.30 tokens/s, Drafted throughput: 81.18 tokens/s, Accepted: 203 tokens, Drafted: 812 tokens, Per-position acceptance rate: 0.690, 0.491, 0.293, 0.181, 0.078, 0.017, 0.000, Avg Draft acceptance rate: 25.0%
+(APIServer pid=58572) INFO 09-29 11:44:40 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.44, Accepted throughput: 7.50 tokens/s, Drafted throughput: 36.39 tokens/s, Accepted: 75 tokens, Drafted: 364 tokens, Per-position acceptance rate: 0.577, 0.365, 0.192, 0.154, 0.077, 0.038, 0.038, Avg Draft acceptance rate: 20.6%
+(APIServer pid=58572) INFO 09-29 11:44:50 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.53, Accepted throughput: 8.70 tokens/s, Drafted throughput: 39.89 tokens/s, Accepted: 87 tokens, Drafted: 399 tokens, Per-position acceptance rate: 0.561, 0.351, 0.211, 0.193, 0.105, 0.053, 0.053, Avg Draft acceptance rate: 21.8%
+(APIServer pid=58572) INFO 09-29 11:45:00 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.33, Accepted throughput: 9.20 tokens/s, Drafted throughput: 48.29 tokens/s, Accepted: 92 tokens, Drafted: 483 tokens, Per-position acceptance rate: 0.507, 0.304, 0.188, 0.159, 0.087, 0.043, 0.043, Avg Draft acceptance rate: 19.0%
+(APIServer pid=58572) INFO 09-29 11:45:10 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.30, Accepted throughput: 9.10 tokens/s, Drafted throughput: 48.99 tokens/s, Accepted: 91 tokens, Drafted: 490 tokens, Per-position acceptance rate: 0.543, 0.329, 0.171, 0.143, 0.057, 0.029, 0.029, Avg Draft acceptance rate: 18.6%
+(APIServer pid=58572) INFO 09-29 11:45:20 [metrics.py:120] SpecDecoding metrics: Mean acceptance length: 2.42, Accepted throughput: 9.80 tokens/s, Drafted throughput: 48.29 tokens/s, Accepted: 98 tokens, Drafted: 483 tokens, Per-position acceptance rate: 0.565, 0.391, 0.188, 0.159, 0.058, 0.029, 0.029, Avg Draft acceptance rate: 20.3%
+(EngineCore pid=58578) INFO 09-29 11:45:20 [worker.py:406] Metal worker shutdown complete
+
+### llama-n7
+0.01.014.785 I load_tensors: offloaded 37/37 layers to GPU
+0.01.265.140 I load_tensors: offloaded 29/29 layers to GPU
+0.07.165.422 I slot print_timing: id  0 | task 0 | prompt eval time =     199.70 ms /   126 tokens (    1.58 ms per token,   630.93 tokens per second)
+0.07.165.424 I slot print_timing: id  0 | task 0 |        eval time =    4898.41 ms /   128 tokens (   38.57 ms per token,    25.93 tokens per second)
+0.07.165.429 I slot print_timing: id  0 | task 0 | draft acceptance = 0.20000 (   70 accepted /   350 generated), mean len =  2.40
+0.12.212.373 I slot print_timing: id  0 | task 59 | prompt eval time =     110.29 ms /   126 tokens (    0.88 ms per token,  1142.45 tokens per second)
+0.12.212.379 I slot print_timing: id  0 | task 59 |        eval time =    4934.72 ms /   128 tokens (   38.86 ms per token,    25.74 tokens per second)
+0.12.212.384 I slot print_timing: id  0 | task 59 | draft acceptance = 0.19231 (   70 accepted /   364 generated), mean len =  2.35
+0.17.364.537 I slot print_timing: id  0 | task 118 | prompt eval time =     111.47 ms /   126 tokens (    0.88 ms per token,  1130.31 tokens per second)
+0.17.364.539 I slot print_timing: id  0 | task 118 |        eval time =    5039.33 ms /   128 tokens (   39.68 ms per token,    25.20 tokens per second)
+0.17.364.544 I slot print_timing: id  0 | task 118 | draft acceptance = 0.18598 (   69 accepted /   371 generated), mean len =  2.30
+0.22.502.730 I slot print_timing: id  0 | task 178 | prompt eval time =     112.16 ms /   126 tokens (    0.89 ms per token,  1123.42 tokens per second)
+0.22.502.733 I slot print_timing: id  0 | task 178 |        eval time =    5024.76 ms /   128 tokens (   39.57 ms per token,    25.27 tokens per second)
+0.22.502.737 I slot print_timing: id  0 | task 178 | draft acceptance = 0.18598 (   69 accepted /   371 generated), mean len =  2.30
+0.27.643.857 I slot print_timing: id  0 | task 238 | prompt eval time =     112.44 ms /   126 tokens (    0.89 ms per token,  1120.61 tokens per second)
+0.27.643.859 I slot print_timing: id  0 | task 238 |        eval time =    5027.34 ms /   128 tokens (   39.59 ms per token,    25.26 tokens per second)
+0.27.643.864 I slot print_timing: id  0 | task 238 | draft acceptance = 0.18598 (   69 accepted /   371 generated), mean len =  2.30
+0.31.988.659 I slot print_timing: id  0 | task 298 | prompt eval time =     110.81 ms /   126 tokens (    0.88 ms per token,  1137.13 tokens per second)
+0.31.988.662 I slot print_timing: id  0 | task 298 |        eval time =    4232.72 ms /   128 tokens (   33.33 ms per token,    30.00 tokens per second)
+0.31.988.667 I slot print_timing: id  0 | task 298 | draft acceptance = 0.24845 (   80 accepted /   322 generated), mean len =  2.74
+0.38.103.367 I slot print_timing: id  0 | task 347 | prompt eval time =     903.42 ms /  1023 tokens (    0.88 ms per token,  1132.37 tokens per second)
+0.38.103.370 I slot print_timing: id  0 | task 347 |        eval time =    5209.39 ms /   128 tokens (   41.02 ms per token,    24.38 tokens per second)
+0.38.103.376 I slot print_timing: id  0 | task 347 | draft acceptance = 0.19608 (   70 accepted /   357 generated), mean len =  2.37
+0.44.121.025 I slot print_timing: id  0 | task 406 | prompt eval time =     897.58 ms /  1023 tokens (    0.88 ms per token,  1139.74 tokens per second)
+0.44.121.028 I slot print_timing: id  0 | task 406 |        eval time =    5118.11 ms /   128 tokens (   40.30 ms per token,    24.81 tokens per second)
+0.44.121.032 I slot print_timing: id  0 | task 406 | draft acceptance = 0.20168 (   72 accepted /   357 generated), mean len =  2.41
+0.49.878.264 I slot print_timing: id  0 | task 463 | prompt eval time =     895.69 ms /  1023 tokens (    0.88 ms per token,  1142.14 tokens per second)
+0.49.878.268 I slot print_timing: id  0 | task 463 |        eval time =    4859.59 ms /   128 tokens (   38.26 ms per token,    26.13 tokens per second)
+0.49.878.274 I slot print_timing: id  0 | task 463 | draft acceptance = 0.21866 (   75 accepted /   343 generated), mean len =  2.53
+0.56.064.991 I slot print_timing: id  0 | task 517 | prompt eval time =     899.72 ms /  1023 tokens (    0.88 ms per token,  1137.03 tokens per second)
+0.56.064.994 I slot print_timing: id  0 | task 517 |        eval time =    5284.53 ms /   128 tokens (   41.61 ms per token,    24.03 tokens per second)
+0.56.064.999 I slot print_timing: id  0 | task 517 | draft acceptance = 0.18868 (   70 accepted /   371 generated), mean len =  2.32
+1.02.176.598 I slot print_timing: id  0 | task 576 | prompt eval time =     901.27 ms /  1023 tokens (    0.88 ms per token,  1135.06 tokens per second)
+1.02.176.600 I slot print_timing: id  0 | task 576 |        eval time =    5208.23 ms /   128 tokens (   41.01 ms per token,    24.38 tokens per second)
+1.02.176.605 I slot print_timing: id  0 | task 576 | draft acceptance = 0.20000 (   70 accepted /   350 generated), mean len =  2.40
+1.08.417.883 I slot print_timing: id  0 | task 635 | prompt eval time =     897.63 ms /  1023 tokens (    0.88 ms per token,  1139.67 tokens per second)
+1.08.417.886 I slot print_timing: id  0 | task 635 |        eval time =    5341.79 ms /   128 tokens (   42.06 ms per token,    23.77 tokens per second)
+1.08.417.892 I slot print_timing: id  0 | task 635 | draft acceptance = 0.19328 (   69 accepted /   357 generated), mean len =  2.35
+1.18.884.931 I slot print_timing: id  0 | task 695 | prompt eval time =    4685.30 ms /  4095 tokens (    1.14 ms per token,   874.01 tokens per second)
+1.18.884.934 I slot print_timing: id  0 | task 695 |        eval time =    5777.90 ms /   128 tokens (   45.50 ms per token,    21.98 tokens per second)
+1.18.884.938 I slot print_timing: id  0 | task 695 | draft acceptance = 0.24224 (   78 accepted /   322 generated), mean len =  2.70
+1.29.288.069 I slot print_timing: id  0 | task 747 | prompt eval time =    4728.01 ms /  4095 tokens (    1.15 ms per token,   866.11 tokens per second)
+1.29.288.072 I slot print_timing: id  0 | task 747 |        eval time =    5671.06 ms /   128 tokens (   44.65 ms per token,    22.39 tokens per second)
+1.29.288.077 I slot print_timing: id  0 | task 747 | draft acceptance = 0.24762 (   78 accepted /   315 generated), mean len =  2.73
+1.39.515.910 I slot print_timing: id  0 | task 799 | prompt eval time =    4754.57 ms /  4095 tokens (    1.16 ms per token,   861.28 tokens per second)
+1.39.515.913 I slot print_timing: id  0 | task 799 |        eval time =    5469.15 ms /   128 tokens (   43.06 ms per token,    23.22 tokens per second)
+1.39.515.917 I slot print_timing: id  0 | task 799 | draft acceptance = 0.25974 (   80 accepted /   308 generated), mean len =  2.82
+1.50.024.817 I slot print_timing: id  0 | task 849 | prompt eval time =    4787.19 ms /  4095 tokens (    1.17 ms per token,   855.41 tokens per second)
+1.50.024.825 I slot print_timing: id  0 | task 849 |        eval time =    5717.66 ms /   128 tokens (   45.02 ms per token,    22.21 tokens per second)
+1.50.024.832 I slot print_timing: id  0 | task 849 | draft acceptance = 0.24224 (   78 accepted /   322 generated), mean len =  2.70
+2.00.354.236 I slot print_timing: id  0 | task 901 | prompt eval time =    4748.87 ms /  4095 tokens (    1.16 ms per token,   862.31 tokens per second)
+2.00.354.239 I slot print_timing: id  0 | task 901 |        eval time =    5576.41 ms /   128 tokens (   43.91 ms per token,    22.77 tokens per second)
+2.00.354.243 I slot print_timing: id  0 | task 901 | draft acceptance = 0.25079 (   79 accepted /   315 generated), mean len =  2.76
+2.11.180.247 I slot print_timing: id  0 | task 952 | prompt eval time =    4732.76 ms /  4095 tokens (    1.16 ms per token,   865.25 tokens per second)
+2.11.180.250 I slot print_timing: id  0 | task 952 |        eval time =    6089.23 ms /   128 tokens (   47.95 ms per token,    20.86 tokens per second)
+2.11.180.254 I slot print_timing: id  0 | task 952 | draft acceptance = 0.21714 (   76 accepted /   350 generated), mean len =  2.52

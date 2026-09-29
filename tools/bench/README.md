@@ -1,5 +1,10 @@
 # Kernel benches
 
+For full-model single-request decode against vLLM-Metal, llama.cpp Metal and
+Ollama, use `single_request_latency.py`. It records native decode counters,
+warmups and generated text. See the [Qwen3 8B comparison](../../docs/research/qwen8b-serving-decode.md)
+for measured results, exact prompts and pinned server settings.
+
 `gemv_bench.py` runs the production-shaped `kernels/gemv_T.metal` (assembled by `monolith.kernels` from a format plugin's
 decode snippet and a pack geometry) on the target's shapes, checks every run against the exact format oracle (the leaf-op
 gate: ≤ 2 BF16 ULPs at the output's magnitude, float32 accumulation noise < 1e-4), and streams ≥ 2 GB of identical packs
