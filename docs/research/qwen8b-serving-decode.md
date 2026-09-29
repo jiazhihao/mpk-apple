@@ -47,6 +47,48 @@ These rates depend on the prompt and generated continuation; they do not establi
 that N=7 is generally unhelpful.
 Follow-up: [avoid the low-acceptance N=7 slowdown (#133)](https://github.com/jiazhihao/mpk-apple/issues/133).
 
+## Time per N=7 step
+
+A full step means **seven draft proposals, target verification of up to eight
+positions, and acceptance/rollback**, including host overhead. It is not one
+output token and is not target-verification-only time. Median request-average
+milliseconds per full step, with five measured requests per context:
+
+| Engine | 126 | 1,023 | 4,095 |
+|---|---:|---:|---:|
+| Monolith | **53.57** | **58.18** | **74.92** |
+| vLLM-Metal | 62.65 | 71.07 | 100.00 |
+| llama.cpp Metal | 91.38 | 96.37 | 116.43 |
+
+Monolith's step latency is 14.5%, 18.1%, and 25.1% lower than vLLM-Metal's;
+it is 41.4%, 39.6%, and 35.7% lower than llama.cpp's. The target/drafter
+quantization differences described above still apply. These step costs explain
+part of the per-token gap independently of differences in accepted tokens per
+round; low acceptance can still make speculation slower than plain decoding.
+
+Monolith reuses the original N=7 samples: divide `decode_wall_ms` by
+`len(accepted)`, checking every `verify_len` is seven. vLLM was rerun with the
+same settings and additional per-request Prometheus counter deltas for draft
+rounds, proposed tokens and accepted tokens. Every measured vLLM round proposed
+exactly seven tokens; its decode wall time is divided by the round count.
+
+llama.cpp needs different treatment: it falls back to single-token iterations
+near the output limit. Dividing total decode time by full-round count would
+charge that tail to the N=7 rounds, while dividing by all iterations mixes
+cheaper single-token steps into the average. A fresh run with its built-in
+`LLAMA_TRACE=1` records each `accepted x/7` event. The table uses the mean time
+between consecutive full-round events within each request, excluding the first
+round (no preceding timestamp) and the single-token tail. Trace round counts and
+accepted-token sums exactly match the response counters. Instrumentation and
+native timer boundaries differ, so this is an engine-cycle comparison rather
+than a synchronized GPU-only microbenchmark.
+
+The [step evidence](../../tools/bench/results/qwen8b-serving-decode-20260929/steps.jsonl)
+retains request averages, iteration counts and llama.cpp's individual acceptance
+timestamps. The directory also contains both new runs' raw responses and counter
+snapshots; `methodology.json` records the follow-up launches. Original per-token
+results above are unchanged.
+
 ## Measurement and comparability
 
 One engine was resident at a time, with one serial request. Every shape had one
