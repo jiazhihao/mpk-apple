@@ -550,5 +550,80 @@
       ]
     }
   },
-  "prompt_sha256": "f37968ca94b07bc062997cbd8c072079ebfda0ad68a53de252e8bd033c2fc32c"
+  "prompt_sha256": "f37968ca94b07bc062997cbd8c072079ebfda0ad68a53de252e8bd033c2fc32c",
+  "step_followup": {
+    "date": "2026-09-29",
+    "order": [
+      "vllm-n7-steps",
+      "llama-n7-steps"
+    ],
+    "monolith": "Original N=7 samples reused; count len(accepted), verify_len always 7.",
+    "vllm": "Identical launch, rerun with per-request Prometheus draft-round, proposed-token and accepted-token counter deltas. Every round proposes seven.",
+    "llama": "Identical launch plus LLAMA_TRACE=1; consecutive accepted x/7 timestamps measure full draft/verify/accept cycles. Exclude first full round (no preceding timestamp) and the 1-7 single-token fallback iterations near output limit. Trace accepted counts and round totals checked against response counters.",
+    "statistic": "Median of five request-level average ms/full-step values. Not the median of individually instrumented steps for Monolith/vLLM. Native timer boundaries differ; all include draft and target work, not target-only verification.",
+    "launches": {
+      "vllm-n7-steps": {
+        "command": [
+          "/tmp/mpk-serving-tools/vllm-env/bin/vllm",
+          "serve",
+          "/Users/zhihaojia/models/mlx-Qwen3-8B-nvfp4",
+          "--served-model-name",
+          "qwen3-8b",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "18101",
+          "--max-model-len",
+          "4608",
+          "--max-num-seqs",
+          "1",
+          "--no-enable-prefix-caching",
+          "--dtype",
+          "bfloat16",
+          "--gpu-memory-utilization",
+          "0.5",
+          "--no-async-scheduling",
+          "--speculative-config",
+          "{\"method\": \"draft_model\", \"model\": \"/Users/zhihaojia/models/mlx-community-Qwen3-0.6B-4bit\", \"num_speculative_tokens\": 7}"
+        ],
+        "env": {}
+      },
+      "llama-n7-steps": {
+        "command": [
+          "/tmp/mpk-serving-tools/llama/llama-b11146/llama-server",
+          "-m",
+          "/tmp/mpk-serving-tools/qwen3-8b-q4_k_m.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "18102",
+          "-c",
+          "4608",
+          "-np",
+          "1",
+          "-ngl",
+          "all",
+          "-fa",
+          "on",
+          "--cache-ram",
+          "0",
+          "--spec-type",
+          "draft-simple",
+          "--spec-draft-model",
+          "/tmp/mpk-serving-tools/qwen3-0.6b-q8_0.gguf",
+          "--spec-draft-n-max",
+          "7",
+          "--spec-draft-n-min",
+          "7",
+          "--spec-draft-ngl",
+          "all",
+          "-lv",
+          "4"
+        ],
+        "env": {
+          "LLAMA_TRACE": "1"
+        }
+      }
+    }
+  }
 }

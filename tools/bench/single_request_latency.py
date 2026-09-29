@@ -58,8 +58,11 @@ def decode_counter(url):
     with urllib.request.urlopen(url + '/metrics', timeout=30) as response:
         lines = response.read().decode().splitlines()
     values = []
-    for suffix in ('sum', 'count'):
-        prefix = 'vllm:request_decode_time_seconds_' + suffix
+    for prefix in ('vllm:request_decode_time_seconds_sum',
+                   'vllm:request_decode_time_seconds_count',
+                   'vllm:spec_decode_num_drafts_total',
+                   'vllm:spec_decode_num_draft_tokens_total',
+                   'vllm:spec_decode_num_accepted_tokens_total'):
         values.append(sum(float(line.split()[-1]) for line in lines
                           if line.startswith(prefix + '{') or line.startswith(prefix + ' ')))
     return values
@@ -121,6 +124,10 @@ def request(args, prompt, count):
                       decode_tokens=usage['completion_tokens'] - 1,
                       metric='vllm:request_decode_time_seconds_sum',
                       counter_before=before, counter_after=after)
+        if after[2] > before[2]:
+            engine.update(draft_rounds=after[2] - before[2],
+                          draft_tokens=after[3] - before[3],
+                          accepted_draft_tokens=after[4] - before[4])
     else:
         text, usage, engine = data['text'], data['usage'], data['engine']
     if args.kind in ('monolith', 'vllm'):
