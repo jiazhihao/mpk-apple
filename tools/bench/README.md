@@ -8,6 +8,9 @@ for measured results, exact prompts and pinned server settings.
 full N=7 round timing with the same prompts, excluding prefill and shortened tail
 rounds. It retains per-token timestamps; `--prefill-step-size` supports a matched
 prefill check against Monolith as well as the native generator defaults.
+`target_verify_latency.py` isolates the N=7 target forward (eight positions),
+using identical prefixes and input IDs for Monolith and MLX, excluding drafting
+and sampling. See the [long-context target measurements](../../docs/research/qwen8b-long-context-tuning.md#isolated-n7-target-verification).
 `profile_spec_round.py` splits the existing N=7 dispatch stream into timed stages
 and compares against unsplit controls. Optional `--cache` reuses saved tuning
 choices and leaves cache misses at default, without searching. The serving
