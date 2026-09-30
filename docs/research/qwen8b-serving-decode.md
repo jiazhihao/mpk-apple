@@ -3,6 +3,11 @@
 Measured 2026-09-29 on the 20-core Apple M5 Pro, 24 GB, macOS 26.5.1.
 Monolith revision `03a4252` (the input-normalization fusion branch).
 
+The checkout retains compact summaries and methodology. Raw samples, logs, prompts
+and tuning caches remain in the [immutable evidence archive](https://github.com/jiazhihao/mpk-apple/tree/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929).
+See the [evidence README](../../tools/bench/results/qwen8b-serving-decode-20260929/README.md) to restore the
+prompts and cache used by the reproduction commands below.
+
 **Correction: the original Monolith serving runs disabled autotuning, unlike
 the earlier layer benchmark and the normal Session default.** Reusing available
 cached choices reduces the short-context N=7 round from 53.57 to **35.83 ms**.
@@ -110,19 +115,19 @@ saved timestamps. Request-average MLX ranges were 54.69–54.92, 62.39–62.58, 
 82.85–83.05 ms at the three contexts. The short-context advantage is small;
 these sequential engine blocks do not establish a universal performance ranking.
 
-The [step evidence](../../tools/bench/results/qwen8b-serving-decode-20260929/steps.jsonl)
+The [step evidence](https://github.com/jiazhihao/mpk-apple/blob/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929/steps.jsonl)
 retains request averages, iteration counts and llama.cpp's individual acceptance
-timestamps. The directory also contains both new runs' raw responses and counter
+timestamps. The [raw evidence archive](https://github.com/jiazhihao/mpk-apple/tree/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929) also contains both new runs' responses and counter
 snapshots; `methodology.json` records the follow-up launches. Original per-token
 results above are unchanged.
-The [MLX records](../../tools/bench/results/qwen8b-serving-decode-20260929/mlx-lm-n7-steps.jsonl)
+The [archived MLX records](https://github.com/jiazhihao/mpk-apple/blob/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929/mlx-lm-n7-steps.jsonl)
 separately retain every round-end boundary, timed interval and generated token.
 
 ```bash
 python tools/bench/mlx_spec_step_latency.py \
   --model /path/to/mlx-Qwen3-8B-nvfp4 \
   --drafter /path/to/mlx-community-Qwen3-0.6B-4bit \
-  --prompts tools/bench/results/qwen8b-serving-decode-20260929/prompts.json \
+  --prompts /tmp/qwen8b-serving-prompts.json \
   --out /tmp/mlx-n7-steps.jsonl
 ```
 
@@ -155,7 +160,7 @@ Units are median request-average ms/full step. The difference is only 0.8–1.0%
 with all 18 output token sequences identical and an identical speculative-loop
 AST. Sequential runs do not isolate package effects from timing drift, but this
 check does not support a large environment-driven improvement. The
-[old-environment raw records](../../tools/bench/results/qwen8b-serving-decode-20260929/mlx-lm-n7-old-env.jsonl)
+[old-environment raw records](https://github.com/jiazhihao/mpk-apple/blob/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929/mlx-lm-n7-old-env.jsonl)
 and methodology preserve the audit. The following component profile identifies
 the much larger Monolith configuration effect.
 
@@ -205,14 +210,14 @@ this is not an accuracy validation. The 1,023/4,095-token tuned cases and tuned
 plain decoding remain unmeasured. The historical 17.75 ms number was tuned
 fixed-T target decoder work alone, not the target stage of the 53.57 ms run.
 
-[Raw stage samples](../../tools/bench/results/qwen8b-serving-decode-20260929/round-stage-profile.json),
-[cached-choice stage samples](../../tools/bench/results/qwen8b-serving-decode-20260929/round-stage-profile-tuned.json),
-[full-generation records](../../tools/bench/results/qwen8b-serving-decode-20260929/round-cached-generation.json)
+[Raw stage samples](https://github.com/jiazhihao/mpk-apple/blob/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929/round-stage-profile.json),
+[cached-choice stage samples](https://github.com/jiazhihao/mpk-apple/blob/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929/round-stage-profile-tuned.json),
+[full-generation records](https://github.com/jiazhihao/mpk-apple/blob/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929/round-cached-generation.json)
 and [summary](../../tools/bench/results/qwen8b-serving-decode-20260929/round-profile-summary.json)
 preserve this audit. The [probe](../../tools/bench/profile_spec_round.py) accepts
 `--model`, `--pack`, `--drafter`, `--drafter-pack`, `--prompts` and `--out`;
 packs must support 4,608 context tokens. Run once without `--cache`, then once
-with `--cache tools/bench/results/qwen8b-serving-decode-20260929/round-cached-choices.json`.
+with `--cache /tmp/qwen8b-serving-cached-choices.json`.
 The archived cache retains choices and their timing fields, omitting the unused
 candidate-variant history. No runtime cache search is performed by this probe.
 
@@ -267,7 +272,7 @@ but this is a configuration screen, not an exhaustive tuning or universal rankin
 
 The [benchmark client](../../tools/bench/single_request_latency.py) also provides
 a benchmark-only HTTP adapter around Monolith's `Session.generate`.
-The [evidence directory](../../tools/bench/results/qwen8b-serving-decode-20260929/)
+The [raw evidence archive](https://github.com/jiazhihao/mpk-apple/tree/13f8604af3e7e337e5d3a0d3ab5e461036f302d9/tools/bench/results/qwen8b-serving-decode-20260929)
 contains every 128-token sample (including warmups), exact raw prompts, summary
 ranges, compact native log evidence, server commands, environment settings,
 model identities and representative packed-weight layouts. The archive normalizes
@@ -280,7 +285,7 @@ installation and model paths. Then run, for example:
 python tools/bench/single_request_latency.py \
   --kind vllm --model qwen3-8b --label vllm-decode-plain \
   --url http://127.0.0.1:18101 \
-  --prompts tools/bench/results/qwen8b-serving-decode-20260929/prompts.json \
+  --prompts /tmp/qwen8b-serving-prompts.json \
   --counts 128 --out /tmp/vllm-decode.jsonl
 ```
 
