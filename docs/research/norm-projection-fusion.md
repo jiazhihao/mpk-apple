@@ -1,8 +1,9 @@
 # Commuted input normalization on M5
 
-`--commute-norm` enables an experimental, relaxed-rounding fusion in generation;
-`Session(..., commute_norm=True)` exposes the same option. It defaults off because
-latency improves on some shapes and regresses on others. Existing packs work unchanged.
+Relaxed-rounding input-normalization fusion is enabled by default in generation,
+`Session`, and the compiler APIs. Use `--no-commute-norm` or `commute_norm=False`
+to restore the non-commuted path; `--commute-norm` remains accepted. Existing packs
+work unchanged. Latency improves on some shapes and regresses on others, as recorded below.
 
 For reciprocal RMS `r(h) = rsqrt(sum(h*h)/K + eps)`, a projection can use
 `r(h) * ((h * gamma) @ W.T)`. This uses the same algebra as
@@ -20,7 +21,8 @@ one-token decoding, larger prefill tiles and mixed shader/tile schedules retain
 the original path. The producer must also be a tile covering the full token range.
 
 Moving BF16 rounding changes results: this is an explicit exception to the
-original leaf-ULP/token-equality gate, not a change to the default path's contract.
+original leaf-ULP/token-equality gate for eligible fused projections. The explicit
+non-commuted path retains its prior numerical contract.
 Tests check the reordered formula, unchanged residual/statistic outputs, distinct
 norm weights, barriers and shrinking/growing active rows. Layer cosine below is
 measured against MLX on each layer's actual Monolith input; it does not establish
@@ -58,7 +60,7 @@ over repetitions. Raw samples, cosine and settings are in
 
 In this initial sweep, Qwen 0.6B at N=5/7 and Llama 3B at N=5 have non-overlapping original/fused ranges. Qwen 0.6B N=3 and SmolLM2 show overlapping ranges, so their lower minima are not conclusive wins. Llama 1B, Llama 3B N=7 and Qwen 8B do not benefit from enabling this option. SmolLM2 N=5 also remains slower than MLX by the measured minimum.
 
-The fusion removes 55 normalization dispatches on the 28-layer models, 31 on Llama 1B, 47 on SmolLM2 and 71 on Qwen 8B. Its added producer stores and repeated per-tile statistic reductions can outweigh the saved dispatches. Moving the reciprocal computation after MMA and using adjacent four-lane reductions reduced the preliminary 8B regression, but did not eliminate it. Further optimization and shape-aware selection before default enablement are tracked in [#131](https://github.com/jiazhihao/mpk-apple/issues/131).
+The fusion removes 55 normalization dispatches on the 28-layer models, 31 on Llama 1B, 47 on SmolLM2 and 71 on Qwen 8B. Its added producer stores and repeated per-tile statistic reductions can outweigh the saved dispatches. Moving the reciprocal computation after MMA and using adjacent four-lane reductions reduced the preliminary 8B regression, but did not eliminate it. Further optimization and shape-aware selection are tracked in [#131](https://github.com/jiazhihao/mpk-apple/issues/131).
 
 Reproduce with the same target checkpoint and pack:
 
@@ -139,7 +141,7 @@ particular placement duplicates too much work on the wider model.
 and reuses it across the existing grid-stride loop. The measured legacy NVFP4
 geometry (K=4096, TK=128, eight-way K split, T=6/8) uses **two threadgroups per
 GPU core**, or 40 on this M5 Pro. There is no new dispatch or scratch buffer.
-Other geometries retain their previous schedule; `commute_norm` remains opt-in.
+Other geometries retain their previous schedule. This fusion is now enabled by default.
 
 Exactly one group per core was tested first. With eight SIMD-groups/group it
 slowed T=8 to **581.14 µs/layer**, versus **493.86** for the old fusion and
@@ -203,7 +205,7 @@ slices/unrolling were also swept.
 Only merge packing is added to the production schedule. It keeps all 256 logical
 SIMD-groups at T=8, but launches 64 threadgroups of 128 threads instead of 256
 threadgroups of 32. The arithmetic and buffer addressing are unchanged. T=6 and
-the default non-commuted path keep their prior geometry.
+the explicitly disabled, non-commuted path keep their prior geometry.
 
 Final N=7 comparisons, eight paired repetitions × 48 replays, minimum wall
 µs/layer (paired median ratios are also shown):

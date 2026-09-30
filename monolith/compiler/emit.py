@@ -74,7 +74,7 @@ class _Ctx:
     norm_scratch: Dict[Tuple[str, str, int], str] = field(default_factory=dict)   # (x, stat, rows) -> the normalized scratch
     perm_scratch: Dict[Tuple[Any, ...], str] = field(default_factory=dict)         # (input, norm identity, tm, wpw, tk, range) -> the permuted scratch
 
-    commute_norm: bool = False
+    commute_norm: bool = True
     post_norm_inputs: Set[str] = field(default_factory=set)
     preconvolved: Set[str] = field(default_factory=set)
     gdn_pending: Dict[str, Tuple[List[Tuple[int, str, int]], Dict[str, str]]] = field(default_factory=dict)
@@ -512,8 +512,8 @@ def _tile_alone(ctx: _Ctx, op: Op, *, allow_norm: bool = False) -> Optional[Tupl
 def _norm_output(ctx: _Ctx, v: Value) -> Optional[Tuple[str, Dict[str, str], Tuple[str, int]]]:
     """Write gamma*h beside the residual, leaving the scalar RMS division for GEMM.
 
-    This deliberately changes BF16 rounding. It is opt-in, keeps checkpoint
-    weights unchanged, and only handles short, all-tile consumers. Siblings can
+    This deliberately changes BF16 rounding. It is enabled by default, keeps
+    checkpoint weights unchanged, and only handles short, all-tile consumers. Siblings can
     share a layout; other consumers retain the original normalization path.
     """
     if (not ctx.commute_norm or v.producer is None or v.producer.kind != "gemv"
@@ -1276,7 +1276,7 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
                  layout: Optional[StepStateLayout] = None, eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
                  tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal",
-                 attention: Optional[str] = None, accelerator: Optional[str] = None, t_min: int = 1, commute_norm: bool = False) -> Program:
+                 attention: Optional[str] = None, accelerator: Optional[str] = None, t_min: int = 1, commute_norm: bool = True) -> Program:
     """Check coverage on ``profile`` and emit the step program for a lowered (and passed) graph: for a static
     ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t`` read from StepState
     at run time. The dynamic bound defaults to ``layout.t_max``; an explicit smaller ``t`` lets programs share
@@ -1436,7 +1436,7 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
                     verify_threshold: Optional[float] = None, verify_length: Optional[int] = None, barriers: str = "minimal",
-                    attention: Optional[str] = None, accelerator: Optional[str] = None, prefill: bool = False, commute_norm: bool = False) -> Program:
+                    attention: Optional[str] = None, accelerator: Optional[str] = None, prefill: bool = False, commute_norm: bool = True) -> Program:
     """Lower ``model``, run the ``passes`` and emit its step program (see :func:`emit_program`). With a ``drafter``
     (and its pack) the dynamic-T program carries the speculative round instead of the advance: ``verify`` = ``"cost"``
     (the cost-aware verify-length rule when the profile has a cost table for the pack's dominant format, otherwise the

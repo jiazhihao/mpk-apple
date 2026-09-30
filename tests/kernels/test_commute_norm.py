@@ -61,8 +61,8 @@ def test_commuted_norm_formula_and_partial_rows(tmp_path, fmt, k, t, dynamic):
     if dynamic:
         fallback = emit_program(g, **dict(kwargs, t_min=1), commute_norm=True)
         assert not any(ks.macros.get('POST_NORM') == '1' for ks in fallback.kernels.values())
-    base = emit_program(g, **kwargs)
-    fused = emit_program(g, **kwargs, commute_norm=True)
+    base = emit_program(g, **kwargs, commute_norm=False)
+    fused = emit_program(g, **kwargs)
     assert not any(ks.macros.get('POST_NORM') == '1' for ks in base.kernels.values())
     consumers = [op for op in fused.ops if fused.kernels[op.kernel].macros.get('POST_NORM') == '1']
     assert len(consumers) == 1  # a different gamma must not reuse this scratch

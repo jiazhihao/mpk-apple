@@ -24,7 +24,7 @@ weights from a block-lane-major pack — not one never-returning kernel with spe
 
 Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); §4 of the hardware report is the checklist for a chip not yet measured.
 
-The experimental [`--commute-norm` fusion](docs/research/norm-projection-fusion.md) moves RMS scaling after projections; see its measured gains and regressions before enabling it.
+The [input-normalization fusion](docs/research/norm-projection-fusion.md) moves RMS scaling after eligible projections and is enabled by default. It changes BF16 rounding; use `--no-commute-norm` or `Session(..., commute_norm=False)` to disable it. The research note records measured gains and regressions.
 
 To expose a local model through `/v1/chat/completions` for OpenAI-compatible clients, see [the serving guide](docs/serving.md).
 

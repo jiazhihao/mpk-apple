@@ -419,10 +419,11 @@ def test_commuted_norm_option_and_large_tile_fallback(tmp_path):
     profile = Profile.from_dict('commuted_norm', {'gpu_cores': 20, 'nominal_gbps': 307,
         'engine': {'family': 'Apple10', 'lane_order': 'interleaved16', 'accelerator': 'on'}})
     pack = PackFile(tmp_path / 'pack')
-    for enabled, tokens in ((False, 8), (True, 8), (True, 16), (True, 1)):
-        p = compile_program(model, pack, profile, t=tokens, commute_norm=enabled,
+    for enabled, tokens in ((False, 8), (True, 8), (None, 8), (None, 16), (None, 1)):
+        options = {} if enabled is None else {"commute_norm": enabled}
+        p = compile_program(model, pack, profile, t=tokens, **options,
                             layout=StepStateLayout(t_max=16, gamma_max=15))
         fused = [op for op in p.ops if p.kernels[op.kernel].macros.get('POST_NORM') == '1']
-        assert bool(fused) == (enabled and tokens == 8)
+        assert bool(fused) == (enabled is not False and tokens == 8)
         for op in fused:
             assert any(index == 5 for index, _, _ in op.bindings)
