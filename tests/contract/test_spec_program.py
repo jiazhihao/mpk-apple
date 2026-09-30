@@ -275,9 +275,10 @@ def test_fused_permutes(pair):
     """Under the cost rule every predicated GEMV runs on the tile alone, so the un-normed tile inputs — the attention
     output for o_proj, the gated product for down — are written in x' order by their producers (the merge, the
     gate|up tile's epilogue) straight into the consumer's scratch: no x_permute for them, and the two dispatches
-    share the buffer. Under the threshold rule (a shader variant remains) nothing is fused."""
+    share the buffer. Disable commuted normalization to isolate permutation fusion.
+    Under the threshold rule (a shader variant remains) nothing is fused."""
     model, drafter, tp, dp = pair
-    prog = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp)
+    prog = compile_program(model, tp, PROF_ACCEL, commute_norm=False, dynamic_t=True, drafter=drafter, drafter_pack=dp)
     perms = [o for o in prog.ops if o.meta.get("kind") == "x_permute"]
     tiles = [o for o in prog.ops if o.meta.get("accelerator")]
     permuted = {[b for b in o.bindings if b[0] == 3][0][1] for o in perms}                 # the scratches a permute dispatch writes
@@ -298,7 +299,7 @@ def test_fused_permutes(pair):
     target_tiles = [t for t in tiles if t.name.startswith("gemv:layers.")]
     fused_target = [o for o in prog.ops if o.meta.get("perm_out") and any(xin(t) == out3(o) for t in target_tiles)]
     assert len(fused_target) == 4                                                          # attention/GDN out projections and both down projections
-    plain = compile_program(model, tp, PROF_ACCEL, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="threshold", verify_threshold=0.5)
+    plain = compile_program(model, tp, PROF_ACCEL, commute_norm=False, dynamic_t=True, drafter=drafter, drafter_pack=dp, verify="threshold", verify_threshold=0.5)
     # the target keeps its T = 1 shader variants there, so its inputs go through permutes again; the drafter's block GEMVs
     # (static rows: the tile alone under any rule) stay fused
     plain_tiles = [o for o in plain.ops if o.meta.get("accelerator")]

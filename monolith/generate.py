@@ -73,7 +73,7 @@ class Session:
                  min_p: float = 0.0, seed: int = 0, autotune: bool = True, drafter: Any = None, drafter_pack: Optional[str] = None,
                  verify: str = "cost", verify_threshold: Optional[float] = None, verify_length: Optional[int] = None,
                  barriers: str = "minimal", attention: Optional[str] = None, fast_math: bool = False, accelerator: Optional[str] = None,
-                 prefill_chunk_size: int = 128) -> None:
+                 prefill_chunk_size: int = 128, commute_norm: bool = True) -> None:
         """``drafter`` (a ``Drafter`` built with the model's head) and its pack turn the session speculative: one
         small dynamic-T decode program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
         from .bench import profile_for_device
@@ -100,6 +100,7 @@ class Session:
         if not isinstance(prefill_chunk_size, int) or isinstance(prefill_chunk_size, bool) or prefill_chunk_size < 1:
             raise ValueError("prefill_chunk_size must be a positive integer")
         self.prefill_chunk_size = prefill_chunk_size
+        self.commute_norm = commute_norm
         self.decode_t_max = decode_layout.t_max
         # Both programs share one ABI and persistent state; their graph row bounds
         # are independent. A large pending-token array does not enlarge decode ops.
@@ -144,7 +145,7 @@ class Session:
             prog = compile_program(self.model, self.pack, self.profile, t=bound, dynamic_t=dynamic, eos=self.eos,
                                    ring_capacity=self.ring_capacity, layout=self.layout, tuner=None if prefill else self.tuner, drafter=self.drafter,
                                    drafter_pack=self.drafter_pack, verify=self.verify, verify_threshold=self.verify_threshold,
-                                   verify_length=self.verify_length, barriers=self.barriers, attention=self.attention, accelerator=self.accelerator,
+                                   verify_length=self.verify_length, barriers=self.barriers, attention=self.attention, accelerator=self.accelerator, commute_norm=self.commute_norm,
                                    prefill=prefill)
             if self.tuner is not None:
                 self.tuner.save(self.dev.info().name)
@@ -339,6 +340,8 @@ def main(argv=None) -> int:
     ap.add_argument("--attention", default=None, choices=["v1", "v2", "v3", "mma", "auto"],
                     help="the attention kernel (default: the chip profile's; auto = M5 matrix attention for verification blocks, v3 for short blocks)")
     ap.add_argument("--accelerator", default=None, choices=["on", "off"], help="T > 1 GEMVs on the tensor-ops tile (default: the chip profile's)")
+    ap.add_argument("--commute-norm", action=argparse.BooleanOptionalAction, default=True,
+                    help="fuse input normalization across eligible projections (default: enabled; changes BF16 rounding)")
     ap.add_argument("--math", default="safe", choices=["safe", "fast"], help="Metal math mode for the kernels")
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
@@ -351,7 +354,7 @@ def main(argv=None) -> int:
                         drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind, verify=a.verify,
                         verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts, barriers=a.barriers,
                         drafter_options={"gamma": a.draft_gamma} if a.draft_gamma is not None else None,
-                        prefill_chunk_size=a.prefill_chunk_size, attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator)
+                        prefill_chunk_size=a.prefill_chunk_size, attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator, commute_norm=a.commute_norm)
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0
     print(tok.decode(gen.tokens))

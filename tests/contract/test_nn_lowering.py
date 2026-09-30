@@ -407,3 +407,23 @@ def test_constant_table_capacity_checked_before_dispatch(tmp_path):
     large = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=32)
     with pytest.raises(ValueError, match='constant.*rope_cos.*repack'):
         compile_program(large, pack, profile, t=4)
+
+
+def test_commuted_norm_option_and_large_tile_fallback(tmp_path):
+    from monolith.compiler import compile_program
+    from monolith.core import Profile, StepStateLayout
+
+    _checkpoint(tmp_path)
+    model = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=32)
+    pack_model(model, str(tmp_path), str(tmp_path / 'pack'), PackLayout(rows=16))
+    profile = Profile.from_dict('commuted_norm', {'gpu_cores': 20, 'nominal_gbps': 307,
+        'engine': {'family': 'Apple10', 'lane_order': 'interleaved16', 'accelerator': 'on'}})
+    pack = PackFile(tmp_path / 'pack')
+    for enabled, tokens in ((False, 8), (True, 8), (None, 8), (None, 16), (None, 1)):
+        options = {} if enabled is None else {"commute_norm": enabled}
+        p = compile_program(model, pack, profile, t=tokens, **options,
+                            layout=StepStateLayout(t_max=16, gamma_max=15))
+        fused = [op for op in p.ops if p.kernels[op.kernel].macros.get('POST_NORM') == '1']
+        assert bool(fused) == (enabled is not False and tokens == 8)
+        for op in fused:
+            assert any(index == 5 for index, _, _ in op.bindings)
