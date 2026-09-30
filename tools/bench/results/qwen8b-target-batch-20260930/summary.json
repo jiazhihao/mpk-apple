@@ -1,0 +1,189 @@
+{
+  "method": {
+    "scope": "Embedding, all 36 target layers, final normalization, all vocabulary logits; no draft, prefill, sampling, acceptance or output reads timed. Actual fixed-N=7 speculative program prefix versus normal plain T=1 program.",
+    "units": "ms per target forward",
+    "machine": "M5 Pro, 20 GPU cores, 24GB",
+    "checkpoint": "mlx-Qwen3-8B-nvfp4",
+    "configuration": "autotune=True, commute_norm=True, attention=auto, safe math, capacity8704, prefill64; original mixed block/inline pack and cached choices unchanged",
+    "target_rows": {
+      "new_t8": 8,
+      "old_t8": 8,
+      "plain_t1": 1
+    },
+    "measurement": "10 alternating timing blocks after one warmup block; eight replays/block, one command buffer/pass, two in flight. All logits have stable hashes; StepState unchanged.",
+    "profiles": "12 alternating per-dispatch timestamp traces per configuration/context. Sums of per-dispatch medians are attribution only, not end-to-end latency.",
+    "base_revision": "634ca76",
+    "date": "2026-09-30",
+    "script_sha256": "036e0de5d6b1e6e0b5c2fde19888075f7400e20d5411fc9b55461b2dfed2f70d"
+  },
+  "contexts": [
+    {
+      "prefix_tokens": 126,
+      "gpu_ms": {
+        "plain_t1": 17.177716130390763,
+        "old_t8": 18.97638023365289,
+        "new_t8": 19.265937502495944
+      },
+      "wall_ms": {
+        "plain_t1": 17.215585932135582,
+        "old_t8": 19.018164061009884,
+        "new_t8": 19.306138023734093
+      },
+      "paired_ratio_vs_plain_t1": {
+        "median": 1.1254140273159,
+        "min": 1.1102342533699983,
+        "max": 1.1517206467927197
+      },
+      "paired_ratio_vs_old_t8": {
+        "median": 1.014845089289936,
+        "min": 1.0070685368155907,
+        "max": 1.0745549881476697
+      },
+      "profile_role_ms": {
+        "plain_t1": {
+          "embed": 0.009916499999999998,
+          "rmsnorm_stat": 0.0036455000000000003,
+          "qkv": 2.0101700000000005,
+          "attention": 0.3537930000000035,
+          "o_proj": 1.3317509999999995,
+          "gate_up": 7.208691999999997,
+          "down": 3.817834999999999,
+          "x_permute": 0.0037499999999983658,
+          "head": 1.1832710000000013
+        },
+        "old_t8": {
+          "embed": 0.009895999999999999,
+          "rmsnorm_stat": 0.004041,
+          "qkv": 2.1573965,
+          "attention": 0.6309735000000006,
+          "o_proj": 1.5579790000000044,
+          "gate_up": 7.629603999999998,
+          "down": 4.313853500000002,
+          "head": 1.2460630000000013
+        },
+        "new_t8": {
+          "embed": 0.010062,
+          "rmsnorm_stat": 0.0040420000000000005,
+          "qkv": 2.146208000000003,
+          "attention": 0.8997880000000089,
+          "o_proj": 1.5586215000000008,
+          "gate_up": 7.585667000000002,
+          "down": 4.315686000000003,
+          "head": 1.2491454999999991
+        }
+      }
+    },
+    {
+      "prefix_tokens": 4095,
+      "gpu_ms": {
+        "plain_t1": 20.2304583217483,
+        "old_t8": 26.328570311306976,
+        "new_t8": 22.627216152613983
+      },
+      "wall_ms": {
+        "plain_t1": 20.272718742489815,
+        "old_t8": 26.36671093851328,
+        "new_t8": 22.671697922050953
+      },
+      "paired_ratio_vs_plain_t1": {
+        "median": 1.11791552515933,
+        "min": 1.1060098807113463,
+        "max": 1.1397833714459833
+      },
+      "paired_ratio_vs_old_t8": {
+        "median": 0.8592623209295592,
+        "min": 0.8523423735405061,
+        "max": 0.878729868572953
+      },
+      "profile_role_ms": {
+        "plain_t1": {
+          "embed": 0.009895999999999999,
+          "rmsnorm_stat": 0.003666,
+          "qkv": 2.012292499999999,
+          "attention": 3.1697530000000005,
+          "o_proj": 1.333268499999999,
+          "gate_up": 7.200811499999998,
+          "down": 3.828749,
+          "x_permute": 0.0036249999999995453,
+          "head": 1.181750000000001
+        },
+        "old_t8": {
+          "embed": 0.0100205,
+          "rmsnorm_stat": 0.004,
+          "qkv": 2.160144499999993,
+          "attention": 6.600457999999995,
+          "o_proj": 1.6457910000000004,
+          "gate_up": 7.97191950000001,
+          "down": 4.332995500000005,
+          "head": 1.254854
+        },
+        "new_t8": {
+          "embed": 0.013229,
+          "rmsnorm_stat": 0.004250000000000002,
+          "qkv": 2.1719809999999935,
+          "attention": 3.618980000000006,
+          "o_proj": 1.605143499999996,
+          "gate_up": 7.928521,
+          "down": 4.354522,
+          "head": 1.2553544999999993
+        }
+      }
+    },
+    {
+      "prefix_tokens": 8191,
+      "gpu_ms": {
+        "plain_t1": 23.360416671494022,
+        "old_t8": 33.077776031859685,
+        "new_t8": 26.026062478194945
+      },
+      "wall_ms": {
+        "plain_t1": 23.39830208569765,
+        "old_t8": 33.12011457979679,
+        "new_t8": 26.068502604961395
+      },
+      "paired_ratio_vs_plain_t1": {
+        "median": 1.1128453309477075,
+        "min": 1.1053097925856896,
+        "max": 1.1174963666951285
+      },
+      "paired_ratio_vs_old_t8": {
+        "median": 0.7866823665467114,
+        "min": 0.7840391004460401,
+        "max": 0.7956755760819895
+      },
+      "profile_role_ms": {
+        "plain_t1": {
+          "embed": 0.0098125,
+          "rmsnorm_stat": 0.003645999999999999,
+          "qkv": 2.01112049999999,
+          "attention": 6.061268500000003,
+          "o_proj": 1.3356660000000073,
+          "gate_up": 7.184125499999996,
+          "down": 3.813147500000003,
+          "x_permute": 0.003771000000000413,
+          "head": 1.1770625
+        },
+        "old_t8": {
+          "embed": 0.010187499999999999,
+          "rmsnorm_stat": 0.0040625,
+          "qkv": 2.1620415000000026,
+          "attention": 13.26398100000001,
+          "o_proj": 1.719729,
+          "gate_up": 7.902979999999998,
+          "down": 4.325959499999998,
+          "head": 1.2674585
+        },
+        "new_t8": {
+          "embed": 0.010291499999999999,
+          "rmsnorm_stat": 0.004042,
+          "qkv": 2.149542000000002,
+          "attention": 6.539097500000001,
+          "o_proj": 1.6571670000000043,
+          "gate_up": 8.130835999999995,
+          "down": 4.326313499999998,
+          "head": 1.2671454999999998
+        }
+      }
+    }
+  ]
+}
