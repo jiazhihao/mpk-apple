@@ -27,8 +27,9 @@ def dev():
 
 
 class Cfg:
-    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0, adaptive=False, single_block=False, qk_norm=True):
+    def __init__(self, heads, kv, d, rot, ctx_max, t_max, chunk=64, rb=4, gate=True, v2=False, n_tg=None, steal=False, v3=False, nsg3=None, mma=False, step_state=False, lm_mode=0, adaptive=False, single_block=False, qk_norm=True, direct=False):
         self.heads, self.kv, self.d, self.rot, self.ctx_max, self.t_max = heads, kv, d, rot, ctx_max, t_max
+        self.direct = direct
         self.mma, self.step_state, self.lm_mode = mma, step_state, lm_mode
         self.single_block = single_block
         self.adaptive = adaptive
@@ -59,6 +60,8 @@ class Harness:
             return nt.Library(dev, source, dict(macros, QK_NORM=str(int(cfg.qk_norm))), language_version)
         if cfg.mma:
             macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(cfg.d, cfg.rep)))
+            if cfg.direct:
+                macros.update(DIRECT_KV="1", MMA_SG="4")
             if cfg.adaptive:
                 macros["ADAPTIVE_CHUNK"] = "1"
             source = kernels.gqa_source(mma=True)
@@ -69,6 +72,8 @@ class Harness:
                 source = source.replace(kernels.PRELUDE, kernels.PRELUDE + self.layout.to_msl(), 1)
             lib = library(source, macros, kernels.MSL_TENSOR_OPS)
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_mma"), nt.Pipeline(lib, "gqa_merge")
+            if cfg.direct:
+                self.p_prepare = nt.Pipeline(lib, "gqa_prepare_mma")
         elif cfg.v3:
             lib = library(kernels.gqa_source(v3=True), dict(kernels.gqa_v3_macros(cfg.d, nsg=cfg.nsg3), SINGLE_BLOCK=str(int(cfg.single_block))))
             self.p_dec, self.p_merge = nt.Pipeline(lib, "gqa_decode_v3"), None
@@ -125,6 +130,8 @@ class Harness:
                 macros = kernels.gqa_macros(c.d, chunk=c.chunk, rb_max=16 if c.mma else c.rb)
             if c.mma:
                 macros.update(FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(c.d, c.rep)))
+                if c.direct:
+                    macros.update(DIRECT_KV="1", MMA_SG="4")
                 if c.adaptive:
                     macros["ADAPTIVE_CHUNK"] = "1"
             if c.step_state:
@@ -135,6 +142,8 @@ class Harness:
             name = "gqa_decode_mma" if c.mma else "gqa_decode_v3" if c.v3 else "gqa_decode_v2" if c.v2 else "gqa_decode"
             self.p_dec = nt.Pipeline(lib, name)
             self.p_merge = None if c.v3 else nt.Pipeline(lib, "gqa_merge_v2" if c.v2 else "gqa_merge")
+            if c.direct:
+                self.p_prepare = nt.Pipeline(lib, "gqa_prepare_mma")
             self.specialized = True
         pb = nt.Buffer(self.dev, proj_bf16.tobytes())
         out = nt.Buffer(self.dev, t * c.heads * c.d * 2); out.fill(0)
@@ -159,6 +168,12 @@ class Harness:
             d1.buffer(15, sb)
             d2.buffer(15, sb)
         ds = [d1, d2]
+        if c.direct:
+            d1.threadgroup(128)
+            d0 = (nt.Dispatch().pipeline(self.p_prepare).buffer(0, pb).buffer(1, self.k_cache).buffer(2, self.v_cache)
+                  .buffer(3, self.bufs["cos"]).buffer(4, self.bufs["sin"]).buffer(5, self.bufs["qn"]).buffer(6, self.bufs["kn"])
+                  .bytes(9, params).buffer(15, sb).grid(-(-(t * c.heads) // 4)).threadgroup(128).barrier())
+            ds = [d0, d1, d2]
         self.hits = None
         if c.steal:
             n_blocks = c.kv * (-(-(position + t_act) // c.chunk)) * (-(-(c.rep * t_act) // c.rb))
@@ -720,3 +735,36 @@ def test_packed_merge_buffer_bounds(dev, position):
             results.append(np.frombuffer(out.read(0, out.nbytes), np.uint16).reshape(8, 4096))
         np.testing.assert_array_equal(*results)
         assert not results[1][active:].any()
+
+
+@pytest.mark.parametrize("position,t", [(0, 8), (255, 8), (4095, 1), (8191, 8), (8696, 8)])
+@pytest.mark.parametrize("specialize", [False, True])
+@pytest.mark.parametrize("qk_norm", [False, True])
+def test_direct_mma_causal_tail_and_cache(dev, position, t, specialize, qk_norm):
+    cfg = Cfg(32, 8, 128, 128, 8704, 8, chunk=256, gate=False,
+              mma=True, step_state=True, direct=True, qk_norm=qk_norm)
+    cfg.specialize = specialize
+    rng = np.random.default_rng(3019)
+    qn, kn = _norms(rng, cfg.d)
+    h = Harness(dev, cfg, qn, kn)
+    k = rbf(rng.standard_normal((cfg.ctx_max, cfg.kv, cfg.d)) * .5)
+    v = rbf(rng.standard_normal(k.shape))
+    proj = _random_proj(rng, cfg, 8)
+    h.set_caches(k, v)
+    got = h.step(proj, position, t_active=t, dispatch_sg=17)
+    kr, vr = k.copy(), v.copy()
+    ref = ref_step(h, bf16_to_f32(proj[:t]), position, kr, vr)
+    cos, error, scale = _bars(got[:t], ref)
+    assert cos > .99999 and error <= 2 * _ulp(scale), (cos, error, scale)
+    assert np.all(got[t:] == 0)
+    actual_k, actual_v = h.caches()
+    np.testing.assert_array_equal(actual_k[:position], k[:position])
+    np.testing.assert_array_equal(actual_k[position+t:], k[position+t:])
+    np.testing.assert_array_equal(actual_v, vr)
+    assert np.max(np.abs(actual_k - kr)) <= .01 * np.max(np.abs(kr))
+    h.set_caches(k, v)
+    np.testing.assert_array_equal(h.step(proj, position, t_active=t, dispatch_sg=17), got)
+    for state in (dict(position=position, t_this_step=t, done=1), dict(position=position, t_this_step=0)):
+        h.set_caches(k, v)
+        assert np.all(h.step(proj, position, state=state) == 0)
+        assert all(np.array_equal(a, b) for a, b in zip(h.caches(), (k, v)))
