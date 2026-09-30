@@ -161,6 +161,35 @@ python tools/bench/mlx_spec_step_latency.py --mode n7 \
 # Add --prefill-step-size 64 for the matched-prefill check.
 ```
 
+## Isolated N=7 target verification
+
+A September 30 follow-up removes drafting and acceptance entirely. N=7 has
+**eight target rows**: one anchor plus seven proposals. The timer covers
+embedding, all 36 target layers, final normalization and vocabulary projection;
+it excludes prefill, sampling, acceptance, rollback and draft generation.
+
+| Prefix context | Monolith wall ms | MLX-LM wall ms | Lower latency | Monolith GPU ms |
+|---|---:|---:|---:|---:|
+| 4,095 | **26.87** | 50.10 | **46.4%** | 26.54 |
+| 8,191 | **33.77** | 64.05 | **47.3%** | 33.41 |
+
+These are medians of 20 fixed-state replays after five warmups per cell, with
+one real prefix/batch at each length. Both engines use identical input IDs,
+the same target checkpoint and prefill64. Monolith replays the unchanged
+speculative ICB's 220 target dispatches, stopping before argmax. MLX evaluates
+its native model and materializes all eight logit rows. Cache offsets remain
+fixed; output hashes are stable within each engine. Host wall timing includes
+submission and synchronization in both engines. The engines run serially in
+separate processes; these repeats are not independent prompts.
+
+This isolates the target's batched-forward advantage. Dividing by eight gives
+amortized cost per verified position, **not** cost per accepted output token.
+[Raw inputs, samples and methodology](../../tools/bench/results/qwen8b-target-verify-20260930/)
+are retained. Reproduce with `tools/bench/target_verify_latency.py`: run
+`--engine monolith` with the model/pack/drafter paths and the existing prompts,
+then `--engine mlx` with the same model and generated `--inputs` file. Both
+require `--out`; default contexts are 4095 and 8191, default repeats are 20.
+
 ## Reproduction
 
 Both pack directories must cover 8,704 positions. The local packs for this study
