@@ -147,15 +147,16 @@ comparison against the fastest tested MLX block and the terminal-round bound.
 All **96 requests** (78 measured, 18 warmups) returned 128 tokens. Exact
 cross-engine full-output matches occur on only 1/10 plain and 2/10 speculative
 primary prompt pairs; changing MLX prefill size also changes most continuations.
-[Raw comparison records, token hashes, counter checks and launches](../../tools/bench/results/qwen8b-long-context-20260929/mlx-comparison/)
+[Raw comparison records, token hashes, counter checks and launches](https://github.com/jiazhihao/mpk-apple/tree/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/qwen8b-long-context-20260929/mlx-comparison/)
 retain the complete evidence. These results establish the N=7 advantage on this
 workload at 4K/8K; they do not generalize to every prompt family or longer context.
 
 ```bash
+git show ade38fb5f81ebdf852a2b65a616703b03f4ec424:tools/bench/results/qwen8b-long-context-20260929/prompts.json > /tmp/qwen8b-long-context-prompts.json
 python tools/bench/mlx_spec_step_latency.py --mode n7 \
   --model /path/to/mlx-Qwen3-8B-nvfp4 \
   --drafter /path/to/mlx-community-Qwen3-0.6B-4bit \
-  --prompts tools/bench/results/qwen8b-long-context-20260929/prompts.json \
+  --prompts /tmp/qwen8b-long-context-prompts.json \
   --out /tmp/mlx-long-n7.jsonl
 # Use --mode plain without --drafter for plain decode.
 # Add --prefill-step-size 64 for the matched-prefill check.
@@ -184,7 +185,7 @@ separate processes; these repeats are not independent prompts.
 
 This isolates the target's batched-forward advantage. Dividing by eight gives
 amortized cost per verified position, **not** cost per accepted output token.
-[Raw inputs, samples and methodology](../../tools/bench/results/qwen8b-target-verify-20260930/)
+[Raw inputs, samples and methodology](https://github.com/jiazhihao/mpk-apple/tree/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/qwen8b-target-verify-20260930/)
 are retained. Reproduce with `tools/bench/target_verify_latency.py`: run
 `--engine monolith` with the model/pack/drafter paths and the existing prompts,
 then `--engine mlx` with the same model and generated `--inputs` file. Both
@@ -200,13 +201,13 @@ physical layout is a different configuration and may need additional tuning.
 
 Copy the archived `autotune.apple-m5-pro.json` into the matching target pack to
 reuse the measured choices. Run the screen (`--geometry` adds the grid search),
-then fresh generation:
+then fresh generation (using the prompts restored above):
 
 ```bash
 python tools/bench/long_context_tune.py --mode n7 \
   --model /path/to/mlx-Qwen3-8B-nvfp4 --pack /path/to/target-pack \
   --drafter /path/to/mlx-community-Qwen3-0.6B-4bit --drafter-pack /path/to/draft-pack \
-  --prompts tools/bench/results/qwen8b-long-context-20260929/prompts.json \
+  --prompts /tmp/qwen8b-long-context-prompts.json \
   --outdir /tmp/long-context-screen
 # Add --generate --autotune for the full-generation validation.
 # Use --mode plain and omit both drafter paths for plain decode.
@@ -220,7 +221,7 @@ paths. The benchmark HTTP adapter differs: it requires explicit `--autotune` to
 preserve its old untuned-command semantics, and now accepts the context/attention
 options and records their values in each result.
 
-[Raw evidence and methodology](../../tools/bench/results/qwen8b-long-context-20260929/)
+[Raw evidence and methodology](https://github.com/jiazhihao/mpk-apple/tree/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/qwen8b-long-context-20260929/)
 include prompts, every screen sample, timing ranges, choices and full generated
 token lists. These are one workload family on one machine, with sequential full
 request blocks; no tail-latency or cross-model claim is made.

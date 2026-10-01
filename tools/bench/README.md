@@ -36,8 +36,11 @@ python tools/bench/gemv_fusions_ab.py --out tools/bench/results/<chip>_gemv_fusi
 python tools/bench/gqa_bench.py --heads 32 --kv 4 --ctx 1024,4096,8192,32768 --t 1,4 --out tools/bench/results/<chip>_gqa.jsonl   # decode attention vs context
 ```
 
-Results are JSON lines under `results/` (one file per chip and study); commit them like probe results. The M1 sweep is
-the table plan M1's gate is read from; `p13` in `probes/` is the standalone precursor of this harness.
+Keep compact summaries, reproducibility metadata, and reusable configurations in `results/`.
+Bulky sweep logs, per-request outputs, and repeated prompts belong in an archive linked
+from the report. The [results README](results/README.md) explains how to restore the
+historical raw evidence, including the M1 sweep used by `m1_gate_table.py`.
+`p13` in `probes/` is the standalone precursor of the M1 harness.
 
 ## Fixed-token decoder layers versus MLX
 

@@ -81,10 +81,11 @@ include the rejected experiments. Initial unspecialized grid prototypes in the r
 history are superseded by the final paired measurements; they are not acceptance evidence.
 
 ```sh
+git show ade38fb5f81ebdf852a2b65a616703b03f4ec424:tools/bench/results/qwen8b-target-verify-20260930/inputs.json > /tmp/qwen8b-target-inputs.json
 python tools/bench/target_batch_gap.py \
   --model /path/to/mlx-Qwen3-8B-nvfp4 --pack /path/to/target-pack \
   --drafter /path/to/mlx-community-Qwen3-0.6B-4bit --drafter-pack /path/to/draft-pack \
-  --inputs tools/bench/results/qwen8b-target-verify-20260930/inputs.json \
+  --inputs /tmp/qwen8b-target-inputs.json \
   --out /tmp/target-batch-check --reps 10 --profile
 ```
 

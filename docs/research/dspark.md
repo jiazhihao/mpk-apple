@@ -81,7 +81,7 @@ accepted). Greedy output token-identical to plain decode in every run.
 
 **The prompt-set measurement (M5 Pro, Qwen3-8B NVFP4 + `Dogacel/Qwen3-8B-DSpark`, #40)** —
 `python tools/bench/spec_bench.py` over 11 prompts (3 code, 3 math, 3 chat with the Qwen chat template, 2 plain
-text), 128 greedy tokens each, token-weighted; `tools/bench/results/apple-m5-pro-20c_spec.jsonl` [M]:
+text), 128 greedy tokens each, token-weighted; [archived samples](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_spec.jsonl) [M]:
 
 | verify rule | chat | code | math | text | **all** | tokens / step | mean accepted (of 7) |
 |---|---|---|---|---|---|---|---|
