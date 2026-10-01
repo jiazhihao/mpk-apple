@@ -801,8 +801,15 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
     return dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows, lm_mode=lm_mode, chain_i=chain_i), STEP_STATE="1", **norm), ctx.n_sg, chunk
 
 
-def _gqa_mma_chunk(d: int) -> int:
-    return 32 if d == 256 else 64
+def _gqa_mma_direct(ctx: _Ctx, a: Dict[str, Any], t: int, capacity: int) -> bool:
+    # The larger softmax partition changes rounding. Restrict it to the relaxed
+    # path and the measured shape; complete tiles must fit the allocated cache.
+    return (ctx.commute_norm and a["head_dim"] == 128 and a["heads"] == 32 and a["kv_heads"] == 8
+            and t == 8 and not a.get("lm_mode", 0) and capacity >= 1024 and capacity % 256 == 0)
+
+
+def _gqa_mma_chunk(d: int, direct: bool = False) -> int:
+    return 256 if direct else 32 if d == 256 else 64
 
 
 def _gqa_mma_adaptive(a: Dict[str, Any], t: int) -> bool:
@@ -824,8 +831,10 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     v2 = kind == "v2"
     macros, n_sg, chunk = _gqa_geometry(ctx, a, ctx_max, v2)
     if kind == "mma":
-        n_sg, chunk = ctx.cores * 4, _gqa_mma_chunk(d)
-        macros = dict(macros, FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(d, heads // kv)), CH=str(chunk))
+        direct = _gqa_mma_direct(ctx, a, ctx.rows_of(op)[0], ctx_max)
+        n_sg, chunk = ctx.cores * (8 if direct else 4), _gqa_mma_chunk(d, direct)
+        macros = dict(macros, FIXED_CHUNK="1", DIRECT_KV=str(int(direct)),
+                      MMA_SG="4" if direct else str(kernels.gqa_mma_simdgroups(d, heads // kv)), CH=str(chunk))
         if _gqa_mma_adaptive(a, ctx.rows_of(op)[0]):
             macros["ADAPTIVE_CHUNK"] = "1"
     rep = heads // kv
@@ -843,6 +852,13 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     grid, tg = ((n_sg, 1, 1), (ctx.tg, 1, 1)) if v2 else ctx.crew_grid()          # v2: one threadgroup per block, n_sg of them
     if kind == "mma":
         grid, tg = (n_sg, 1, 1), (32 * int(macros["MMA_SG"]), 1, 1)
+    if kind == "mma" and direct:
+        kp = ctx.kernel("gqa_prepare", _gqa_src(ctx, mma=True), "gqa_prepare_mma", macros,
+                        kernels.MSL_TENSOR_OPS, static_params=[("gqa", "p", prm)])
+        ctx.add(kp, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)),
+                     (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
+                     (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (9, prm, 0), (15, st, 0)],
+                (-(-(t_c * heads) // 4), 1, 1), (128, 1, 1), "gqa_prepare", writes=[0, 1, 2])
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, *ctx.buf(part_o)), (8, *ctx.buf(part_md)), (9, prm, 0), (15, st, 0)],
             grid, tg, op.kind, writes=[1, 2, 7, 8], attention=kind)
@@ -884,7 +900,8 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     ctx_max = ctx.shape(core.inputs[1])[0] if core is not None else 0
     macros, n_sg, chunk = _gqa_geometry(ctx, dict(a, chunk=core.attrs.get("chunk", 64) if core is not None else 64), ctx_max, v2)
     if kind == "mma":
-        n_sg, chunk = ctx.cores * 4, _gqa_mma_chunk(d)
+        direct = _gqa_mma_direct(ctx, a, ctx.rows_of(op)[0], ctx_max)
+        n_sg, chunk = ctx.cores * (8 if direct else 4), _gqa_mma_chunk(d, direct)
         macros = dict(macros, FIXED_CHUNK="1", CH=str(chunk))
         if _gqa_mma_adaptive(a, ctx.rows_of(op)[0]):
             macros["ADAPTIVE_CHUNK"] = "1"

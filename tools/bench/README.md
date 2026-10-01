@@ -1,5 +1,28 @@
 # Kernel benches
 
+For full-model single-request decode against vLLM-Metal, llama.cpp Metal and
+Ollama, use `single_request_latency.py`. It records native decode counters,
+warmups and generated text. See the [Qwen3 8B comparison](../../docs/research/qwen8b-serving-decode.md)
+for measured results, exact prompts and pinned server settings.
+`mlx_spec_step_latency.py` adds direct MLX-LM plain decode (`--mode plain`) and
+full N=7 round timing with the same prompts, excluding prefill and shortened tail
+rounds. It retains per-token timestamps; `--prefill-step-size` supports a matched
+prefill check against Monolith as well as the native generator defaults.
+`target_verify_latency.py` isolates the N=7 target forward (eight positions),
+using identical prefixes and input IDs for Monolith and MLX, excluding drafting
+and sampling. See the [long-context target measurements](../../docs/research/qwen8b-long-context-tuning.md#isolated-n7-target-verification).
+`profile_spec_round.py` splits the existing N=7 dispatch stream into timed stages
+and compares against unsplit controls. Optional `--cache` reuses saved tuning
+choices and leaves cache misses at default, without searching. The serving
+adapter originally disabled autotuning; its archived results are labeled accordingly.
+
+`long_context_tune.py` screens Qwen3 8B plain/N=7 decode at 4K and 8K using
+identical prefills, then `--generate --autotune` validates fresh full generations.
+See the [long-context tuning report](../../docs/research/qwen8b-long-context-tuning.md)
+for the selected configuration and saved M5 Pro choices. The serving adapter now
+accepts `--autotune`, `--attention` and `--max-context`; omitting `--autotune`
+retains its historical untuned behavior.
+
 `gemv_bench.py` runs the production-shaped `kernels/gemv_T.metal` (assembled by `monolith.kernels` from a format plugin's
 decode snippet and a pack geometry) on the target's shapes, checks every run against the exact format oracle (the leaf-op
 gate: ≤ 2 BF16 ULPs at the output's magnitude, float32 accumulation noise < 1e-4), and streams ≥ 2 GB of identical packs

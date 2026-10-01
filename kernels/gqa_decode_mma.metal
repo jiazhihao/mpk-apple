@@ -5,9 +5,15 @@ using namespace mpp::tensor_ops;
 #ifndef MMA_SG
 #define MMA_SG 8
 #endif
+#ifndef DIRECT_KV
+#define DIRECT_KV 0
+#endif
 #define QM 16
 #define KN CH
 using GqaTG = tensor<threadgroup bfloat, dextents<int, 2>, tensor_inline>;
+#if DIRECT_KV
+using GqaDevice = tensor<device bfloat, dextents<int, 2>, tensor_inline>;
+#endif
 using GqaFloatTG = tensor<threadgroup float, dextents<int, 2>, tensor_inline>;
 constexpr constant auto score_desc = matmul2d_descriptor(QM, KN, D, false, true, false, matmul2d_descriptor::mode::multiply_accumulate);
 constexpr constant auto value_desc = matmul2d_descriptor(QM, D, KN, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
@@ -23,7 +29,9 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
                           uint tgid [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]],
                           uint sgi [[simdgroup_index_in_threadgroup]]) {
   threadgroup GqaTileScratch scratch;
+#if !DIRECT_KV
   threadgroup bfloat kv_tile[KN * D];
+#endif
   threadgroup bfloat prob[QM * KN];
 #if STEP_STATE
   if (st->done) return;
@@ -52,10 +60,13 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
       for (uint e = 0; e < DL; e++) q[e] = 0.0f;
       if (row < rows) {
         load_dl(qkvg + t * p.in_stride + p.q_off + h * D + lane * DL, q);
+#if !DIRECT_KV
         norm_rope(q, q_norm, cos_t + (position + t) * D, sin_t + (position + t) * D, p.eps, lane);
+#endif
       }
       for (uint e = 0; e < DL; e++) scratch.query[r * D + lane * DL + e] = bfloat(q[e]);
     }
+#if !DIRECT_KV
     for (uint kk = sgi; kk < KN; kk += MMA_SG) {
       const uint key = c * KN + kk;
       float k[DL];
@@ -73,11 +84,17 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
       }
       for (uint e = 0; e < DL; e++) kv_tile[kk * D + lane * DL + e] = bfloat(k[e]);
     }
+#endif
     threadgroup_barrier(mem_flags::mem_threadgroup);
     matmul2d<score_desc, execution_simdgroups<MMA_SG>> score_op;
     GqaTG qt(scratch.query, dextents<int, 2>(D, QM));
+#if DIRECT_KV
+    GqaDevice kt_cache((device bfloat*)k_cache, dextents<int, 2>(p.kv_heads * D, p.ctx_max));
+    auto kt = kt_cache.slice<D, KN>(j * D, c * KN);
+#else
     GqaTG kt(kv_tile, dextents<int, 2>(D, KN));
-    auto scores = score_op.get_destination_cooperative_tensor<GqaTG, GqaTG, float>();
+#endif
+    auto scores = score_op.get_destination_cooperative_tensor<GqaTG, decltype(kt), float>();
     for (uint16_t i = 0; i < scores.get_capacity(); i++) if (scores.is_valid_element(i)) scores[i] = 0.0f;
     score_op.run(qt, kt, scores);
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -106,6 +123,7 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
         part_md[base] = m; part_md[base + 1] = den;
       }
     }
+#if !DIRECT_KV
     for (uint kk = sgi; kk < KN; kk += MMA_SG) {
       const uint key = c * KN + kk;
       float v[DL];
@@ -114,11 +132,17 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
       else if (key < ctx) load_dl(qkvg + (key - position) * p.in_stride + p.v_off + j * D + lane * DL, v);
       for (uint e = 0; e < DL; e++) kv_tile[kk * D + lane * DL + e] = bfloat(v[e]);
     }
+#endif
     threadgroup_barrier(mem_flags::mem_threadgroup);
     matmul2d<value_desc, execution_simdgroups<MMA_SG>> value_op;
     GqaTG pt(prob, dextents<int, 2>(KN, QM));
+#if DIRECT_KV
+    GqaDevice vt_cache((device bfloat*)v_cache, dextents<int, 2>(p.kv_heads * D, p.ctx_max));
+    auto vt = vt_cache.slice<D, KN>(j * D, c * KN);
+#else
     GqaTG vt(kv_tile, dextents<int, 2>(D, KN));
-    auto out = value_op.get_destination_cooperative_tensor<GqaTG, GqaTG, float>();
+#endif
+    auto out = value_op.get_destination_cooperative_tensor<GqaTG, decltype(vt), float>();
     for (uint16_t i = 0; i < out.get_capacity(); i++) if (out.is_valid_element(i)) out[i] = 0.0f;
     value_op.run(pt, vt, out);
     for (uint16_t i = 0; i < out.get_capacity(); i++) if (out.is_valid_element(i)) {
@@ -129,3 +153,35 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
 }
+
+#if DIRECT_KV
+// Prepare Q once per target row and write new K/V before direct matrix reads.
+// QKV is dead after attention; the preceding projection overwrites it each step.
+kernel void gqa_prepare_mma(device ushort* qkvg [[buffer(0)]], device ushort* k_cache [[buffer(1)]], device ushort* v_cache [[buffer(2)]],
+                           device const ushort* cos_t [[buffer(3)]], device const ushort* sin_t [[buffer(4)]],
+                           device const float* q_norm [[buffer(5)]], device const float* k_norm [[buffer(6)]],
+                           constant GqaParams& p [[buffer(9)]], device const StepState* st [[buffer(15)]],
+                           uint group [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]],
+                           uint sg [[simdgroup_index_in_threadgroup]]) {
+  if (st->done) return;
+  const uint idx = group * 4 + sg, T = st->t_this_step, position = st->position;
+  if (idx < T * p.heads) {
+    const uint t = idx / p.heads, h = idx % p.heads;
+    float q[DL];
+    device ushort* row = qkvg + t * p.in_stride + p.q_off + h * D + lane * DL;
+    load_dl(row, q);
+    norm_rope(q, q_norm, cos_t + (position + t) * D, sin_t + (position + t) * D, p.eps, lane);
+    store_dl(row, q);
+  }
+  if (idx < T * p.kv_heads) {
+    const uint t = idx / p.kv_heads, h = idx % p.kv_heads;
+    float k[DL];
+    load_dl(qkvg + t * p.in_stride + p.k_off + h * D + lane * DL, k);
+    norm_rope(k, k_norm, cos_t + (position + t) * D, sin_t + (position + t) * D, p.eps, lane);
+    store_dl(k_cache + ((position + t) * p.kv_heads + h) * D + lane * DL, k);
+    copy_dl(v_cache + ((position + t) * p.kv_heads + h) * D + lane * DL,
+            qkvg + t * p.in_stride + p.v_off + h * D + lane * DL);
+  }
+}
+
+#endif
