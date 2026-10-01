@@ -203,18 +203,13 @@ class Session:
             else:
                 dec = self.engine(0)
                 self._last_engine = dec
-                done = False                               # every step commits ≥ 1 token: the remaining count bounds the steps
-                while len(tokens) < max_new_tokens and not done:
-                    need = max_new_tokens - len(tokens)
-                    # the program sets `done` itself when the ring reaches stop_at (accept_scan), so the steps still
-                    # queued behind it return at their first instruction — but each such step still walks the ICB
-                    # (~0.8 ms for the 8B's 387 dispatches), so a round's command buffers hold one step with two in
-                    # flight: measured 1 % faster per token than 8 × 3 on the 8B (decode-kernels.md §9), the host
-                    # busy for 4 ms of a 128-token generation
-                    r2 = dec.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
-                    tokens += r2.tokens
-                    dec_ms += r2.gpu_ms; dec_wall += r2.wall_ms; host += r2.host_busy_ms; steps += r2.steps
-                    done = r2.done or r2.steps == 0
+                need = max_new_tokens - len(tokens)
+                # Each productive round commits at least one token, so need bounds the round count.
+                # The native runner pumps the entire decode; accept_scan stops it at stop_at or EOS.
+                # Keep one round per command buffer and two in flight to limit queued no-op work after done.
+                r2 = dec.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
+                tokens += r2.tokens
+                dec_ms, dec_wall, host, steps = r2.gpu_ms, r2.wall_ms, r2.host_busy_ms, r2.steps
         if len(tokens) < max_new_tokens:
             err = int(self._last_engine.state()["error"])        # 1: the ring overflowed; 2: the context filled (the pump's over-run
             if err:                                               # past a request that fits sets 2 harmlessly, so only a short result is one)
