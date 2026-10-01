@@ -105,3 +105,9 @@ Use `--confirm --layers 48 --repeat 2` to stream distinct layer states rather
 than repeatedly reusing one small state. See the [experiment and results](../../docs/research/gdn-static-megakernel.md)
 for scope, correctness checks, and the measured regressions. Write raw samples to
 `/tmp` or another local results path; these schedules are not enabled by default.
+
+`gdn_block_bench.py` extends that experiment to the **entire GDN block**, including
+all input/output projections and residual addition, with seeded FP8/BF16 weights
+at the 27B shapes. It compares production with a matching geometry/operand control
+and a single static megakernel. The [full-block follow-up](../../docs/research/gdn-static-megakernel.md#full-gdn-block-including-matrix-projections)
+records near parity on M5 Pro and the remaining M5 Max handoff requirements.

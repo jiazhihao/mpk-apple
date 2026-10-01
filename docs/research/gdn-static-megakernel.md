@@ -107,3 +107,81 @@ python -m pytest tests/kernels/test_gdn_static.py tests/kernels/test_gdn_mixer.p
 Raw timing samples are emitted only to the requested output path. The benchmark
 and experimental shader are under `tools/bench/`; neither changes generation
 behavior or enables an unproven schedule by default.
+
+## Full GDN block, including matrix projections
+
+Follow-up scope: one megakernel for the entire GDN/attention half of a decoder,
+with a separate gated-MLP megakernel planned. The implemented prototype includes
+input RMSNorm and permutation, Q/K/V, a/b and z projections, convolution and
+recurrence, gated RMSNorm/output permutation, output projection and residual add.
+It does **not** implement the full-attention or gated-MLP megakernel yet.
+
+`gdn_block_bench.py` creates a deterministic synthetic fixture with hidden=5120,
+16 key heads, 48 value heads, head dimensions 128, and eight target rows. QKV, z
+and output weights use FP8 E4M3 with tensor scales; a/b weights are BF16. Each
+measurement reads about 116 MB of matrix weights. Both convolution and recurrent
+input states are nonzero. The checkpoint/model is not loaded and these results
+are not an end-to-end 27B generation measurement.
+
+`gdn_block_static.py` inlines the existing task bodies into a single fixed-worker
+kernel, preserving the compiler's barrier-free sibling pair (recurrence and z
+projection). The matched control retains separate dispatches with the same
+geometry and operand loading as the combined kernel. Code generation remains
+experimental and specialized to these GDN task types.
+
+The installed MetalPerformancePrimitives implementation rejects coherent-device
+tensor operands. A first workaround copied activation tiles through threadgroup
+memory; it regressed substantially (about 3.15 ms split / 4.19 ms fused in an
+initial zero-state screen). The selected workaround instead loads activations
+through coherent pointers into cooperative register tensors. This API requires
+M and N in {16,32}, K in {16,32}, with at least one dimension equal to 32. The
+selected matrix tile is M=16, N=16, K=32, with eight active rows. Immutable weights
+remain ordinary device reads; cross-worker intermediate buffers are coherent
+and fenced. Do not remove coherence just to make the old device-tensor path
+compile.
+
+A 16-configuration screen tested 8/12/16/20 workers with 4/8/16/32 SIMD groups.
+20 workers × 16 SIMD groups was the strongest candidate. N=32 matrix tiles were
+also tried without a clear improvement. Common threadgroup geometry is necessary
+because the task bodies contain threadgroup barriers; skipping such barriers
+with only a subset of threads would be invalid.
+
+Final confirmation: ICB replay, one full block per command buffer, two in flight;
+eight steps per sample, at least 30 ms GPU warmup per variant, 40 randomized
+paired rounds. The control and fused output **and both state buffers are
+bit-identical**. Against production, output cosine is 0.9999999392 and relative
+L2 error is 0.0003486; changed matrix tiling changes floating-point accumulation.
+
+| Variant | Dispatches | Run A min / median, us | Run B min / median, us |
+|---|---:|---:|---:|
+| Current production | 9 | 857.79 / 935.14 | 838.96 / 922.88 |
+| Matched geometry/operand control | 9 | 933.21 / 1025.60 | 958.17 / 1005.45 |
+| Full GDN megakernel | 1 | 873.91 / 931.26 | 857.44 / 918.41 |
+
+Fusion helps the matched control, but the full megakernel remains 1.9–2.2% slower
+than production by minimum latency; medians are about 0.4–0.5% faster. Treat this
+as **near parity, not a demonstrated performance win**. No production defaults
+changed. This finding supersedes applying the earlier core-only regression to
+the full GDN block: projection fusion materially changes the result.
+
+```bash
+python tools/bench/gdn_block_bench.py --out /tmp/gdn-block-a.json
+python tools/bench/gdn_block_bench.py --out /tmp/gdn-block-b.json
+# Repeat the worker/geometry search on the destination machine:
+python tools/bench/gdn_block_bench.py --workers 20 --sgs 16 --out /tmp/gdn-block-candidate.json
+MTL_SHADER_VALIDATION=1 python -m pytest tests/kernels/test_gdn_block_static.py
+```
+
+The fixture is generated and reused under `/tmp/gdn-full-block-fixture`; no
+checkpoint download is required. Build the native extension per CONTRIBUTING.md
+and install the oracle dependencies (torch/safetensors) for fixture creation.
+The two new full-block checks cover alternating state slots, changing inputs,
+continuation, fixture reuse, and 64 replays without counter reset.
+
+Before running on M5 Max, register a profile for its **actual GPU core count**:
+`profile_for_device` currently has no Max entry. Re-measure the crew geometry and
+bandwidth rather than silently using the M5 Pro profile. The current prototype
+uses fixed-T=8 emission, supports FP8/BF16 cooperative matrix inputs, and rejects
+packed 4-bit inputs in that mode. Dynamic speculative row counts, NVFP4 MLP,
+full attention/KV state, full-model generations, and direct MLX comparisons are
+follow-ups, not validated by this experiment.
