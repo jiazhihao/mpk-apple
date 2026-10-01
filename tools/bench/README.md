@@ -96,3 +96,12 @@ config)` can apply a recorded configuration to a complete program for that check
 python tools/bench/layer_grid_search.py --model CHECKPOINT --pack PACK \
   --ts 6,8 --ctx 128 --out grid-search.jsonl
 ```
+
+## Experimental static GDN fusion
+
+`gdn_static_bench.py` compares the production N=7 GDN core with whole-head and
+fixed-worker single-kernel schedules, including a fenced stage-barrier variant.
+Use `--confirm --layers 48 --repeat 2` to stream distinct layer states rather
+than repeatedly reusing one small state. See the [experiment and results](../../docs/research/gdn-static-megakernel.md)
+for scope, correctness checks, and the measured regressions. Write raw samples to
+`/tmp` or another local results path; these schedules are not enabled by default.
