@@ -83,10 +83,10 @@ The raw MLX `tokens_per_non_draft_token` diagnostic is computed as total tokens 
 
 ## Reproduction and raw evidence
 
-- **Llama 3.2 1B INT4**: prompts {'code': 52, 'math': 61, 'chat': 46, 'text': 47}; [all 96 measurements](../../tools/bench/results/apple-m5-pro-20c_llama-1b_decode_vs_mlx.jsonl).
+- **Llama 3.2 1B INT4**: prompts {'code': 52, 'math': 61, 'chat': 46, 'text': 47}; [all 96 measurements](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_llama-1b_decode_vs_mlx.jsonl).
   Harness revision `c94df30af2d36ecb9dd13f24d8e976da9b60e175`; versions `{'mlx': '0.32.2', 'mlx-lm': '0.31.3', 'numpy': '2.5.3'}`; profile `apple-m5-pro-20c`.
-- **Llama 3.2 3B INT4**: prompts {'code': 52, 'math': 61, 'chat': 46, 'text': 47}; [all 96 measurements](../../tools/bench/results/apple-m5-pro-20c_llama-3b_decode_vs_mlx.jsonl).
-- **SmolLM2 1.7B BF16**: prompts {'code': 47, 'math': 60, 'chat': 40, 'text': 42}; [all 96 measurements](../../tools/bench/results/apple-m5-pro-20c_smol-1.7b_decode_vs_mlx.jsonl).
+- **Llama 3.2 3B INT4**: prompts {'code': 52, 'math': 61, 'chat': 46, 'text': 47}; [all 96 measurements](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_llama-3b_decode_vs_mlx.jsonl).
+- **SmolLM2 1.7B BF16**: prompts {'code': 47, 'math': 60, 'chat': 40, 'text': 42}; [all 96 measurements](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_smol-1.7b_decode_vs_mlx.jsonl).
 
 Use the target packs described in [the model guide](../llama-models.md). Pack the drafter with its namespaced LM plan, then run:
 
@@ -145,6 +145,6 @@ All 216 measurements emitted exactly 128 tokens and repeated deterministically w
 
 Measured harness revision: `c90d7875d7b6a50a66a46cc58d64863e94a0c5b7`. Reproduce with the command above, replacing `--ns 1,3,5` with `--ns 5,7` and using a new output file.
 
-- **Llama 3.2 1B INT4**: [all 72 follow-up measurements](../../tools/bench/results/apple-m5-pro-20c_llama-1b_n5-n7_decode_vs_mlx.jsonl).
-- **Llama 3.2 3B INT4**: [all 72 follow-up measurements](../../tools/bench/results/apple-m5-pro-20c_llama-3b_n5-n7_decode_vs_mlx.jsonl).
-- **SmolLM2 1.7B BF16**: [all 72 follow-up measurements](../../tools/bench/results/apple-m5-pro-20c_smol-1.7b_n5-n7_decode_vs_mlx.jsonl).
+- **Llama 3.2 1B INT4**: [all 72 follow-up measurements](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_llama-1b_n5-n7_decode_vs_mlx.jsonl).
+- **Llama 3.2 3B INT4**: [all 72 follow-up measurements](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_llama-3b_n5-n7_decode_vs_mlx.jsonl).
+- **SmolLM2 1.7B BF16**: [all 72 follow-up measurements](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_smol-1.7b_n5-n7_decode_vs_mlx.jsonl).

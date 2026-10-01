@@ -42,7 +42,7 @@ Each result uses nine paired repetitions of 48 replays, rotating through the six
 orders of original Monolith, fused Monolith and MLX. Compilation/first-touch is
 warmed outside timing; shader validation is disabled. Values are minimum [range]
 over repetitions. Raw samples, cosine and settings are in
-[the result file](../../tools/bench/results/apple-m5-pro-20c_commute-norm.jsonl).
+[the result file](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_commute-norm.jsonl).
 
 | Model | N | Original µs [range] | Fused µs [range] | MLX µs [range] | Fusion change | Min layer cosine |
 |---|---:|---:|---:|---:|---:|---:|
@@ -80,7 +80,7 @@ against MLX. No claim is made that every individual layer beats MLX.
 block-scale/lane-order NVFP4 pack as the original comparison**. This is not a
 claim about every pack layout. The fresh paired run reproduces the regression:
 462.21 → 467.27 µs/layer (+1.10%).
-[Raw samples, profiles and native metadata](../../tools/bench/results/apple-m5-pro-20c_commute-norm-diagnosis.jsonl).
+[Raw samples, profiles and native metadata](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_commute-norm-diagnosis.jsonl).
 
 The dominant cost is repeating the RMS-statistic reduction in every output tile:
 
@@ -176,7 +176,7 @@ minimum per-layer cosine against MLX remains 0.999975/0.999976. The 12 fusion
 kernel cases plus the MLX format contract pass with Metal shader validation,
 including unequal tile counts, padded T=6 scratch and changing active rows.
 
-[Raw grid sweeps, all paired samples and profiles](../../tools/bench/results/apple-m5-pro-20c_commute-norm-grid.jsonl).
+[Raw grid sweeps, all paired samples and profiles](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_commute-norm-grid.jsonl).
 The existing `--norm-ab --ts 6,8 --ctx 128` command above reproduces the current
 persistent/unfused/MLX comparison; use revision `ff69a7c` for the prior fusion.
 
@@ -231,7 +231,7 @@ core exceeds the device's threadgroup-memory budget (45,056 > 32,768 bytes), so
 the merge's buffer checks are exercised separately. The search harness also
 passes a real-model T=6/8 merge sweep with API validation; 248 contract checks pass.
 
-[All configurations, discarded noisy samples, paired controls and context checks](../../tools/bench/results/apple-m5-pro-20c_qwen8b_grid_search.jsonl).
+[All configurations, discarded noisy samples, paired controls and context checks](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_qwen8b_grid_search.jsonl).
 Reproduce the screen with `tools/bench/layer_grid_search.py` as described in
 [the benchmark README](../../tools/bench/README.md). Leaf timings alone are not
 used to claim a decoder-layer or generation speedup.
