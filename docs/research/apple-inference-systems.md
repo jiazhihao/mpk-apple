@@ -84,12 +84,12 @@ each weight group), `gather_qmv` (all top-k experts in one dispatch). Attention:
 MLX has no norm+matmul or RoPE+KV-write fusion, and no paged KV in core. Known NVFP4 caveat: MLX treats the block
 scale as signed E4M3 ([#2962](https://github.com/ml-explore/mlx/issues/2962)).
 
-**llama.cpp** — [mul_mv.metal](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-metal/kernels/mul_mv.metal):
+**llama.cpp** — [mul_mv.metal](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-metal/kernels/common/mul_mv.metal):
 rows distributed as `(tgpig.x·NSG + sgitg)·NR0`; blocks strided by lane; per-thread `sumf[NR0]`; `simd_sum`;
 threadgroup (32, nsg, 1) with `N_R0/N_SG` = 4/2 (Q4_0), 2/2 (Q4_K), 2/4 (Q8_0); `mul_mv_ext` for batches 2–8.
-[mul_mm.metal](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-metal/kernels/mul_mm.metal): 64×32 tiles
+[mul_mm.metal](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-metal/kernels/common/mul_mm.metal): 64×32 tiles
 dequantized into threadgroup memory, then `simdgroup_multiply_accumulate`.
-[fa.metal](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-metal/kernels/fa.metal):
+[fa.metal](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-metal/kernels/common/fa.metal):
 `kernel_flash_attn_ext_vec` splits KV over workers × SIMD-groups with online softmax; per-device tuning tables
 ([ggml-metal-tuning.cpp](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-metal/ggml-metal-tuning.cpp)).
 
@@ -173,7 +173,7 @@ CPU-driven send/receive only ([TN3205](https://developer.apple.com/documentation
 | Source | What | Use |
 |---|---|---|
 | MLX (MIT) | `quantized.h`, `fp_quantized.h` (nvfp4), `sdpa_vector.h`, `rms_norm.metal`, `rope.metal`, gated-delta update, `steel/gemm/nax.h`, `quantized_nax.h` | GEMV/SDPA/GDN references and baselines; M5 TensorOps usage. Scalars via `setBytes` → port to buffer params for ICB |
-| llama.cpp (MIT) | `kernels/mul_mv.metal`, `mul_mm.metal`, `fa.metal`, `ggml-metal-common.cpp`, `ggml-metal-fusion.cpp` (incl. SSM_CONV+SILU, GDN_CACHE) | references, baselines, barrier-placement logic |
+| llama.cpp (MIT) | `kernels/common/mul_mv.metal`, `mul_mm.metal`, `fa.metal`, `ggml-metal-common.cpp`, `ggml-metal-fusion.cpp` (incl. SSM_CONV+SILU, GDN_CACHE) | references, baselines, barrier-placement logic |
 | gpt-oss Metal (Apache-2.0) | `context.c`, `sample.metal`, `topk.metal` | template for multi-token submission and GPU sampling |
 | tinygrad (MIT) | `runtime/graph/metal.py` | compact ICB build/replay reference, incl. quirks |
 | uzu (MIT) | fused attention-prepare, RMSNorm+residual, GPU sampling, `tensor_matmul.h` | fusion references |

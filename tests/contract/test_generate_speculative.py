@@ -19,6 +19,7 @@ from monolith.generate import Session
 ])
 def test_speculative_request(limit, decoded, prefill_done, error):
     session = Session.__new__(Session)
+    session.decoder_kernel_config = None
     session.layout = StepStateLayout()
     session.seed, session.prefill_chunk_size = 0, 128
     session.drafter = SimpleNamespace(gamma=7)

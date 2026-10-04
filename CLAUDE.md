@@ -35,7 +35,7 @@ breaks bit-identity, so safe stays. Format 2 (#47) is built: affine INT4 groups 
 the MLX 4-bit 0.8B decodes token-identical to its oracle; the port needed a per-group bias hook, the quantized-embedding
 gather, ragged lane stripes and a package-declared value adapter (mlx_lm folds `1 +` into the zero-centered norms;
 porting-log.md); the porting guide (#48, `docs/porting.md`) closes M8. M9's accelerator GEMM is built (#50,
-`kernels/gemm_tile.metal`): the cooperative right-input fill from the pack words streams NVFP4 at 177 GB/s and FP8
+`kernels/common/gemm_tile.metal`): the cooperative right-input fill from the pack words streams NVFP4 at 177 GB/s and FP8
 at 253 for 8 or 16 tokens — 0.9–1.1× a T = 1 shader pass, 34–49 % above `p14`'s staged tile; at 32 tokens it is
 below `p14` (decode-kernels.md §6). #51 wires it into the step program: with the profile's `accelerator: on`
 every T > 1 GEMV runs on the tile as the predicated variant above T = 1, and the DSpark round on the 8B goes from
@@ -203,7 +203,7 @@ check` (same for `p14`) compiles every kernel variant without dispatching.
    v3 block with rep rows) — then the staged multi-SIMD-group tile for T ≥ 32 and the K-split for the down projection
    (decode-kernels.md §6), the attention core's SIMD-group-matrix scoring for the long-context rows; and merging the
    #109–#114 stack. The autotuner at install time is built (`tools/profile_writer.py`: it measures the `engine`
-   block from the kernel harnesses and merges it into `profiles/<chip>-<cores>c.json`). Intra-op stealing (#44) is
+   block from the kernel harnesses and merges it into `the selected backend configuration under monolith/backends/metal/`). Intra-op stealing (#44) is
    built, measured and off by default (decode-kernels.md §7). Everything this M5 Pro cannot host was dropped from the
    roadmap and its issues closed as not planned: the M3 Pro and M4 tasks (2026-09-25) and, on 2026-09-27, the 27B
    items (#31's 27B rows, #36's and #40's), #46 (the smallest MoE checkpoint in a format we read,

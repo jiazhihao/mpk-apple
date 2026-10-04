@@ -23,6 +23,9 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
                           device const ushort* cos_t [[buffer(3)]], device const ushort* sin_t [[buffer(4)]],
                           device const float* q_norm [[buffer(5)]], device const float* k_norm [[buffer(6)]],
                           device float* part_o [[buffer(7)]], device float* part_md [[buffer(8)]], constant GqaParams& p [[buffer(9)]],
+#if DRAFT
+                          device const ushort* kvp [[buffer(11)]],
+#endif
 #if STEP_STATE
                           device const StepState* st [[buffer(15)]],
 #endif
@@ -35,7 +38,9 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
   threadgroup bfloat prob[QM * KN];
 #if STEP_STATE
   if (st->done) return;
-#if LM_MODE == 1
+#if DRAFT
+  const uint T = p.t_active, position = st->drafter_ctx_len, n_new = st->n_inject;
+#elif LM_MODE == 1
   const uint T = st->n_inject, position = st->position - st->n_inject;
 #elif LM_MODE == 2
   const uint T = st->n_chain, position = st->position + CHAIN_I;
@@ -46,10 +51,18 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
 #endif
 #else
   const uint T = p.t_active, position = p.position;
+#if DRAFT
+  const uint n_new = p.pad0;
+#endif
+#endif
+#if DRAFT
+  const uint qpos0 = position + n_new;
+#else
+  const uint qpos0 = position;
 #endif
   if (T == 0u) return;
   const uint rows = T * (p.heads / p.kv_heads), rep = p.heads / p.kv_heads;
-  const uint ctx = position + T, chunks = (ctx + KN - 1u) / KN;
+  const uint ctx = qpos0 + T, chunks = (ctx + KN - 1u) / KN;
   const uint groups = (rows + QM - 1u) / QM;
   for (uint block = tgid; block < p.kv_heads * chunks * groups; block += p.n_sg) {
     const uint j = block / (chunks * groups), c = (block / groups) % chunks, r0 = (block % groups) * QM;
@@ -61,7 +74,11 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
       if (row < rows) {
         load_dl(qkvg + t * p.in_stride + p.q_off + h * D + lane * DL, q);
 #if !DIRECT_KV
+#if DRAFT
+        norm_rope(q, q_norm, cos_t + (qpos0 + t) * D, sin_t + (qpos0 + t) * D, p.eps, lane);
+#else
         norm_rope(q, q_norm, cos_t + (position + t) * D, sin_t + (position + t) * D, p.eps, lane);
+#endif
 #endif
       }
       for (uint e = 0; e < DL; e++) scratch.query[r * D + lane * DL + e] = bfloat(q[e]);
@@ -73,6 +90,21 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
       for (uint e = 0; e < DL; e++) k[e] = 0.0f;
       if (key < position) {
         load_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, k);
+#if DRAFT
+      } else if (key < qpos0) {
+        const uint tk = key - position;
+        load_dl(kvp + tk * p.pad1 + j * D + lane * DL, k);
+        norm_rope(k, k_norm, cos_t + key * D, sin_t + key * D, p.eps, lane);
+        if (r0 == 0) {
+          store_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, k);
+          copy_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL,
+                  kvp + tk * p.pad1 + p.kv_heads * D + j * D + lane * DL);
+        }
+      } else if (key < ctx) {
+        const uint tk = key - qpos0;
+        load_dl(qkvg + tk * p.in_stride + p.k_off + j * D + lane * DL, k);
+        norm_rope(k, k_norm, cos_t + key * D, sin_t + key * D, p.eps, lane);
+#else
       } else if (key < ctx) {
         const uint tk = key - position;
         load_dl(qkvg + tk * p.in_stride + p.k_off + j * D + lane * DL, k);
@@ -81,6 +113,7 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
           store_dl(k_cache + (key * p.kv_heads + j) * D + lane * DL, k);
           copy_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, qkvg + tk * p.in_stride + p.v_off + j * D + lane * DL);
         }
+#endif
       }
       for (uint e = 0; e < DL; e++) kv_tile[kk * D + lane * DL + e] = bfloat(k[e]);
     }
@@ -106,7 +139,11 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
       float sc[KN / 32];
       for (uint u = 0; u < KN / 32; u++) {
         const uint key = c * KN + lane + u * 32;
+#if DRAFT
+        sc[u] = row < rows && key < ctx ? round_bf16(round_bf16(scratch.score[r * KN + lane + u * 32]) * p.scaling) : -INFINITY;
+#else
         sc[u] = row < rows && key < ctx && key <= position + t ? round_bf16(round_bf16(scratch.score[r * KN + lane + u * 32]) * p.scaling) : -INFINITY;
+#endif
       }
       float local_max = -INFINITY;
       for (uint u = 0; u < KN / 32; u++) local_max = max(local_max, sc[u]);
@@ -129,7 +166,12 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
       float v[DL];
       for (uint e = 0; e < DL; e++) v[e] = 0.0f;
       if (key < position) load_dl(v_cache + (key * p.kv_heads + j) * D + lane * DL, v);
+#if DRAFT
+      else if (key < qpos0) load_dl(kvp + (key - position) * p.pad1 + p.kv_heads * D + j * D + lane * DL, v);
+      else if (key < ctx) load_dl(qkvg + (key - qpos0) * p.in_stride + p.v_off + j * D + lane * DL, v);
+#else
       else if (key < ctx) load_dl(qkvg + (key - position) * p.in_stride + p.v_off + j * D + lane * DL, v);
+#endif
       for (uint e = 0; e < DL; e++) kv_tile[kk * D + lane * DL + e] = bfloat(v[e]);
     }
 #endif

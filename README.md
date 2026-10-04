@@ -20,7 +20,7 @@ weights from a block-lane-major pack — not one never-returning kernel with spe
 | [`docs/research/dspark.md`](docs/research/dspark.md) | DSpark speculative decoding: the method, the public drafters for our targets, what a round costs on our hardware |
 | [`docs/porting.md`](docs/porting.md) | The porting guide: adding a model, a format, an op, a drafter or a chip — the contracts, the registries, the CI checks, the golden workflow, with the time each port took ([`porting-log.md`](docs/research/porting-log.md)) |
 | [`probes/`](probes) | The 16 probe programs. `./probes/run_all.sh` runs them on this machine (Command Line Tools only, ~5 min) and saves `probes/results/<chip>….txt`; `./probes/remote_run.sh user@host` does the same on another bare-metal Mac. Measured: M3 Pro (2026-09-19), M5 Pro (2026-09-22) |
-| [`profiles/`](profiles) | Per-chip profiles: the M5 Pro's written by `tools/profile_writer.py` from the kernel harnesses, the M3 Pro's derived by hand from the probe results |
+| [`monolith/backends/metal/`](monolith/backends/metal) | Chip backends and configurations: M3 Pro, M4 Pro, M5 Pro, M5 Max 32-core and M5 Max 40-core |
 
 Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); §4 of the hardware report is the checklist for a chip not yet measured.
 

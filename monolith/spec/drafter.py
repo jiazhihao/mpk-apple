@@ -43,6 +43,14 @@ class DraftBlock:
 class Drafter(Module):
     gamma: int = 0
 
+    def bind_target(self, model: Any) -> None:
+        """Bind optional shared target modules before lowering; own weights stay in the draft pack."""
+        return None
+
+    def optimize_program(self, program: Any, *, prefill: bool = False) -> Any:
+        """Optional plugin-selected recipes after generic lowering and emission."""
+        return program
+
     @classmethod
     def from_checkpoint(cls, path: str, *, target_lm_head: Any, max_context: int = 4096, **options: Any) -> "Drafter":
         """Build the drafter from its checkpoint directory (config + storage formats); ``target_lm_head`` is the

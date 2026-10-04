@@ -1,5 +1,5 @@
 """The stochastic sampler's numpy reference (design D7): the same thresholds and the same counter-based Gumbel
-noise as ``kernels/sample.metal``, so a kernel draw can be checked for exact equality, not just in distribution.
+noise as ``kernels/common/sample.metal``, so a kernel draw can be checked for exact equality, not just in distribution.
 
 Logits are BF16 values; thresholds are logit values. ``top_k`` keeps every logit ≥ the k-th largest (ties kept, like
 the HF warper); ``top_p`` keeps every logit ≥ the value at which the descending cumulative softmax mass of

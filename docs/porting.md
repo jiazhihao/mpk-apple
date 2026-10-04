@@ -243,7 +243,7 @@ Today an op needs:
 1. `monolith/ops/<op>.py`: `register_op(OpDef(kind, OpClass.MAP | REDUCE | SERIAL, domain_kind).bind("*" or
    "<family>", KernelBinding("<kernel name>", function_constants)))`; the docstring is the op's contract (inputs in
    order, outputs, attrs, what it reads from `StepState`). Import it in `monolith/ops/__init__.py`.
-2. `kernels/<op>.metal`: one kernel per op, specialized by macros, the crew geometry (one threadgroup per core,
+2. `kernels/common/<op>.metal`: one kernel per op, specialized by macros, the crew geometry (one threadgroup per core,
    12 SIMD-groups × 32 lanes) unless the op is serial; **every loop bounded** (a running dispatch cannot be
    cancelled); correctness only from documented Metal semantics. Keep dispatches sub-millisecond.
 3. `monolith/kernels.py`: the `*_source`, `*_macros` and `*_params` helpers that assemble the MSL and the parameter
@@ -306,14 +306,24 @@ token against plain decode.
 
 ## 5. Adding a chip
 
-Profiles are measured, never hard-coded. Two tools write `profiles/<chip>-<cores>c.json`:
+Add a chip backend under `monolith/backends/metal/<backend>/` and register its
+exact chip name, GPU family and core count in `registry.py`. Give distinct core
+variants independent configurations and use separate backends when their kernels
+or schedules can diverge; the M5 Max 32-core and 40-core variants do this.
+Optional source overrides live under `kernels/<backend>/`; shared templates stay
+in `kernels/common/`. See the [backend guide](../monolith/backends/metal/README.md)
+for lowering, scheduling and fusion hooks.
+
+Start unmeasured chips with conservative native settings and empty cost tables.
+Measurements belong to the chip configuration, not to a shared profile layer.
+Two tools provide calibration evidence:
 
 1. `python tools/profile_writer.py` (~5 minutes; `--dry-run` prints without writing) — the autotuner at install
    time: it runs the kernel harnesses and writes the `engine` block the compiler reads — `lane_order` and
    `threadgroups_per_core` (the T = 1 GEMV rate), `cost_T` per format (the shader GEMV at T = 1, 2, 4, 8 relative to
    T = 1), the tile's `accelerator_<fmt>` rows and the `accelerator` / `accelerator_min_t` decision, `attention` (v1,
    v2 and v3 over contexts and T; `auto` = v3, which won every point measured here). A new chip without a spec bandwidth gets a measured stand-in (`--nominal-gbps` sets the spec figure).
-   The decisions (`monolith/core/profile_writer.py`) follow the autotuner's 3 % noise rule; the raw numbers and the
+   The decisions (`monolith/backends/metal/calibration.py`) follow the autotuner's 3 % noise rule; the raw numbers and the
    reason for each go under `writer`.
 2. `./probes/run_all.sh` (~5 minutes, Command Line Tools only) writes `probes/results/<chip>_<cores>c_macOS<ver>_<time>.txt`;
    commit every results file. The probe blocks of the profile are derived from them by hand (the README there lists
@@ -322,7 +332,7 @@ Profiles are measured, never hard-coded. Two tools write `profiles/<chip>-<cores
 
 `family` is the kernel-binding key (an op bound to `"*"` runs on every family, one bound to `"apple10"` only there);
 the verify-length rule refuses to extrapolate outside the measured T range of `cost_T`. The engine picks the profile
-by GPU family and core count (`monolith.bench.profile_for_device`). On a chip not yet measured, walk the hypotheses
+by chip name, GPU family and core count (`monolith.backends.metal.config_for_device`). On a chip not yet measured, walk the hypotheses
 H1–H10 of `docs/research/apple-gpu-probes.md §4`: they say which design decisions a differing measurement would change.
 
 ## 6. Checklists

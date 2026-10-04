@@ -44,7 +44,7 @@ PREFIX = "draft."
 
 @register_drafter("lm")
 class LMDrafter(Drafter):
-    lm_drafter = True           # the round's serial ops keep the LM bookkeeping (emit.lower_round, kernels/spec_ops.metal)
+    lm_drafter = True           # the round's serial ops keep the LM bookkeeping (emit.lower_round, kernels/common/spec_ops.metal)
 
     def __init__(self, model: Model, *, gamma: int = 5, target_lm_head: Optional[LMHead] = None) -> None:
         """``model``: the draft model's tree, built with ``prefix=PREFIX``; ``gamma``: the drafts per round;

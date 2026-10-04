@@ -8,7 +8,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .core.profile import Profile, load_profiles
+from .backends.metal import ChipConfig as Profile, config_for_device
 from .formats import FORMATS, DequantSpec, PackLayout
 from .formats.blm import PackInfo
 from .formats.fp import E2M1_MAX, E4M3_MAX, bf16_to_f32, f32_to_bf16
@@ -101,8 +101,6 @@ def check_against_oracle(y: np.ndarray, y_ref: np.ndarray) -> OracleCheck:
                        float((err / ulps).max()))
 
 
-def profile_for_device(gpu_cores: int, apple_family: int) -> Optional[Profile]:
-    for p in load_profiles().values():
-        if p.gpu_cores == gpu_cores and p.family == f"Apple{apple_family}":
-            return p
-    return None
+def profile_for_device(gpu_cores: int, apple_family: int, chip: Optional[str] = None) -> Optional[Profile]:
+    """Compatibility wrapper; runtime callers also supply the exact chip name."""
+    return config_for_device(gpu_cores, apple_family, chip)

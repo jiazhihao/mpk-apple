@@ -658,7 +658,8 @@ monolith/                Python package — front-end and compiler
   compiler/              passes (canonicalize → fuse → select packs → partition → barriers → memory plan → emit),
                          coverage guard, program.json + MSL emission, autotune hooks
   runtime/               nanobind bindings over the C++/ObjC++ core
-  profiles/              per-chip JSON (measured; today hand-derived in ../profiles/)
+  monolith/backends/metal/ per-chip kernels, scheduling hooks and JSON configurations
+  kernels/common/         shared Metal templates (chip overrides under kernels/<backend>/)
 kernels/                 MSL block bodies + templates (common/, gemv, attention, gdn, norm, embed, sample, draft)
 runtime/                 C++/ObjC++: device, packs (mmap), pipelines (function constants, binary archive),
                          ICB builder + re-encode fallback, host pump, token ring, StepState, trace

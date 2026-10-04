@@ -1,5 +1,5 @@
 """tools/profile_writer.py on the device: a short measurement at a small shape produces a profile the loader accepts
-and the decisions' inputs are all present (the real run takes minutes and writes profiles/<chip>-<cores>c.json)."""
+and the decisions' inputs are all present (the real run takes minutes and writes the selected backend configuration)."""
 
 import json
 import sys

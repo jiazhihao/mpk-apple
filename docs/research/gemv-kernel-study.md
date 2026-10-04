@@ -7,7 +7,7 @@ noise < 1e-4); the raw JSON lines are in [the archived results](https://github.c
 
 ## 1. The kernel
 
-`kernels/gemv_T.metal`: static slices over the block-lane-major pack (design D8), 16-byte weight loads in either lane
+`kernels/common/gemv_T.metal`: static slices over the block-lane-major pack (design D8), 16-byte weight loads in either lane
 order, the format plugin's decode snippet, in-word block scales, the per-row tensor scale from the pack, BF16
 activations converted once per word and reused across `RG` rows, FP32 accumulation, one `simd_sum` per (row, token).
 Knobs: rows per block `R`, tokens `T`, row group `RG`, lane order, and the geometry — the crew (12 SIMD-groups per

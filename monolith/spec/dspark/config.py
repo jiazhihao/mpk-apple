@@ -29,12 +29,13 @@ class DSparkConfig:
     confidence_head_with_markov: bool = True
     target_hidden_size: Optional[int] = None
     rope_type: str = "default"
+    rope_parameters: Dict[str, Any] = field(default_factory=dict)
     architecture: str = ""                  # informational: the checkpoint's architectures[0]
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "DSparkConfig":
-        ds = dict(d.get("dflash_config") or {})
+        ds = dict(d.get("dspark_config") or d.get("dflash_config") or {})
         rope = d.get("rope_parameters") or d.get("rope_scaling") or {}
         get = lambda k, default=None: d.get(k, ds.get(k, default))          # noqa: E731
         cfg = cls(
@@ -47,12 +48,13 @@ class DSparkConfig:
             markov_rank=int(get("markov_rank", 0) or 0), markov_head_type=str(get("markov_head_type", "vanilla")),
             enable_confidence_head=bool(get("enable_confidence_head", False)), confidence_head_with_markov=bool(get("confidence_head_with_markov", False)),
             target_hidden_size=d.get("target_hidden_size"), rope_type=str(rope.get("rope_type", "default")),
+            rope_parameters=dict(rope),
             architecture=(d.get("architectures") or [""])[0],
         )
         if cfg.markov_head_type not in ("vanilla",):
             raise ValueError(f"unsupported markov_head_type {cfg.markov_head_type!r} (vanilla only)")
-        if cfg.rope_type != "default":
-            raise ValueError(f"unsupported rope_type {cfg.rope_type!r} (default only; YaRN drafters are not supported yet)")
+        from ...nn.rope import scaled_inv_freq
+        scaled_inv_freq(cfg.rope_theta, cfg.head_dim, cfg.rope_parameters)
         return cfg
 
     @classmethod

@@ -40,9 +40,10 @@ class DraftAttention(Module):
     from three sources — its own context KV cache, the ``n_new`` context features and the block — and whose
     queries are the block, unmasked."""
 
-    def __init__(self, cfg: DSparkConfig, *, hf_prefix: str, prefix: str, max_context: int) -> None:
+    def __init__(self, cfg: DSparkConfig, *, hf_prefix: str, prefix: str, max_context: int, attention: Optional[str] = None) -> None:
         super().__init__(prefix=prefix)
         self.cfg, self.hf_prefix, self.max_context = cfg, hf_prefix, max_context
+        self.attention = attention
         h, d, heads, kv = cfg.hidden_size, cfg.head_dim, cfg.num_attention_heads, cfg.num_key_value_heads
         self.heads, self.kv_heads, self.head_dim = heads, kv, d
         self.qkv = Linear(h, [Part("q_proj", f"{hf_prefix}q_proj.weight", heads * d), Part("k_proj", f"{hf_prefix}k_proj.weight", kv * d),
@@ -93,9 +94,9 @@ class DraftAttention(Module):
         k_new = kvp[:, : kv * d].reshape(n_new, kv, d)
         v_new = kvp[:, kv * d:].reshape(n_new, kv, d)
         k_all = oracle.rms_norm(torch.cat([k_new, k_blk]), self.param("k_norm"), cfg.rms_norm_eps, one_plus=False)
-        positions = torch.arange(ctx_len, ctx_len + n_new + g)
-        cos, sin = oracle.rope_tables(cfg.rope_theta, d, positions)
-        cos, sin = cos.to(x.dtype), sin.to(x.dtype)
+        from ...nn.rope import rope_tables_hf
+        cos, sin = rope_tables_hf(cfg.rope_theta, d, ctx_len + n_new + g, parameters=cfg.rope_parameters)
+        cos, sin = [torch.from_numpy(v[ctx_len:]).to(device=x.device, dtype=x.dtype) for v in (cos, sin)]
         k_all = oracle.apply_partial_rope(k_all, cos, sin)
         q = oracle.apply_partial_rope(q, cos[n_new:], sin[n_new:])
         kc, vc = state[f"{self.prefix}k_ctx"], state[f"{self.prefix}v_ctx"]
@@ -122,16 +123,18 @@ class DraftAttention(Module):
         o = g.value(f"{self.prefix}attn", (h.shape[0], self.heads * self.head_dim), DType.BF16)
         g.op("draft_attn", [proj, kvp, kc, vc, cos, sin, qn, kn], [o], domain=BlockDomain("heads", self.heads), klass=OpClass.MAP,
              updates=[kc.name, vc.name], heads=self.heads, kv_heads=self.kv_heads, head_dim=self.head_dim, eps=self.cfg.rms_norm_eps,
-             scaling=self.head_dim ** -0.5, gamma=self.cfg.block_size)
+             scaling=self.head_dim ** -0.5, gamma=self.cfg.block_size, attention=self.attention)
         return self.o_proj.lower(g, o, residual=h, name=f"{self.prefix}h").value
 
 
 @register_drafter("dspark")
 class DSparkDrafter(Drafter):
-    """``lm_head`` is the target's (the checkpoint carries none); ``embed_tokens`` is the drafter's own frozen copy."""
+    """Share the target head, and its embedding when the checkpoint omits a frozen copy."""
 
     def __init__(self, cfg: DSparkConfig, *, target_lm_head: Optional[LMHead], max_context: int = 4096, pack_rows: int = 16,
-                 confidence_threshold: float = 0.0, sts: Optional[Sequence[float]] = None) -> None:
+                 confidence_threshold: float = 0.0, sts: Optional[Sequence[float]] = None,
+                 shared_embedding: bool = False, kernel_config: Optional[Dict[str, Any]] = None,
+                 attention: Optional[str] = None) -> None:
         """``target_lm_head``: the target's head (the block's logits go through it; None when only packing).
         ``confidence_threshold``: the confident-prefix rule's threshold (≤ 0 verifies the whole block, the
         reference's default) used when the caller of ``lower_select`` has no cost table. ``sts``: per-position
@@ -139,18 +142,22 @@ class DSparkDrafter(Drafter):
         ``tools/bench/sts_calibrate.py`` fits them against measured acceptance)."""
         super().__init__(prefix="draft.")
         self.cfg, self.gamma, self.max_context = cfg, cfg.block_size, max_context
+        self.kernel_config = kernel_config
+        if attention not in (None, 'v1', 'mma', 'auto'):
+            raise ValueError('draft attention must be v1, mma or auto')
         self.confidence_threshold = float(confidence_threshold)
         self.sts = None if sts is None else [float(x) for x in sts]
         if self.sts is not None and (len(self.sts) != self.gamma or any(x <= 0 for x in self.sts)):
             raise ValueError(f"DSparkDrafter: sts needs {self.gamma} positive temperatures")
         h, eps = cfg.hidden_size, cfg.rms_norm_eps
-        self.embed_tokens = Embedding(cfg.vocab_size, h, "embed_tokens.weight", prefix="draft.embed_tokens.")
+        self.embed_tokens = None if shared_embedding else Embedding(cfg.vocab_size, h, "embed_tokens.weight", prefix="draft.embed_tokens.")
+        self._target_embedding = None
         self.fc = Linear(cfg.n_taps * cfg.target_hidden, [Part("fc", "fc.weight", h)], prefix="draft.fc.")
         self.hidden_norm = RMSNorm(h, eps, "hidden_norm.weight", prefix="draft.hidden_norm.", one_plus=False)
         self.blocks: List[DecoderLayer] = []
         for i in range(cfg.num_hidden_layers):
             lp, hp = f"draft.layers.{i}.", f"layers.{i}."
-            attn = DraftAttention(cfg, hf_prefix=f"{hp}self_attn.", prefix=f"{lp}self_attn.", max_context=max_context)
+            attn = DraftAttention(cfg, hf_prefix=f"{hp}self_attn.", prefix=f"{lp}self_attn.", max_context=max_context, attention=attention)
             self.blocks.append(DecoderLayer(i, RMSNorm(h, eps, f"{hp}input_layernorm.weight", prefix=f"{lp}input_norm.", one_plus=False), attn,
                                             RMSNorm(h, eps, f"{hp}post_attention_layernorm.weight", prefix=f"{lp}post_norm.", one_plus=False),
                                             GatedMLP(h, cfg.intermediate_size, hf_prefix=f"{hp}mlp.", prefix=f"{lp}mlp.", chunk=pack_rows // 2), prefix=lp))
@@ -162,13 +169,41 @@ class DSparkDrafter(Drafter):
         self.markov_w2 = Linear(cfg.markov_rank, [Part("w2", "markov_head.markov_w2.weight", cfg.vocab_size)], prefix="draft.markov_w2.",
                                 epilogue="residual", round_residual=True)
 
+    def optimize_program(self, program, *, prefill=False):
+        if self.kernel_config is None or prefill:
+            return program
+        from .optimization import optimize
+        return optimize(program, self.kernel_config)[1]
+
     @classmethod
     def from_checkpoint(cls, path: str, *, target_lm_head: Optional[LMHead], max_context: int = 4096, **options: Any) -> "DSparkDrafter":
         from .weights import bind_checkpoint_formats
+        from ...formats.safetensors_reader import SafetensorsDir
 
+        ckpt = SafetensorsDir(path)
+        try:
+            options.setdefault("shared_embedding", "embed_tokens.weight" not in ckpt.names())
+        finally:
+            ckpt.close()
         drafter = cls(DSparkConfig.from_pretrained(path), target_lm_head=target_lm_head, max_context=max_context, **options)
         bind_checkpoint_formats(drafter, path)
         return drafter
+
+    def bind_target(self, model: Any) -> None:
+        if self.embed_tokens is None:
+            embedding = getattr(model, "embed_tokens", None)
+            if not isinstance(embedding, Embedding):
+                raise ValueError("DSpark: this checkpoint needs the target's embedding module")
+            spec = embedding.weight_map()["weight"]
+            if spec.shape != (self.cfg.vocab_size, self.cfg.hidden_size):
+                raise ValueError("DSpark: shared target embedding shape does not match the draft")
+            self._target_embedding = embedding
+
+    def embedding(self) -> Embedding:
+        emb = self.embed_tokens if self.embed_tokens is not None else self._target_embedding
+        if emb is None:
+            raise ValueError("DSpark: call bind_target before using a checkpoint with shared embeddings")
+        return emb
 
     def tap_layers(self) -> List[int]:
         return list(self.cfg.target_layer_ids)
@@ -222,7 +257,7 @@ class DSparkDrafter(Drafter):
         from ...formats.fp import f32_to_bf16
 
         d = self.cfg.head_dim
-        cos, sin = rope_tables_permuted(self.cfg.rope_theta, d, d, self.max_context)
+        cos, sin = rope_tables_permuted(self.cfg.rope_theta, d, d, self.max_context, parameters=self.cfg.rope_parameters)
         return {"draft_rope_cos": ("BF16", f32_to_bf16(cos)), "draft_rope_sin": ("BF16", f32_to_bf16(sin))}
 
     # ---- oracle -------------------------------------------------------------------------------------------------
@@ -236,7 +271,7 @@ class DSparkDrafter(Drafter):
 
         ids = torch.full((self.gamma,), self.cfg.mask_token_id, dtype=torch.int64)
         ids[0] = anchor
-        h = self.embed_tokens.forward(ids)
+        h = self.embedding().forward(ids)
         pos = ctx_len + ctx_feats.shape[0]
         for blk in self.blocks:
             x = blk.input_norm.forward(h)
@@ -330,7 +365,7 @@ class DSparkDrafter(Drafter):
         feats = self._normalized(g, self.hidden_norm, fcy, "draft.feats")
         lc.consts["draft_ctx_feats"] = feats
         # 2. the block through the drafter's layers
-        emb = self.embed_tokens
+        emb = self.embedding()
         w_emb = emb.weight_value(g, emb.slab_name, (cfg.vocab_size, cfg.hidden_size), emb.format_of("weight"))
         h = g.value("draft.h0", (gamma, cfg.hidden_size), DType.BF16)
         g.op("embed", [anchor, w_emb], [h], domain=BlockDomain("rows", gamma), klass=OpClass.MAP, packed=True, ids="block",
