@@ -1,6 +1,0 @@
-ctx,workers,qkv_active,qkv_tasks_min,qkv_tasks_max,attention_tasks,gate_tasks,attention_gate_active,attention_gate_tasks_min,attention_gate_tasks_max,output_active,output_tasks_min,output_tasks_max,merge_tasks
-128,80,80,6,7,60,384,80,5,7,80,4,4,24
-4096,160,160,3,4,516,384,160,5,7,160,2,2,96
-8192,160,160,3,4,1028,384,160,8,10,160,2,2,96
-16384,160,160,3,4,2052,384,160,14,16,160,2,2,96
-32768,160,160,3,4,4100,384,160,27,29,160,2,2,96

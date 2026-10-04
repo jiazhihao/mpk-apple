@@ -1,5 +1,8 @@
 # N=7 decoder megakernels on the 40-core M5 Max
 
+Raw measurements and generated figures are [archived separately](m5max-artifacts.md);
+restore the evidence before running commands that use historical result paths.
+
 **Further tuning:** [404 additional configuration trials and complete-layer confirmation](m5max-27b-megakernel-tuning.md)
 extend the initial measurements below with independent split/recurrence settings,
 parallel global barriers, per-projection geometry and a mixer-only fusion strategy.
@@ -22,14 +25,14 @@ generation, drafting, acceptance, sampling or tokens-per-second throughput.
   AC power, low-power mode disabled. The measured streaming ceiling was about
   **599 GB/s**; Metal recommended a 40.20 GB working set (decimal).
 - The [new measured profile](../../profiles/apple-m5-max-40c.json) and
-  [hardware probes](../../probes/results/Apple-M5-Max_40c_macOS26.5.1_20261001-130937.txt)
+  [hardware probes](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/probes/results/Apple-M5-Max_40c_macOS26.5.1_20261001-130937.txt)
   replace any assumption that the 20-core Pro launch geometry transfers.
 - [nvidia/Qwen3.8-27B-NVFP4](https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4),
   pinned at `482ca0f3832238542f8f5295dde86b5f22711d80`: 48 GDN and 16 full-attention
   decoder layers, hidden width 5120, MLP width 17408. Original NVFP4 MLP codes,
   FP8 mixer projections and their checkpoint scales are retained.
 - Python 3.12, MLX **0.32.3**, MLX-LM **0.32.0**. Exact package versions, source
-  hashes and pack-manifest hash are in the [metadata](../../tools/bench/results/m5max-27b-n7/metadata.json).
+  hashes and pack-manifest hash are in the [metadata](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/metadata.json).
 - The pack command requested block/payload scale placement. The existing packer
   deliberately keeps this model's 10-byte and 34-byte NVFP4 scale runs **inline,
   in lane order**. The effective pack is 20,808,138,752 bytes; the measurements
@@ -40,7 +43,7 @@ the GDN input projection selected split-K 4, its output projection split-K 2,
 both NVFP4 MLP projections split-K 8. The cached standalone recurrence choice is
 `SL=4, SPB=4`; the full T=8 emitter overrides it with its prepared path's
 `SL=2, SPB=1, LOCAL_GROUPS=32`, which is the actual original layer baseline.
-Saved [leaf choices](../../tools/bench/results/m5max-27b-n7/autotune.apple-m5-max.json)
+Saved [leaf choices](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/autotune.apple-m5-max.json)
 are specific to the chip and effective pack layout.
 
 The initial synthetic screen covered 24 worker/SIMD geometries. The real-weight
@@ -51,7 +54,7 @@ memory limit and were rejected. Attention's shared projection parameter records
 needed a tile-width fix; the complete 24-configuration attention sweep was
 rerun after that fix and all its 48 context points passed correctness.
 
-Selected [geometry](../../tools/bench/results/m5max-27b-n7/geometry.json):
+Selected [geometry](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/geometry.json):
 
 | Half | Workers | SIMD groups / worker | Matrix tile M × N × K | Split-K |
 |---|---:|---:|---|---:|
@@ -104,7 +107,7 @@ dequantization; layer outputs and state updates retain the **0.999 cosine** gate
 
 Microseconds below are the arithmetic means of the per-layer minimum wall times
 within each group. These are isolated layer costs, not whole-model latency.
-The [96-row table](../../tools/bench/results/m5max-27b-n7/layers.csv) contains every
+The [96-row table](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/layers.csv) contains every
 layer, context, minimum, median, numerical result and strict paired-win flag.
 
 | Layers / context | Points | Original Monolith | Matched control | Two megakernels | Faster MLX baseline |
@@ -134,7 +137,7 @@ As a selection-screen example, GDN's best fused half took 374.39 µs GPU versus
 321.05 original and 327.54 matched; MLP took 448.61 versus 317.25 and 406.53;
 attention at 8K took 836.78 versus 748.96 and 731.77. These are short tuning
 samples, not substitutes for the held-out complete-layer sweep above. Complete
-[tuning results](../../tools/bench/results/m5max-27b-n7/tuning.csv) include rejected
+[tuning results](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/tuning.csv) include rejected
 configurations rather than silently dropping them.
 
 The evidence does not support enabling this static fusion in production. It also

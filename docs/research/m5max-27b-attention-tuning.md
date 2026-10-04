@@ -1,5 +1,8 @@
 # Attention megakernel tuning at N=7 on M5 Max
 
+Raw measurements and generated figures are [archived separately](m5max-artifacts.md);
+restore the evidence before running commands that use historical result paths.
+
 The subsequent [task-based 4K–32K study](m5max-27b-attention-tasks.md) adds
 runtime work queues and context-adaptive task sizes. The measurements below
 describe the preceding static-schedule experiment.
@@ -151,7 +154,7 @@ Final checks:
 - Repository hygiene and `git diff --check` passed.
 
 Compact evidence lives in
-[`tools/bench/results/m5max-27b-n7/attention-tuning/`](../../tools/bench/results/m5max-27b-n7/attention-tuning/):
+[`tools/bench/results/m5max-27b-n7/attention-tuning/`](https://github.com/jiazhihao/mpk-apple/tree/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/attention-tuning):
 `all-layers.csv`, all 432 repetitions in `paired-samples.csv`, the effective
 search settings in `tuning.csv`, selected configs, `summary.json` and
 `metadata.json` with source/raw hashes. The raw archive includes source

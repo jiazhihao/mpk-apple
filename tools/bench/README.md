@@ -213,6 +213,12 @@ target features and verifies next-proposal identity against normal replay.
 draft recipe while holding the target fixed. `--generation-tokens` sets the
 length of the four actual generation checks (64 by default).
 
+The selected M5 Max decoder and draft configurations live in
+[`profiles/recipes/m5max-27b`](../../profiles/recipes/m5max-27b/).
+Measurements and generated figures are kept in the
+[M5 Max evidence archive](../../docs/research/m5max-artifacts.md); restore those
+ignored result directories before running plots or commands that read saved inputs.
+
 `dspark_kernel_tune.py` screens explicit projection, mixer, MLP, scalar fallback
 and Markov recipes on packed checkpoint weights. It keeps numerical failures,
 checks replay identity, and records alternating timings; `--inject 1` exercises

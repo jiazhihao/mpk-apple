@@ -60,3 +60,7 @@ for the search, selected configuration and comparisons. Input normalization and
 dual permutation are combined only where a preceding native residual has not
 already produced the normalized layout. Derived operand files are cached outside
 the repository; the original weight pack is unchanged.
+
+Explicit context-specific attention, MLP and DSpark recipes are stored separately
+under [`recipes/m5max-27b`](recipes/m5max-27b/). These configuration inputs are
+retained independently of the archived benchmark measurements and figures.

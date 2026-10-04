@@ -1,8 +1,0 @@
-feature_scalar 128 {'feature_scalar': {'workers': 320, 'sgs': 8, 'rg': 1, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.24435277834224203, 'candidate': 0.1327152771409601}
-feature_scalar 128 {'feature_scalar': {'workers': 320, 'sgs': 16, 'rg': 1, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.2455555562240382, 'candidate': 0.13311249980082115}
-feature_scalar 128 {'feature_scalar': {'workers': 320, 'sgs': 8, 'rg': 1, 'rsplit': 4, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.24487777748921266, 'candidate': 0.1336069447764506}
-feature_scalar 128 {'feature_scalar': {'workers': 320, 'sgs': 16, 'rg': 1, 'rsplit': 4, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.24452500025896975, 'candidate': 0.13423333293758333}
-feature_scalar 128 {'feature_scalar': {'workers': 80, 'sgs': 8, 'rg': 1, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.24511944502592087, 'candidate': 0.13423333293758333}
-feature_scalar 128 {'feature_scalar': {'workers': 80, 'sgs': 8, 'rg': 1, 'rsplit': 4, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.24444999968788275, 'candidate': 0.13444166688714176}
-feature_scalar 128 {'feature_scalar': {'workers': 320, 'sgs': 8, 'rg': 2, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.2451194440557932, 'candidate': 0.13333333384556076}
-feature_scalar 128 {'feature_scalar': {'workers': 160, 'sgs': 16, 'rg': 1, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.2453833333371828, 'candidate': 0.13316666687993953}

@@ -1,5 +1,0 @@
-# Collapse generated measurements and figures in GitHub reviews while keeping
-# their complete contents available for reproduction and audit.
-/tools/bench/results/** linguist-generated=true
-/docs/research/figures/** linguist-generated=true
-/probes/results/** linguist-generated=true

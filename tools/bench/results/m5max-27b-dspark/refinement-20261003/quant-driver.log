@@ -1,9 +1,0 @@
-START compile-fp8_e4m3
-END compile-fp8_e4m3 1
-START compile-int8
-END compile-int8 1
-START compile-int4_affine
-END compile-int4_affine 1
-START compile-nvfp4
-END compile-nvfp4 1
-DONE precision experiments

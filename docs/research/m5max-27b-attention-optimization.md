@@ -1,5 +1,8 @@
 # Full-attention mixer optimization on M5 Max
 
+Raw measurements and generated figures are [archived separately](m5max-artifacts.md);
+restore the evidence before running commands that use historical result paths.
+
 **[M] The tuned full-attention mixer reduces complete-layer latency by 10.6%, 22.1%, 30.2%, 38.2%, 47.0% at 128 / 4K / 8K / 16K / 32K, respectively.** All 16 attention layers at all five tiers beat the fastest tested MLX-LM reference in every paired repetition (**720/720**).
 
 Follow-up to the [task-based attention study](m5max-27b-attention-tasks.md) and
@@ -57,13 +60,13 @@ Recipe files use content-based names, with identical contents sharing one file a
 
 | Prefix | Workers | SIMD groups | Query rows | Keys per local partition | Prepare Q/K | Compact partials | Tighter queue bound | Recipe |
 | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
-| 128 | 160 | 4 | 8 | 96 | no | yes | yes | [JSON](../../tools/bench/results/m5max-27b-n7/attention-optimization/attention-e686867e2c.json) |
-| 4096 | 120 | 8 | 16 | 512 | no | no | no | [JSON](../../tools/bench/results/m5max-27b-n7/attention-optimization/attention-ee10038aa6.json) |
-| 8192 | 120 | 8 | 16 | 1024 | no | no | no | [JSON](../../tools/bench/results/m5max-27b-n7/attention-optimization/attention-195c6979d4.json) |
-| 16384 | 120 | 8 | 16 | 384 | no | no | no | [JSON](../../tools/bench/results/m5max-27b-n7/attention-optimization/attention-f0959614b4.json) |
-| 32768 | 157 | 8 | 16 | 1024 | yes | no | no | [JSON](../../tools/bench/results/m5max-27b-n7/attention-optimization/attention-198c66a1ca.json) |
+| 128 | 160 | 4 | 8 | 96 | no | yes | yes | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-e686867e2c.json) |
+| 4096 | 120 | 8 | 16 | 512 | no | no | no | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-ee10038aa6.json) |
+| 8192 | 120 | 8 | 16 | 1024 | no | no | no | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-195c6979d4.json) |
+| 16384 | 120 | 8 | 16 | 384 | no | no | no | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-f0959614b4.json) |
+| 32768 | 157 | 8 | 16 | 1024 | yes | no | no | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-198c66a1ca.json) |
 
-The JSON files carry the full projection overrides, packing, scalar/merge crews and barrier settings. [The context map](../../tools/bench/results/m5max-27b-n7/attention-optimization/selected-contexts.json) is the single lookup for the five measured tiers.
+The JSON files carry the full projection overrides, packing, scalar/merge crews and barrier settings. [The context map](../../profiles/recipes/m5max-27b/attention-optimization/selected-contexts.json) is the single lookup for the five measured tiers.
 
 ## Changes
 
@@ -229,7 +232,7 @@ shared specialization isolation and repeated execution.
 
 The preliminary seed-batch assertion was corrected to account for more than one task per initial assignment. A real-model smoke test also exposed distinct core/merge parameter records; compaction now checks compatible workspace geometry and updates both, with added CPU and shader regressions. Superseded failures remain in the archive and are not performance evidence.
 
-[The evidence directory](../../tools/bench/results/m5max-27b-n7/attention-optimization/) contains all-layer CSV/JSON summaries, deduplicated recipes, search coverage, numerical validation and source hashes. Its compressed raw archive includes every paired sample, generated-shader hashes, configuration list, rejected trial, exclusion, source snapshot and reproduction script. It excludes model weights and derived weight caches. Reproduction scripts use local checkpoint/pack paths and require serial GPU execution.
+[The evidence directory](https://github.com/jiazhihao/mpk-apple/tree/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/attention-optimization) contains all-layer CSV/JSON summaries, deduplicated recipes, search coverage, numerical validation and source hashes. Its compressed raw archive includes every paired sample, generated-shader hashes, configuration list, rejected trial, exclusion, source snapshot and reproduction script. It excludes model weights and derived weight caches. Reproduction scripts use local checkpoint/pack paths and require serial GPU execution.
 
 ## Logical worker audit
 

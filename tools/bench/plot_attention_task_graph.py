@@ -9,7 +9,7 @@ Unnumbered task boxes illustrate queue use, not measured assignments or latency.
 
 Sources:
   docs/research/m5max-27b-attention-optimization.md
-  tools/bench/results/m5max-27b-n7/attention-optimization/selected-contexts.json
+  profiles/recipes/m5max-27b/attention-optimization/selected-contexts.json
   monolith/compiler/static_fusion.py
   monolith/compiler/attention_fusion.py
   monolith/nn/attention.py
@@ -31,7 +31,7 @@ from plot_gdn_task_graph import CORE, EDGE, EVENT, INK, MUTED, NEUTRAL, PROJECTI
 
 
 ROOT = Path(__file__).resolve().parents[2]
-EVIDENCE = ROOT / "tools/bench/results/m5max-27b-n7/attention-optimization"
+EVIDENCE = ROOT / "profiles/recipes/m5max-27b/attention-optimization"
 
 
 def main():

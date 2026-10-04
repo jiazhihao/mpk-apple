@@ -1,5 +1,0 @@
-Traceback (most recent call last):
-  File "/tmp/monolith-m5max/dspark/exhaustive/cooperative-driver.py", line 8, in <module>
-    if 'Traceback' in log:raise RuntimeError('precision driver failed')
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: precision driver failed

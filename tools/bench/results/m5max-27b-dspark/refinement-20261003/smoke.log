@@ -1,2 +1,0 @@
-2026-10-03 14:01:28.626 python[11802:4323705] Metal GPU Validation Enabled
-lm_head 128 {'lm_head': {'workers': 160, 'sgs': 4, 'tn': 32, 'compact': True, 'ksplit': 4, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 2.00004166981671, 'candidate': 2.140062497346662}

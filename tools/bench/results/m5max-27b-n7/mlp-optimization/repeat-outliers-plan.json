@@ -1,8 +1,0 @@
-{
-  "layers": [
-    15
-  ],
-  "reason": "Repeat observed native-vs-original losses at32K. Preserve all original samples; this is an additional diagnostic, not a replacement dataset.",
-  "reps": 9,
-  "steps": 32
-}

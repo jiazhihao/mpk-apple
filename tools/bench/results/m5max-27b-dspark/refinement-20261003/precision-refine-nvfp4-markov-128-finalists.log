@@ -1,8 +1,0 @@
-markov 128 {'markov': {'workers': 640, 'sgs': 16, 'rg': 1, 'rsplit': 1, 'x_preconvert': True, 'x_hoist': True}} {'baseline': 0.07686388950484495, 'candidate': 0.07434305637919654}
-markov 128 {'markov': {'workers': 320, 'sgs': 16, 'rg': 1, 'rsplit': 2, 'x_preconvert': True, 'x_hoist': True}} {'baseline': 0.07652916635076205, 'candidate': 0.07692499978778262}
-markov 128 {'markov': {'workers': 640, 'sgs': 8, 'rg': 1, 'rsplit': 4, 'x_preconvert': True, 'x_hoist': True}} {'baseline': 0.07736388846145321, 'candidate': 0.08243472257163376}
-markov 128 {'markov': {'workers': 640, 'sgs': 8, 'rg': 1, 'rsplit': 1, 'x_preconvert': True, 'x_hoist': True}} {'baseline': 0.07682083329806726, 'candidate': 0.08357499997752409}
-markov 128 {'markov': {'workers': 320, 'sgs': 16, 'rg': 1, 'rsplit': 16, 'x_preconvert': True, 'x_hoist': True}} {'baseline': 0.07690833299420774, 'candidate': 0.08034861142126222}
-markov 128 {'markov': {'workers': 640, 'sgs': 16, 'rg': 1, 'rsplit': 4, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.07682638824917376, 'candidate': 0.08320833342925955}
-markov 128 {'markov': {'workers': 640, 'sgs': 8, 'rg': 1, 'rsplit': 2, 'x_preconvert': True, 'x_hoist': True}} {'baseline': 0.07694583327975124, 'candidate': 0.07836944423615932}
-markov 128 {'markov': {'workers': 640, 'sgs': 16, 'rg': 1, 'rsplit': 2, 'x_preconvert': True, 'x_hoist': True}} {'baseline': 0.07671666680835187, 'candidate': 0.07651666625558089}

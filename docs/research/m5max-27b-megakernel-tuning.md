@@ -1,5 +1,8 @@
 # Further N=7 megakernel tuning on M5 Max
 
+Raw measurements and generated figures are [archived separately](m5max-artifacts.md);
+restore the evidence before running commands that use historical result paths.
+
 The later [attention-specific tuning study](m5max-27b-attention-tuning.md)
 records the additional query/merge geometry search and its full-layer results.
 
@@ -42,7 +45,7 @@ does not select the slower MLP or attention megakernels. Set
 disable it (`--no-gdn-mixer-fusion` in the generation CLI). The leaf profile
 writer preserves this separately measured layer setting.
 
-Default-integration validation ([results and source hashes](../../tools/bench/results/m5max-27b-n7/default-selection/metadata.json)):
+Default-integration validation ([results and source hashes](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/default-selection/metadata.json)):
 
 - 132 affected GPU tests and six runtime tests passed with shader validation;
   248 contract tests passed, with one optional skip. The nine new selection and
@@ -68,7 +71,7 @@ are archived at `/tmp/monolith-m5max/default-selection-evidence.tar.gz`.
 ## Expanded search
 
 The follow-up screens **404 additional configuration trials**, producing **436
-configuration/context measurements**. [Every screen result](../../tools/bench/results/m5max-27b-n7/followup/tuning.csv)
+configuration/context measurements**. [Every screen result](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/followup/tuning.csv)
 is retained, including slower candidates. The search adds independent knobs
 that the first worker/tile sweep did not expose:
 
@@ -111,7 +114,7 @@ configurations uses multiple teams per threadgroup.
 
 ## Selected configurations and validation protocol
 
-The [two-megakernel configuration](../../tools/bench/results/m5max-27b-n7/followup/geometry.json)
+The [two-megakernel configuration](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/followup/geometry.json)
 uses parallel barrier polling and skips the redundant barrier after a worker's
 last task. The required stage barriers and fences remain.
 
@@ -121,7 +124,7 @@ last task. The required stage barriers and fences remain.
 | MLP | 40 | 32 | 32 | 32 | Compact scratch; narrow immutable scale loads |
 | Attention | 80 | 8 | 16 | 8 | Compact scratch |
 
-A separate [mixer-prefix configuration](../../tools/bench/results/m5max-27b-n7/followup/prefix-geometry.json)
+A separate [mixer-prefix configuration](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/followup/prefix-geometry.json)
 fuses the mixer and retains the original two MLP projection kernels. It starts
 from the complete layer program, preserving the fused residual/statistic/
 normalization producer and the native MLP's activation permutation. This is a
@@ -168,12 +171,12 @@ not whole-model or speculative-decoding throughput:
 | Attention, 4096 | 879.86 | 1109.19 | 1041.52 | 1522.93 |
 | Attention, 8192 | 1167.10 | 1447.71 | 1371.81 | 1967.97 |
 
-[Every retuned layer/context point](../../tools/bench/results/m5max-27b-n7/followup/refined-all-layers.csv)
+[Every retuned layer/context point](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/followup/refined-all-layers.csv)
 includes original/control/fused GPU and wall minima, baseline ratios, paired-win
 counts and numerical checks. Configuration selection used layers 0 and 3; the
 complete sweep includes the other 62 layers.
 
-The [three-dispatch hybrid](../../tools/bench/results/m5max-27b-n7/followup/prefix-all-layers.csv)
+The [three-dispatch hybrid](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/followup/prefix-all-layers.csv)
 ranges from **2.23% faster to 7.26% slower** than original Monolith. It wins the
 minimum at 18/96 points and 181/864 paired rounds, but **no point wins beyond the
 3% noise margin**. All 96 numerical gates pass, with a minimum checked cosine of
@@ -210,9 +213,9 @@ GDN mixer hybrid is selected by default only in the scope described above.
   and compared every engine's convolution/recurrent state or KV prefix/tail
   directly with native MLX, in addition to the hidden outputs. **96/96 passed**;
   minimum cosine **0.9996258899**. These instrumented timings are not used above.
-- [Metadata and hashes](../../tools/bench/results/m5max-27b-n7/followup/metadata.json),
-  [summary](../../tools/bench/results/m5max-27b-n7/followup/summary.json), and
-  [all search configurations](../../tools/bench/results/m5max-27b-n7/followup/search-configs.json)
+- [Metadata and hashes](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/followup/metadata.json),
+  [summary](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/followup/summary.json), and
+  [all search configurations](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/followup/search-configs.json)
   accompany the compact result tables. Raw paired samples, validation logs,
   diagnostic profiles and source snapshots are in
   `/tmp/monolith-m5max/followup-evidence.tar.gz` (SHA-256 in the metadata).

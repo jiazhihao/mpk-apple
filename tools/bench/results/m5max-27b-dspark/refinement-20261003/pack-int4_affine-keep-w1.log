@@ -1,2 +1,0 @@
-re-quantizing 37 matrices to int4_affine at pack time (kept as stored: markov_w1)
-packed 28 slabs, 26 aux tensors, 1.16 GiB -> /tmp/monolith-m5max/dspark/pack-int4_affine-keep-w1-33k

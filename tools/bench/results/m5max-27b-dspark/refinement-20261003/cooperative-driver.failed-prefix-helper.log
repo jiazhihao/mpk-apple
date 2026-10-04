@@ -1,9 +1,0 @@
-START cooperative-shader-validation
-END cooperative-shader-validation 1
-Traceback (most recent call last):
-  File "/tmp/monolith-m5max/dspark/exhaustive/cooperative-driver.py", line 16, in <module>
-    run('cooperative-shader-validation',['.venv/bin/python','-m','pytest','-q','tests/kernels/test_draft_program.py','tests/kernels/test_attention_static.py'],dict(os.environ,MTL_SHADER_VALIDATION='1',MTL_SHADER_VALIDATION_REPORT_TO_STDERR='1'))
-  File "/tmp/monolith-m5max/dspark/exhaustive/cooperative-driver.py", line 15, in run
-    if rc:raise RuntimeError(label)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: cooperative-shader-validation

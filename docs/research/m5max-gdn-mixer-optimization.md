@@ -1,5 +1,8 @@
 # GDN mixer optimization on the 40-core M5 Max
 
+Raw measurements and generated figures are [archived separately](m5max-artifacts.md);
+restore the evidence before running commands that use historical result paths.
+
 [M] Completed 2026-10-02. The optimized GDN mixer is installed in
 [`apple-m5-max-40c.json`](../../profiles/apple-m5-max-40c.json). Across all 48
 GDN layers, its complete-layer wall time is 7.20% lower than
@@ -205,10 +208,10 @@ re-quantization. Content-addressed, page-aligned derived files live outside the
 repository; the original checkpoint and pack are unchanged. Layout tests cover
 120 mappings across lane orders, tiles, reduction sizes and traversal choices.
 
-[Per-layer CSV](../../tools/bench/results/m5max-27b-n7/gdn-optimization/all48.csv),
-[summary](../../tools/bench/results/m5max-27b-n7/gdn-optimization/all48.summary.json),
-[coverage](../../tools/bench/results/m5max-27b-n7/gdn-optimization/coverage.json) and
-[raw evidence](../../tools/bench/results/m5max-27b-n7/gdn-optimization/raw-evidence.tar.gz)
+[Per-layer CSV](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/gdn-optimization/all48.csv),
+[summary](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/gdn-optimization/all48.summary.json),
+[coverage](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/gdn-optimization/coverage.json) and
+[raw evidence](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/gdn-optimization/raw-evidence.tar.gz)
 retain exact configurations, paired samples, rejections, validation logs,
 source snapshots/hashes and reproduction scripts. The archive contains no
 checkpoint, original pack or derived weight binaries. Extract `study/` and

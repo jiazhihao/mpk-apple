@@ -1,5 +1,8 @@
 # MLP optimization on M5 Max
 
+Raw measurements and generated figures are [archived separately](m5max-artifacts.md);
+restore the evidence before running commands that use historical result paths.
+
 **[M] The selected native MLP reduces standalone MLP latency by 9.3% versus original Monolith; the selected fused MLP reduces it by 6.4%.** The native path retains separate projection dispatches. The fused alternative is also measured, with its own matched control. These are explicit fixed-eight-row recipes; automatic generation selection is unchanged.
 
 Follow-up to [issue #141](https://github.com/jiazhihao/mpk-apple/issues/141), the [GDN study](m5max-gdn-mixer-optimization.md), and the [attention study](m5max-27b-attention-optimization.md).
@@ -15,7 +18,7 @@ Follow-up to [issue #141](https://github.com/jiazhihao/mpk-apple/issues/141), th
 | Optimized megakernel | 298.08 | 0.9361 | 64/64 | 576/576 | 576/576 |
 | Fastest MLX-LM | 675.88 | — | — | — | — |
 
-The fused/native latency ratio is 1.0317 (median per-layer ratio). Improvements from packing and geometry are distinct from any benefit of combining dispatches. [All per-layer results](../../tools/bench/results/m5max-27b-n7/mlp-optimization/final.csv) and [paired summaries](../../tools/bench/results/m5max-27b-n7/mlp-optimization/final.summary.json) include the matched control. Differences inside 3% are treated as near parity.
+The fused/native latency ratio is 1.0317 (median per-layer ratio). Improvements from packing and geometry are distinct from any benefit of combining dispatches. [All per-layer results](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/final.csv) and [paired summaries](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/final.summary.json) include the matched control. Differences inside 3% are treated as near parity.
 
 ## Complete layers with the selected mixers
 
@@ -54,13 +57,13 @@ At 32K the native path wins 143/144 paired rounds against original Monolith. The
 
 An additional repeat of the affected layer(s) records 8/9 native wins versus original and 9/9 versus MLX-LM. This diagnostic does not replace the original samples; the cause of the reproducible first-round slowdown is not established.
 
-A seven-point integration check (120, 140, 144, 148, 152, 156 and 157 attention workers) did not remove the first-round slowdown. The existing 157-worker recipe kept the best median. These seven diagnostic trials are separate from the screening count, and no configuration was changed. [Diagnostic summary](../../tools/bench/results/m5max-27b-n7/mlp-optimization/coupled-workers-summary.json).
+A seven-point integration check (120, 140, 144, 148, 152, 156 and 157 attention workers) did not remove the first-round slowdown. The existing 157-worker recipe kept the best median. These seven diagnostic trials are separate from the screening count, and no configuration was changed. [Diagnostic summary](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/coupled-workers-summary.json).
 
 The same layer's Monolith-only diagnostic has native times of 1246.2–1252.0 µs across nine rounds, with 1250.2 µs in the first round. The large spike was absent in that run. This narrows the observation to the interleaved-reference conditions without establishing a specific cache, residency or scheduling cause. It does not replace the MLX comparisons.
 
 ## Reusable recipes
 
-Use one [native MLP recipe](../../tools/bench/results/m5max-27b-n7/mlp-optimization/selected-native.json) or one [fused MLP recipe](../../tools/bench/results/m5max-27b-n7/mlp-optimization/selected-mega.json) across all measured context lengths. [The context map](../../tools/bench/results/m5max-27b-n7/mlp-optimization/selected-contexts.json) references the existing attention recipes without duplicating them.
+Use one [native MLP recipe](../../profiles/recipes/m5max-27b/mlp-optimization/selected-native.json) or one [fused MLP recipe](../../profiles/recipes/m5max-27b/mlp-optimization/selected-mega.json) across all measured context lengths. [The context map](../../profiles/recipes/m5max-27b/mlp-optimization/selected-contexts.json) references the existing attention recipes without duplicating them.
 
 Selected native configuration:
 
@@ -107,7 +110,7 @@ Selected mega configuration:
 }
 ```
 
-The [logical tile audit](../../tools/bench/results/m5max-27b-n7/mlp-optimization/task-audit.json) distinguishes launched workers from useful work. The fused recipe gives its 116 workers 8–10 gate/up tiles each; 80 workers handle two down tiles each. The native gate/up projection uses 160 groups with 6–7 tiles each. Its 640-group down launch has 160 active groups. These are logical assignments, not measured physical-core occupancy.
+The [logical tile audit](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/task-audit.json) distinguishes launched workers from useful work. The fused recipe gives its 116 workers 8–10 gate/up tiles each; 80 workers handle two down tiles each. The native gate/up projection uses 160 groups with 6–7 tiles each. Its 640-group down launch has 160 active groups. These are logical assignments, not measured physical-core occupancy.
 
 Selection required all 36 paired confirmation rounds to beat original Monolith, then retained candidates within 2% of the fastest eligible median paired ratio and within 3% of the best worst paired ratio in that set. The fastest remaining median determines the winner. The selection files retain every finalist, including rejected candidates.
 
@@ -157,7 +160,7 @@ The MLP recipes remain explicit compiler/benchmark options. Automatic generation
 
 ## Recorded search totals
 
-[M] **4,863 completed screening trials:** 4,816 accepted and 47 rejected. Finalist confirmations and all-layer/shader validation are separate from this count. [Coverage and observed domains](../../tools/bench/results/m5max-27b-n7/mlp-optimization/coverage.json).
+[M] **4,863 completed screening trials:** 4,816 accepted and 47 rejected. Finalist confirmations and all-layer/shader validation are separate from this count. [Coverage and observed domains](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/coverage.json).
 
 | Phase | Completed | Accepted | Rejected |
 | --- | ---: | ---: | ---: |
@@ -182,7 +185,7 @@ The MLP recipes remain explicit compiler/benchmark options. Automatic generation
 | boundary-mega | 276 | 276 | 0 |
 | boundary-native | 250 | 250 | 0 |
 
-[M] **1,042 shared tests passed**, 1 optional module/test skipped, with 0 failures and 0 errors under Metal shader validation. All **80 real-model shader cases** passed. Numerical checks and dataset counts are recorded in [validation.json](../../tools/bench/results/m5max-27b-n7/mlp-optimization/validation.json). The optional HTTP-serving module requires FastAPI, which is absent in this environment.
+[M] **1,042 shared tests passed**, 1 optional module/test skipped, with 0 failures and 0 errors under Metal shader validation. All **80 real-model shader cases** passed. Numerical checks and dataset counts are recorded in [validation.json](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/validation.json). The optional HTTP-serving module requires FastAPI, which is absent in this environment.
 
 ## Reproduction
 
@@ -193,11 +196,11 @@ Run GPU jobs serially. Model and pack paths below are local inputs; the original
   --model /tmp/monolith-models/Qwen3.8-27B-NVFP4 \
   --pack /tmp/monolith-m5max/attention-tasks/pack-33k --capacity 33024 \
   --part mlp --layers all --ctx 128 --reps 9 --steps 32 --fp8-mode mxfp8 \
-  --mlp-config tools/bench/results/m5max-27b-n7/mlp-optimization/selected-mega.json \
-  --mlp-control-config tools/bench/results/m5max-27b-n7/mlp-optimization/selected-native.json \
+  --mlp-config profiles/recipes/m5max-27b/mlp-optimization/selected-mega.json \
+  --mlp-control-config profiles/recipes/m5max-27b/mlp-optimization/selected-native.json \
   --out /tmp/recheck-mlp.jsonl
 ```
 
 For complete layers, use `--part layer --fusion --fusion-scope mixer-prefix`, add the prior mixer's `--config` for that context, and set `--fp8-mode both --mlx-cache-lifetime both`. The archive's `run_final.py` records every exact invocation and shader audit. `modelopt_mlp_suffix_tune.py` reproduces the producer-boundary screens from a JSON list of configurations; pass `--control-only` for native recipes.
 
-[Raw evidence archive](../../tools/bench/results/m5max-27b-n7/mlp-optimization/raw-evidence.tar.gz) · [Source manifest](../../tools/bench/results/m5max-27b-n7/mlp-optimization/source-manifest.json) · [Artifact hashes](../../tools/bench/results/m5max-27b-n7/mlp-optimization/artifact-sha256.json)
+[Raw evidence archive](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/raw-evidence.tar.gz) · [Source manifest](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/source-manifest.json) · [Artifact hashes](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/mlp-optimization/artifact-sha256.json)

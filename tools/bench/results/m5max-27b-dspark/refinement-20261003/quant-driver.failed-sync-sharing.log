@@ -1,5 +1,0 @@
-Traceback (most recent call last):
-  File "/tmp/monolith-m5max/dspark/exhaustive/quant-driver.py", line 8, in <module>
-    if 'Traceback' in log:raise RuntimeError('confirmation driver failed')
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: confirmation driver failed

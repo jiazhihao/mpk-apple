@@ -1,5 +1,8 @@
 # Task-based attention megakernels at 4K–32K on M5 Max
 
+Raw measurements and generated figures are [archived separately](m5max-artifacts.md);
+restore the evidence before running commands that use historical result paths.
+
 The [full-attention optimization follow-up](m5max-27b-attention-optimization.md)
 extends this historical recipe with local key partitions and further projection,
 memory-layout and scheduling searches.
@@ -239,7 +242,7 @@ not assert a win over original Monolith. Shader audits use
 `balance-configs.json` file adds `task_stats=true` for worker-count audits.
 
 Compact evidence is in
-[`tools/bench/results/m5max-27b-n7/attention-tasks/`](../../tools/bench/results/m5max-27b-n7/attention-tasks/):
+[`tools/bench/results/m5max-27b-n7/attention-tasks/`](https://github.com/jiazhihao/mpk-apple/tree/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/tools/bench/results/m5max-27b-n7/attention-tasks):
 per-layer minima, every paired sample, search settings, per-worker counters,
 selected configurations, and summaries with source/raw hashes. The local raw
 archive is `/tmp/monolith-m5max/attention-tasks-evidence.tar.gz`; it contains
