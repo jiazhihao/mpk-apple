@@ -55,7 +55,7 @@ must use their paired controls; absolute latency is not a service guarantee.
 ## Selected BF16 configuration
 
 The exact recipes reside in the single
-[selected-contexts.json](../../profiles/recipes/m5max-27b/dspark/selected-contexts.json).
+[selected-contexts.json](../../monolith/backends/metal/m5_max_40c/recipes/dspark/selected-contexts.json).
 The previous file is retained in the evidence directory. All contexts share the
 same projection/MLP/Markov recipes; only mixer geometry changes. `W` denotes
 threadgroups, `SG` SIMD-groups per threadgroup, `TN` output rows per projection
@@ -240,7 +240,7 @@ fixture and produce identical eight-token committed prefixes and next proposals.
 The latency ranges do not overlap in these paired tests. A final format-specific
 sweep then varies NVFP4 mixer geometry/layout, all Markov activation/row splits,
 one-row feature/KV fallbacks, and independent MLP projection crews/layouts.
-Its selected [NVFP4 endpoint recipes](../../profiles/recipes/m5max-27b/dspark/selected-nvfp4-endpoints.json)
+Its selected [NVFP4 endpoint recipes](../../monolith/backends/metal/m5_max_40c/recipes/dspark/selected-nvfp4-endpoints.json)
 produce these **paired incremental** results against the initial NVFP4 recipes:
 
 | Context | Initial NVFP4 draft | Refined NVFP4 draft | Initial full round | Refined full round |
@@ -304,9 +304,9 @@ context together (128, 4096, 8192, 16384 or 32768):
   --pack /tmp/monolith-m5max/attention-tasks/pack-33k \
   --drafter /tmp/monolith-models/Qwen3.8-27B-DSpark \
   --drafter-pack /tmp/monolith-m5max/dspark/pack-bf16-33k \
-  --profile profiles/apple-m5-max-40c.json \
+  --profile monolith/backends/metal/m5_max_40c/config.json \
   --inputs tools/bench/results/m5max-27b-dspark/inputs.json \
-  --config profiles/recipes/m5max-27b/dspark/selected-contexts.json \
+  --config monolith/backends/metal/m5_max_40c/recipes/dspark/selected-contexts.json \
   --compare-config tools/bench/results/m5max-27b-dspark/refinement-20261003/previous-selected-contexts.json \
   --config-key 128 --contexts 128 --reps 9 --warmup 5 \
   --check-generation --generation-tokens 128 --profile-draft \
@@ -325,7 +325,7 @@ recipe with the round command above:
 ```
 
 Use `--drafter-pack /tmp/monolith-m5max/dspark/pack-nvfp4-keep-w1-33k` and
-`--config profiles/recipes/m5max-27b/dspark/selected-nvfp4-endpoints.json`.
+`--config monolith/backends/metal/m5_max_40c/recipes/dspark/selected-nvfp4-endpoints.json`.
 For the within-NVFP4 incremental comparison, use the retained
 `refinement-20261003/selected-nvfp4-contexts.json` as `--compare-config`.
 For a cross-precision pair use `dspark_compare_packs.py`, which gives each pack

@@ -1,6 +1,7 @@
 import pytest
 
 from monolith.core import load_profiles, profiles_dir
+from monolith.backends.metal import config_path
 from monolith.core.profile import Profile
 
 
@@ -20,7 +21,7 @@ def test_cost_tables_measured_points_and_interpolation():
     import json
 
     m5 = load_profiles()["apple-m5-pro-20c"]
-    with open(profiles_dir() / "apple-m5-pro-20c.json") as f:
+    with open(config_path("apple-m5-pro-20c")) as f:
         table = json.load(f)["engine"]["cost_T"]
     assert m5.cost("fp8", 1) == 1.0 and m5.cost("fp8", 2) == pytest.approx(table["fp8"]["2"]) and m5.cost("nvfp4", 4) == pytest.approx(table["nvfp4"]["4"])
     assert 1.0 < table["fp8"]["2"] < table["fp8"]["4"] < table["fp8"]["8"]                                      # a pass costs more with T

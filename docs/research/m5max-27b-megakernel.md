@@ -24,7 +24,7 @@ generation, drafting, acceptance, sampling or tokens-per-second throughput.
 - Apple M5 Max, **40 GPU cores**, 48 GB unified memory, Apple10, macOS 26.5.1;
   AC power, low-power mode disabled. The measured streaming ceiling was about
   **599 GB/s**; Metal recommended a 40.20 GB working set (decimal).
-- The [new measured profile](../../profiles/apple-m5-max-40c.json) and
+- The [new measured profile](../../monolith/backends/metal/m5_max_40c/config.json) and
   [hardware probes](https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/probes/results/Apple-M5-Max_40c_macOS26.5.1_20261001-130937.txt)
   replace any assumption that the 20-core Pro launch geometry transfers.
 - [nvidia/Qwen3.8-27B-NVFP4](https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4),

@@ -20,6 +20,9 @@ serve = ["fastapi>=0.115", "pydantic>=2.9", "uvicorn>=0.30", "transformers>=5.0"
 [tool.setuptools.packages.find]
 include = ["monolith*"]
 
+[tool.setuptools.package-data]
+"monolith.backends.metal" = ["*/config*.json", "*/recipes/*/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

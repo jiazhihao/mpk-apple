@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from ..core.ir import Graph, Op
-from ..core.profile import Profile
+from ..backends.metal.config import ChipConfig as Profile
 from ..ops.registry import OPS, OpDef
 
 

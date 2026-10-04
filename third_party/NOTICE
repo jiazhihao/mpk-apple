@@ -45,7 +45,7 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
 
 ## MLX (ml-explore/mlx, MIT)
 
-- `kernels/gemv_bf16_small.metal` — adapted from `mlx/backend/metal/kernels/gemv.h`
+- `kernels/common/gemv_bf16_small.metal` — adapted from `mlx/backend/metal/kernels/gemv.h`
   @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): GemvWide's four-vector prefetch/reuse
   and row reduction, extended for MPK's packed weights, permuted activations, row ranges,
   residual/statistic and SiLU/multiply epilogues. License: `third_party/MLX-LICENSE`.
@@ -60,12 +60,12 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
   bits and apply the exact exponent-bias correction in float, including subnormals.
   License: `third_party/MLX-LICENSE`.
 
-- `kernels/gemv_nvfp4_rows.metal` — adapted from `mlx/backend/metal/kernels/fp_quantized.h`
+- `kernels/common/gemv_nvfp4_rows.metal` — adapted from `mlx/backend/metal/kernels/fp_quantized.h`
   @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): quantization-group dot products
   reusing four activation vectors across output rows, extended for MPK's packed
   weights, permuted activations, row ranges and epilogues. License: `third_party/MLX-LICENSE`.
 
-- `kernels/gemv_bf16_rows.metal` — adapted from `mlx/backend/metal/kernels/gemv.h`
+- `kernels/common/gemv_bf16_rows.metal` — adapted from `mlx/backend/metal/kernels/gemv.h`
   @ `1f8e74e3f12f31365464a6867c6579f0e9b29d85` (MIT): activation-vector reuse across
   output rows, extended for packed BF16 weights, fused normalization and epilogues.
   License: `third_party/MLX-LICENSE`.

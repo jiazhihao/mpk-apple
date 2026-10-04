@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .compiler import compile_program
-from .core.profile import Profile
+from .backends.metal import ChipConfig as Profile, config_for_device, get_backend, using_backend
 from .core.step_state import StepStateLayout
 from .models import resolve_model
 from .nn.module import Model
@@ -77,7 +77,6 @@ class Session:
                  prefill_attention: Optional[str] = None, decoder_kernel_config: Optional[Dict[str, Any]] = None) -> None:
         """``drafter`` (a ``Drafter`` built with the model's head) and its pack turn the session speculative: one
         small dynamic-T decode program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
-        from .bench import profile_for_device
         from .runtime import _native as nt
 
         from .nn.pack_plan import bind_pack_formats
@@ -87,9 +86,10 @@ class Session:
         self.spec_steps_per_cb, self.spec_in_flight = 1, 2     # the round's pump cadence (generate); the plain path takes the call's
         self.dev = nt.Device()
         info = self.dev.info()
-        self.profile = profile or profile_for_device(info.gpu_cores, info.apple_family)
+        self.profile = profile or config_for_device(info.gpu_cores, info.apple_family, info.name)
         if self.profile is None:
-            raise RuntimeError(f"no profile for {info.name} ({info.gpu_cores} cores, Apple{info.apple_family}); add one under profiles/")
+            raise RuntimeError(f"no profile for {info.name} ({info.gpu_cores} cores, Apple{info.apple_family}); register one under monolith/backends/metal/")
+        get_backend(self.profile.backend).validate_device(self.profile, info)
         self.drafter, self.drafter_pack = drafter, (PackFile(drafter_pack) if drafter is not None else None)
         if drafter is not None and drafter_pack is None:
             raise ValueError("Session: a drafter needs its pack (drafter_pack)")
@@ -128,7 +128,8 @@ class Session:
         if autotune:
             from .compiler.autotune import Autotuner
 
-            chip = info.name.replace(" ", "-").lower()
+            device_key = f"{info.name.replace(' ', '-').lower()}-{info.gpu_cores}c"
+            chip = f"{device_key}-{get_backend(self.profile.backend).cache_identity(self.profile)}"
             self.tuner = Autotuner(self.dev, info.gpu_cores, str(Path(pack_dir) / f"autotune.{chip}.json"))
 
     def engine(self, t: int):
@@ -175,9 +176,9 @@ class Session:
         if self.decoder_kernel_config is not None and not prefill:
             if not dynamic or bound != 8:
                 raise ValueError('explicit decoder recipes require a dynamic eight-row verification program')
-            from .compiler.decoder_fusion import optimize
             from .compiler.barriers import place_barriers
-            prog = optimize(prog, self.decoder_kernel_config)[1]
+            with using_backend(self.profile.backend) as backend:
+                prog = backend.optimize_decoder(prog, self.decoder_kernel_config)
             place_barriers(prog, self.barriers)
         return prog
 
@@ -305,9 +306,10 @@ class Session:
         bps = self.bytes_per_step()
         steps = gen.steps if gen.decode_ms > 0 else 0
         gbps = bps * steps / 1e9 / (gen.decode_ms / 1e3) if steps and gen.decode_ms > 0 else 0.0
+        bound = (f" = {100 * gbps / self.profile.nominal_gbps:.0f} % of the chip's {self.profile.nominal_gbps:.0f} GB/s"
+                 if self.profile.nominal_gbps > 0 else " (nominal bandwidth unknown)")
         line = (f"# {len(gen.tokens)} tokens; prefill {gen.prefill_ms:.1f} ms ({prompt_tokens} prompt tokens); decode {gen.ms_per_token:.2f} ms/token GPU "
-                f"({1000 / max(gen.ms_per_token, 1e-9):.1f} tok/s), {bps / 1e9:.2f} GB per step at {gbps:.0f} GB/s = "
-                f"{100 * gbps / self.profile.nominal_gbps:.0f} % of the chip's {self.profile.nominal_gbps:.0f} GB/s; wall "
+                f"({1000 / max(gen.ms_per_token, 1e-9):.1f} tok/s), {bps / 1e9:.2f} GB per step at {gbps:.0f} GB/s{bound}; wall "
                 f"{gen.decode_wall_ms / max(1, gen.decode_tokens):.2f} ms/token, host busy {100 * gen.host_busy_ms / max(gen.decode_wall_ms, 1e-9):.1f} %")
         if gen.accepted is not None:
             hist = {}

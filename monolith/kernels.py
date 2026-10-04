@@ -11,8 +11,9 @@ from typing import List, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from .formats import FORMATS
 from .formats.blm import PackInfo
+from .backends.metal.context import current_backend
 
-KERNELS_DIR = Path(__file__).resolve().parents[1] / "kernels"
+KERNELS_DIR = Path(__file__).resolve().parents[1] / "kernels" / "common"
 PRELUDE = "#include <metal_stdlib>\nusing namespace metal;\n"
 
 # PERM_OUT: a kernel that produces a tile GEMV's input writes it in x_permute's order (gemm_tile.metal's x') straight
@@ -45,7 +46,16 @@ def perm_out_macros(k: int, wpw: int, tk: int) -> Dict[str, str]:
 
 
 def template(name: str) -> str:
-    return (KERNELS_DIR / name).read_text()
+    """Resolve a chip override first, then the shared template."""
+    path = Path(name)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"kernel template must be a relative path: {name!r}")
+    backend = current_backend()
+    for directory in backend.kernel_directories:
+        candidate = directory / path
+        if candidate.is_file():
+            return candidate.read_text()
+    raise FileNotFoundError(f"no kernel template {name!r} for backend {backend.id!r}")
 
 
 def gemv_source(fmt: str) -> str:
@@ -463,7 +473,7 @@ def gqa_source(v2: bool = False, steal: bool = False, v3: bool = False, mma: boo
         return (src + template("gqa_decode.metal") + "\n#if ADAPTIVE_CHUNK\n" + template("gqa_decode_mma_adaptive.metal") +
                 "\n#else\n" + template("gqa_decode_mma.metal") + "\n#endif\n")
     if steal:
-        src += template("common/steal.metal") + "\n"                                   # the claim protocol (#44), v1 only
+        src += template("steal.metal") + "\n"                                          # the claim protocol (#44), v1 only
     return src + template("gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
 
 
@@ -756,7 +766,7 @@ ACCEPT_LOG_CAP = 65536
 
 def accept_params(ring_cap: int, eos: Union[int, Sequence[int]], log_cap: int = 0, ctx_cap: int = 0, lm: bool = False) -> bytes:
     """``ctx_cap`` > 0: the program's context capacity — the scan stops the program (error 2) at a step whose first
-    position would reach it (see kernels/spec_ops.metal). ``lm``: an LM drafter — ``n_inject`` becomes the committed
+    position would reach it (see kernels/common/spec_ops.metal). ``lm``: an LM drafter — ``n_inject`` becomes the committed
     rows the drafter has not ingested (``position − drafter_ctx_len``) and ``n_chain`` says whether the step drafts."""
     return struct.pack("<IiIIIIII", ring_cap, eos if isinstance(eos, int) else -1, log_cap, ctx_cap, 1 if lm else 0, 0, 0, 0)
 

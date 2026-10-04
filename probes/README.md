@@ -38,5 +38,5 @@ loop here is bounded and the longest single dispatch is ~1.5 s. Expect brief dis
 
 To characterize a new chip: run everything, commit the results file, add its numbers to the report, and derive a
 profile (`cores`, full-speed SIMD-groups per core, in-flight limit, best block size, GB/s, cores needed to saturate the
-bus; a hand-derived first cut per chip is in `../profiles/`). `results/` holds the complete M3 Pro reference run and
+bus; a hand-derived first cut per chip is in `../monolith/backends/metal/`). `results/` holds the complete M3 Pro reference run and
 the M5 Pro runs (11 files: the full suite, repeats of `p6`/`p6b`/`p12`, and `p13`/`p14`).

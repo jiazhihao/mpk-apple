@@ -12,7 +12,7 @@ memory really streams. This report records what we measured, per chip, and what 
 | **M4 family** | **not measured — next** (§4) | — |
 
 Every number here is an observation on one chip and one OS build — *firmware behaviour, not an API contract*. The design
-treats them as per-chip profile values (a first, hand-derived cut of those profiles is in [`profiles/`](../../profiles)),
+treats them as per-chip profile values (a first, hand-derived cut of those profiles is in [`chip configurations`](../../monolith/backends/metal)),
 and correctness never depends on them.
 
 **Running the suite** (16 probes, ~5 min, Xcode Command Line Tools only — shaders compile at runtime, including the

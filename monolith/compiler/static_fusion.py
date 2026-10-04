@@ -5,7 +5,8 @@ multi-dispatch program is a required control: cooperative activation loading and
 common threadgroup geometry change performance independently of fusion.
 """
 import re, subprocess, copy, struct, shutil
-from monolith.kernels import KERNELS_DIR
+from monolith.kernels import template
+from monolith.backends.metal.context import program_scope
 from monolith.runtime.program import KernelSpec, OpSpec, BufferSpec
 
 
@@ -48,6 +49,7 @@ static inline bfloat fp8_tile_value(uint q) { return fp8_tile_values(q*0x0101010
     return 'static inline bfloat fp8_tile_value(uint q) {\n  '+bodies[mode]+'\n}\n'
 
 
+@program_scope
 def normalize(p,sgs,mode="coop",groups=None, *, tn=16, split=False,
               ksplit=None, compact=False, narrow_scales=False, unroll=False,
               gdn_sl=None, k_unroll=1, decode=3, gemm_overrides=None, scalar_sgs=None,
@@ -911,6 +913,7 @@ def _gdn_recurrence_options(p,sgs,prepare,unroll,vector):
     return p
 
 
+@program_scope
 def merge(p,workers,sgs, *, barrier="serial", task_barrier=True, noinline=False, schedule="stages",
           task_grain="group", task_batch=1, task_stats=False, attention_task_tiles=1, task_seed=False, task_seed_bound=False,
           gdn_fused_norm=False,gdn_prepare='local',gdn_unroll=0,gdn_vector=1,dual_permute=False,
@@ -1102,13 +1105,13 @@ def merge(p,workers,sgs, *, barrier="serial", task_barrier=True, noinline=False,
         if task_stats:
             setup+='if(tid==0u) {\n'+''.join(f'atomic_store_explicit(task_queue+{len(p.ops)+i*workers}u+worker,0u,memory_order_relaxed);\n' for i in range(len(p.ops)))+'}\n'
         calls.insert(0,setup)
-    barrier_src=(KERNELS_DIR / 'static_barrier_serial.metal').read_text()
+    barrier_src=template('static_barrier_serial.metal')
     if barrier == 'simd':
-        barrier_src=(KERNELS_DIR / 'static_barrier_simd.metal').read_text()
+        barrier_src=template('static_barrier_simd.metal')
         if poll_sgs!=1:
-            barrier_src=f'#define POLL_SGS {poll_sgs}u\n'+(KERNELS_DIR / 'static_barrier_wide.metal').read_text()
+            barrier_src=f'#define POLL_SGS {poll_sgs}u\n'+template('static_barrier_wide.metal')
     elif barrier == 'leader':
-        barrier_src=(KERNELS_DIR / 'static_barrier_leader.metal').read_text()
+        barrier_src=template('static_barrier_leader.metal')
     if arrival=='store':
         # Only tid zero of this worker writes its arrival counter. Dispatch
         # replay is ordered, so an atomic load/store preserves that ownership

@@ -37,7 +37,7 @@ class Bench:
         self.dev = nt.Device()
         self.info = self.dev.info()
         self.queue = nt.Queue(self.dev)
-        self.profile = profile_for_device(self.info.gpu_cores, self.info.apple_family)
+        self.profile = profile_for_device(self.info.gpu_cores, self.info.apple_family, self.info.name)
         self._pipelines: Dict[str, nt.Pipeline] = {}
 
     def pipeline_named(self, function: str, source: str, macros: Dict[str, str]) -> nt.Pipeline:
@@ -130,7 +130,7 @@ class Bench:
                "rg": int(macros["RG"]), "n_sg": n_sg, "n_blocks": pinfo.n_blocks, "blocks_per_sg": round(blocks_per_sg, 2),
                "tail_eff": round(blocks_per_sg / np.ceil(blocks_per_sg), 3) if blocks_per_sg > 1 else 1.0,
                "copies": copies, "ms": round(ms, 4), "gbps": round(useful / 1e9 / (ms / 1e3), 1),
-               "pct_nominal": round(100 * useful / 1e9 / (ms / 1e3) / self.profile.nominal_gbps, 1) if self.profile else None,
+               "pct_nominal": round(100 * useful / 1e9 / (ms / 1e3) / self.profile.nominal_gbps, 1) if self.profile and self.profile.nominal_gbps > 0 else None,
                "max_ulp_at_rms": round(chk.max_ulp_at_rms, 3) if chk else None, "max_ulp_elementwise": chk.max_ulp_elementwise if chk else None,
                "max_rel_err": chk.max_rel_err if chk else None, "ok": chk.ok() if chk else None,
                "norm": norm, "epilogue": epilogue, "stat_out": stat_out, "norm_apply": norm_apply, "unit_bytes": pinfo.unit_bytes, "scale_placement": pinfo.scale_placement, "macros": macros}

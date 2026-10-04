@@ -295,9 +295,9 @@ Measure a complete tuned round (replace context and configuration key together):
   --pack /tmp/monolith-m5max/attention-tasks/pack-33k \
   --drafter /tmp/monolith-models/Qwen3.8-27B-DSpark \
   --drafter-pack /tmp/monolith-m5max/dspark/pack-bf16-33k \
-  --profile profiles/apple-m5-max-40c.json \
+  --profile monolith/backends/metal/m5_max_40c/config.json \
   --inputs tools/bench/results/m5max-27b-dspark/inputs.json \
-  --config profiles/recipes/m5max-27b/dspark/selected-contexts.json \
+  --config monolith/backends/metal/m5_max_40c/recipes/dspark/selected-contexts.json \
   --config-key 128 --contexts 128 --mode optimized \
   --out /tmp/dspark-round-128.json
 ```

@@ -16,13 +16,15 @@ compiles to that count.
 
 from __future__ import annotations
 
+from ..backends.metal.context import dispatch, current_backend
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from .. import kernels
 from ..core.dtypes import DType
 from ..core.ir import BlockDomain, Graph, Op, OpClass, Value
-from ..core.profile import COST_FORMAT, Profile
+from ..backends.metal.config import COST_FORMAT, ChipConfig as Profile
 from ..core.shapes import N_CHAIN, N_FIRST, N_INJ, Sym, T, bind, numel, step_bindings
 from ..core.step_state import StepStateLayout
 from ..formats import FORMATS
@@ -928,7 +930,7 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
 
 def _gqa_v3(ctx: _Ctx, op: Op) -> None:
     """v3: the core and the merge as one dispatch — a threadgroup of gqa_v3_simdgroups(D) SIMD-groups per (kv head, query
-    row) block, the keys strided over the SIMD-groups, the fold in threadgroup memory (kernels/gqa_decode_v3.metal) —
+    row) block, the keys strided over the SIMD-groups, the fold in threadgroup memory (kernels/common/gqa_decode_v3.metal) —
     emitted at the merge op, which holds the output and the gate; the core op that produced its partials supplies the
     projection, the caches, the tables and the norms (its partial values stay unwritten)."""
     part_o = op.inputs[0]
@@ -1296,6 +1298,7 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_
             "accept_scan": _accept_scan}
 
 
+@dispatch("emit")
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
                  layout: Optional[StepStateLayout] = None, eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
                  tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal",
@@ -1363,7 +1366,7 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     emitted = {}
     for op in order:
         start = len(program.ops)
-        HANDLERS[op.kind](ctx, op)
+        current_backend().handler(op.kind, HANDLERS)(ctx, op)
         emitted[id(op)] = (start, len(program.ops))
     if tail == "advance":
         if token is None:
@@ -1381,13 +1384,10 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     for name in [n for n, spec in program.buffers.items() if spec.role == "arena" and n not in bound]:
         del program.buffers[name]
     place_barriers(program, barriers)
-    if (gdn_mixer_fusion and profile.gdn_mixer_fusion and profile.key == "apple10"
-            and t == 8 and not dynamic_t and not speculative and commute_norm
-            and ctx.accelerator == "on" and profile.sibling_order != "bus_first"):
-        from .gdn_fusion import apply_gdn_mixer_fusion
-        program = apply_gdn_mixer_fusion(program, g, emitted, profile.gdn_mixer_fusion)
-        place_barriers(program, barriers)
-    return program
+    return current_backend().finalize(
+        program, g, emitted, profile, t=t, dynamic_t=dynamic_t, speculative=speculative,
+        commute_norm=commute_norm, accelerator=ctx.accelerator,
+        gdn_mixer_fusion=gdn_mixer_fusion, barriers=barriers)
 
 
 def _context_capacity(ctx: _Ctx, g: Graph) -> Tuple[int, int]:
@@ -1468,6 +1468,7 @@ def lower_round(g: Graph, model: Model, drafter: Any, token: Value, profile: Pro
     return drafter.lower_select(g, block, profile, cost=cost, threshold=threshold, fixed=fixed)
 
 
+@dispatch("compile")
 def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Optional[int] = None, eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096,
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
@@ -1518,6 +1519,6 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     program = emit_program(g, pack=[pack, drafter_pack], profile=profile, t=t, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
                         tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention, accelerator=accelerator, t_min=t_min, commute_norm=commute_norm,
                         gdn_mixer_fusion=gdn_mixer_fusion)
-    program = drafter.optimize_program(program, prefill=prefill)
+    program = current_backend().optimize_draft(program, drafter, prefill=prefill)
     place_barriers(program, barriers)
     return program

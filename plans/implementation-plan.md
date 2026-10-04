@@ -46,7 +46,7 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       `probes/results/`): core model, in-flight limit, atomics handoff, no preemption within a dispatch, sharing at
       dispatch granularity, launch overhead, bandwidth vs access pattern, threadgroup memory, clock SIMD-group,
       in-kernel claim protocol vs dispatch boundaries, inter-op overlap and bus saturation vs cores.
-* [x] **Probe suite on the M5 Pro** (2026-09-22; 11 results files, `profiles/apple-m5-pro-20c.json`; verdicts in the
+* [x] **Probe suite on the M5 Pro** (2026-09-22; 11 results files, `monolith/backends/metal/m5_pro/config.json`; verdicts in the
       hardware report §3): the 13 probes with `p6`/`p6b` repeated 4×, plus three new probes — `p12` streaming geometry
       (lane order × load width × loads in flight × occupancy; bus saturation vs cores; overlap with a saturating
       streamer), `p13` real FP8/NVFP4 decode GEMV (R, T, layout, geometry sweeps, CPU-checked), `p14` `matmul2d` on the
@@ -78,7 +78,7 @@ Critical path: M0 → M1 → M3 → M4 → M5 → M6.
       pacing constraint. The bus-bound pass waits for an unlocked screen.
 
 Exit: baseline table (plain and speculative), goldens, drafters on disk with recorded configs, ≥ 1 profile (two
-provisional profiles exist: `profiles/`).
+chip configurations exist: `monolith/backends/metal/`).
 
 ### M1 — The GEMV proof · 2 ew · **go/no-go #1**
 
@@ -522,7 +522,7 @@ the chip's profile; the other chips' profiles wait for the machines. MPP TensorO
 validated on the M5 Pro by `probes/p14_tensor_ops` (dequantize a [64 × 64] tile into threadgroup memory →
 `tensor_inline` → `matmul2d<…, execution_simdgroups<S>>` → cooperative-tensor accumulate; 8 tokens for 1.5× a T = 1
 pass in FP8 and NVFP4, 32 tokens for 1.7–1.8×; compiles from the Command Line Tools at MSL 4.0). **#50 built
-(`kernels/gemm_tile.metal`, decode-kernels.md §6):** the cooperative right-input fill from the pack words (one
+(`kernels/common/gemm_tile.metal`, decode-kernels.md §6):** the cooperative right-input fill from the pack words (one
 SIMD-group per 16 × 256 tile, the reduction index permuted so a thread decodes consecutive pack columns, block
 scales cached), measured over tile shapes, loop orders and geometries on the M1 harness with the CPU reference:
 NVFP4 177 GB/s, FP8 253, INT4 204 at 8 or 16 tokens — 0.9–1.1× a T = 1 shader pass, 34–49 % above `p14` — and
@@ -555,7 +555,7 @@ names appear only under `monolith/models/`.
 CLAUDE.md  README.md  LICENSE  third_party/NOTICE          pyproject.toml  CMakeLists.txt  .github/workflows/
 docs/design/design.md                     docs/research/{apple-gpu-probes,apple-inference-systems,dspark}.md
 plans/implementation-plan.md              probes/ (hardware characterization; p13/p14 = the first real kernels)
-profiles/*.json                           per-chip profiles (measured; hand-derived first cut)
+monolith/backends/metal/*/config*.json     chip-owned configuration (measured settings or unmeasured fallback)
 monolith/                                 Python package (working codename)
   core/      ir.py dtypes.py shapes.py step_state.py profile.py
   nn/        module.py (Module contract)  embedding.py norm.py linear.py attention.py gdn.py mlp.py lm_head.py sampler.py
@@ -607,7 +607,7 @@ a dispatch is not preemptible.
 | Goldens and gates | `tests/runtime_python/models/qwen38/*` | adapt |
 | Trace format, decoder, viewer | `python/mpkprof`, `tools/mpkv2_viewer` | reuse with a new emitter |
 | Quantized GEMV, SDPA decode, gated-delta, M5 TensorOps usage | MLX `quantized.h`, `fp_quantized.h`, `sdpa_vector.h`, `steel/gemm/nax.h` (MIT) | reference + baseline |
-| GEMV / flash-attention kernels, barrier placement, GDN fusions | llama.cpp `kernels/mul_mv.metal`, `fa.metal`, `ggml-metal-common.cpp`, `ggml-metal-fusion.cpp` (MIT) | reference + baseline |
+| GEMV / flash-attention kernels, barrier placement, GDN fusions | llama.cpp `kernels/common/mul_mv.metal`, `fa.metal`, `ggml-metal-common.cpp`, `ggml-metal-fusion.cpp` (MIT) | reference + baseline |
 | ICB build/replay; multi-token submission + GPU sampling | tinygrad `runtime/graph/metal.py` (MIT); gpt-oss `context.c`, `sample.metal` (Apache-2.0) | reference |
 
 All MPK-derived files keep their Apache-2.0 headers; `third_party/NOTICE` lists origins. No MPK/Mirage naming in the

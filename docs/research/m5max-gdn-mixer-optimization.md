@@ -4,7 +4,7 @@ Raw measurements and generated figures are [archived separately](m5max-artifacts
 restore the evidence before running commands that use historical result paths.
 
 [M] Completed 2026-10-02. The optimized GDN mixer is installed in
-[`apple-m5-max-40c.json`](../../profiles/apple-m5-max-40c.json). Across all 48
+[`apple-m5-max-40c.json`](../../monolith/backends/metal/m5_max_40c/config.json). Across all 48
 GDN layers, its complete-layer wall time is 7.20% lower than
 original Monolith and 6.58% lower than the previous mixer
 default on average. Every layer passes the MLX-LM comparison in every paired

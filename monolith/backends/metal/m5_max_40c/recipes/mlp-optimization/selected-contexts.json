@@ -2,7 +2,7 @@
   "mlp_native": "selected-native.json",
   "mlp_megakernel": "selected-mega.json",
   "attention_contexts": "../attention-optimization/selected-contexts.json",
-  "gdn_profile": "../../../apple-m5-max-40c.json",
+  "gdn_profile": "../../config.json",
   "contexts": [
     128,
     4096,

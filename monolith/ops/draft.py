@@ -1,6 +1,6 @@
 """The DSpark round's op kinds (design §5.8, issue #24). The feature projection, the block's layers and the Markov
 head lower to the existing kinds (``gemv``, ``rmsnorm_stat``/``norm_apply``, ``embed``, ``lm_head``, ``argmax``);
-these are the ones with kernels of their own (``kernels/spec_ops.metal`` and the DRAFT variant of ``gqa_decode``):
+these are the ones with kernels of their own (``kernels/common/spec_ops.metal`` and the DRAFT variant of ``gqa_decode``):
 
 * ``tap_concat`` (MAP over rows): inputs the tapped residual streams ``[T, H_t]`` (≤ 8), output
   ``x [N_INJ, n·H_t]`` — the rows the drafter injects this step (``StepState.n_inject``), concatenated in tap order;

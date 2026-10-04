@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Write (or refresh) this machine's chip profile from the kernel harnesses — the autotuner at install time (design
-§5.7, #49). It measures what the compiler reads from ``profiles/<chip>-<cores>c.json``'s ``engine`` block:
+§5.7, #49). It measures what the compiler reads from the selected backend's ``config.json`` / ``engine`` block:
 
 * the pack's lane order (the T = 1 GEMV rate, interleaved16 vs contiguous) and the threadgroups per core (x1 vs x2),
 * ``cost_T`` per format: the shader GEMV's pass cost at T = 1, 2, 4, 8 relative to T = 1, at the best geometry per T,
@@ -10,10 +10,10 @@
 
 Everything else in a profile is the probes' record (``./probes/run_all.sh``): ``sibling_order`` (p11) and
 ``max_cb_ms`` (p6/p6b) carry over from the existing file, or take the safe defaults on a new chip. Min-of-N over
->= 2 GB streamed per point (``--quick`` for a short run). The decisions are ``monolith.core.profile_writer``'s.
+>= 2 GB streamed per point (``--quick`` for a short run). The decisions are ``monolith.backends.metal.calibration``'s.
 
     python tools/profile_writer.py --dry-run                 # measure and print the engine block
-    python tools/profile_writer.py                           # write profiles/<chip>-<cores>c.json (merged into an existing one)
+    python tools/profile_writer.py                           # write the selected backend config.json (merged into an existing one)
     python tools/profile_writer.py --nominal-gbps 307        # a new chip: the spec bandwidth (else a measured stand-in)
 """
 
@@ -36,8 +36,8 @@ import gemm_bench  # noqa: E402
 import gemv_bench  # noqa: E402
 import gqa_bench  # noqa: E402
 
-from monolith.core.profile import Profile, profiles_dir  # noqa: E402
-from monolith.core.profile_writer import COST_TS, TILE_TMS, decide, merge_profile, profile_name  # noqa: E402
+from monolith.backends.metal import ChipConfig as Profile, config_path, config_for_device, get_backend  # noqa: E402
+from monolith.backends.metal.calibration import COST_TS, TILE_TMS, decide, merge_profile, profile_name  # noqa: E402
 from monolith.formats import FORMATS  # noqa: E402
 from monolith.runtime import _native as nt  # noqa: E402
 
@@ -64,7 +64,7 @@ def measure(*, shape: Tuple[int, int] = (17408, 5120), formats: Sequence[str] = 
             tms: Sequence[int] = TILE_TMS, copies: Optional[int] = None, reps: int = 3, accelerator: bool = True,
             attention: Optional[Tuple[int, int, int]] = DEFAULT_ATTENTION, ctxs: Sequence[int] = (1024, 4096), attn_ts: Sequence[int] = (1, 4),
             log: Callable[[str], None] = print) -> Dict[str, Any]:
-    """Run the harnesses and return the measurement mapping ``monolith.core.profile_writer.decide`` reads."""
+    """Run the harnesses and return the measurement mapping ``monolith.backends.metal.calibration.decide`` reads."""
     b = gemv_bench.Bench()
     n, k = shape
     m: Dict[str, Any] = {"family": f"Apple{b.info.apple_family}", "chip": b.info.name, "shape": f"{n}x{k}", "copies": copies, "reps": reps}
@@ -168,7 +168,7 @@ def main(argv=None) -> int:
     ap.add_argument("--nominal-gbps", type=float, help="the chip's spec bandwidth (kept from an existing profile; else a measured stand-in)")
     ap.add_argument("--target-gb", type=float, default=21.0, help="the target model's resident weight bytes for hosts_target_model")
     ap.add_argument("--name", help="the profile name (default <chip>-<cores>c)")
-    ap.add_argument("--out", type=Path, help="write here instead of profiles/<name>.json")
+    ap.add_argument("--out", type=Path, help="write here instead of the registered backend configuration")
     ap.add_argument("--dry-run", action="store_true", help="measure and print; write nothing")
     a = ap.parse_args(argv)
     n, k = (int(x) for x in a.shape.lower().split("x"))
@@ -183,9 +183,16 @@ def main(argv=None) -> int:
         copies, reps, tms, ctxs = (copies or 4), min(reps, 2), tms[:1], ctxs[:1]
     info = nt.Device().info()
     name = a.name or profile_name(info.name, info.gpu_cores)
-    src = profiles_dir() / f"{name}.json"                              # the existing record merges in even when --out goes elsewhere
+    try:
+        src = config_path(name)
+    except ValueError:
+        if a.out is None and not a.dry_run:
+            ap.error("an unregistered chip needs --out; register its backend after calibration")
+        src = a.out
     path = a.out or src
-    existing = json.load(open(src)) if src.exists() else None
+    existing = json.loads(src.read_text()) if src is not None and src.exists() else None
+    if existing:
+        get_backend(existing.get("backend", "common")).validate_device(Profile.from_dict(name, existing), info)
     print(f"{info.name}: {info.gpu_cores} cores, Apple{info.apple_family}; profile {name} ({'merging ' + str(src) if existing else 'new'}) -> {path}", flush=True)
     t0 = time.time()
     m = measure(shape=(n, k), formats=formats, ts=ts, tms=tms, copies=copies, reps=reps, accelerator=not a.no_accelerator,
@@ -194,6 +201,10 @@ def main(argv=None) -> int:
     device = device_facts(info, target_gb=a.target_gb, nominal_gbps=a.nominal_gbps)
     doc = merge_profile(existing, device=device, engine=engine, measurements=m, notes=notes, written=time.strftime("%Y-%m-%d"),
                         command="python " + " ".join(sys.argv))
+    selected = config_for_device(info.gpu_cores, info.apple_family, info.name)
+    doc.setdefault("name", name)
+    doc.setdefault("backend", selected.backend if selected else "common")
+    doc.setdefault("validation", "unmeasured")
     Profile.from_dict(name, doc)                                    # the loader's validation before anything is written
     print(f"\nmeasured in {time.time() - t0:.0f} s\nengine: {json.dumps(engine, indent=2)}\ndecisions:")
     for key, why in notes.items():

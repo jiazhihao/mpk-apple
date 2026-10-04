@@ -87,7 +87,7 @@ def program(dev, module, pack):
     for ps in DEFAULT_PASSES:
         ps(g)
     info = dev.info()
-    return emit_program(g, pack=pack, profile=profile_for_device(info.gpu_cores, info.apple_family),
+    return emit_program(g, pack=pack, profile=profile_for_device(info.gpu_cores, info.apple_family, info.name),
                         t=8, tail=None, commute_norm=True, gdn_mixer_fusion=False)
 
 

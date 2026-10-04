@@ -60,13 +60,13 @@ Recipe files use content-based names, with identical contents sharing one file a
 
 | Prefix | Workers | SIMD groups | Query rows | Keys per local partition | Prepare Q/K | Compact partials | Tighter queue bound | Recipe |
 | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
-| 128 | 160 | 4 | 8 | 96 | no | yes | yes | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-e686867e2c.json) |
-| 4096 | 120 | 8 | 16 | 512 | no | no | no | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-ee10038aa6.json) |
-| 8192 | 120 | 8 | 16 | 1024 | no | no | no | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-195c6979d4.json) |
-| 16384 | 120 | 8 | 16 | 384 | no | no | no | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-f0959614b4.json) |
-| 32768 | 157 | 8 | 16 | 1024 | yes | no | no | [JSON](../../profiles/recipes/m5max-27b/attention-optimization/attention-198c66a1ca.json) |
+| 128 | 160 | 4 | 8 | 96 | no | yes | yes | [JSON](../../monolith/backends/metal/m5_max_40c/recipes/attention-optimization/attention-e686867e2c.json) |
+| 4096 | 120 | 8 | 16 | 512 | no | no | no | [JSON](../../monolith/backends/metal/m5_max_40c/recipes/attention-optimization/attention-ee10038aa6.json) |
+| 8192 | 120 | 8 | 16 | 1024 | no | no | no | [JSON](../../monolith/backends/metal/m5_max_40c/recipes/attention-optimization/attention-195c6979d4.json) |
+| 16384 | 120 | 8 | 16 | 384 | no | no | no | [JSON](../../monolith/backends/metal/m5_max_40c/recipes/attention-optimization/attention-f0959614b4.json) |
+| 32768 | 157 | 8 | 16 | 1024 | yes | no | no | [JSON](../../monolith/backends/metal/m5_max_40c/recipes/attention-optimization/attention-198c66a1ca.json) |
 
-The JSON files carry the full projection overrides, packing, scalar/merge crews and barrier settings. [The context map](../../profiles/recipes/m5max-27b/attention-optimization/selected-contexts.json) is the single lookup for the five measured tiers.
+The JSON files carry the full projection overrides, packing, scalar/merge crews and barrier settings. [The context map](../../monolith/backends/metal/m5_max_40c/recipes/attention-optimization/selected-contexts.json) is the single lookup for the five measured tiers.
 
 ## Changes
 

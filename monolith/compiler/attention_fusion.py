@@ -10,7 +10,8 @@ import re
 import struct
 
 from monolith.runtime.program import BufferSpec, OpSpec
-from monolith.kernels import KERNELS_DIR
+from monolith.kernels import template
+from monolith.backends.metal.context import program_scope
 
 
 def compact_partials(program):
@@ -159,6 +160,7 @@ def _group_tiles(source,key_tile=32):
     return source[:start]+body+source[end:]
 
 
+@program_scope
 def specialize_attention(program, sgs, prepare, chunk_tiles, style='staged', key_tile=32, cached_prefix=False, alias_scratch=False, task_order='head'):
     p = copy.deepcopy(program)
     cores = [o for o in p.ops if p.kernels[o.kernel].function == 'gqa_decode_mma']
@@ -250,7 +252,7 @@ def specialize_attention(program, sgs, prepare, chunk_tiles, style='staged', key
 
 def _cooperative_source(program, kernel, sgs, key_tile, partial):
     qm=int(re.search(r'#define QM (\d+)',kernel.source)[1])
-    kernel.source=kernel.source[:kernel.source.index('// Matrix-accelerator attention:')]+(KERNELS_DIR/'gqa_decode_cooperative.metal').read_text()+'\n#endif\n'
+    kernel.source=kernel.source[:kernel.source.index('// Matrix-accelerator attention:')]+template('gqa_decode_cooperative.metal')+'\n#endif\n'
     kernel.macros.update(CH=f'{key_tile}u',QM=str(qm),ATTENTION_SG=str(sgs),COOPERATIVE_ATTN='1')
     for fold in program.ops:
         fk=program.kernels[fold.kernel]

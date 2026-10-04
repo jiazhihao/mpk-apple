@@ -63,7 +63,7 @@ The same layer's Monolith-only diagnostic has native times of 1246.2–1252.0 µ
 
 ## Reusable recipes
 
-Use one [native MLP recipe](../../profiles/recipes/m5max-27b/mlp-optimization/selected-native.json) or one [fused MLP recipe](../../profiles/recipes/m5max-27b/mlp-optimization/selected-mega.json) across all measured context lengths. [The context map](../../profiles/recipes/m5max-27b/mlp-optimization/selected-contexts.json) references the existing attention recipes without duplicating them.
+Use one [native MLP recipe](../../monolith/backends/metal/m5_max_40c/recipes/mlp-optimization/selected-native.json) or one [fused MLP recipe](../../monolith/backends/metal/m5_max_40c/recipes/mlp-optimization/selected-mega.json) across all measured context lengths. [The context map](../../monolith/backends/metal/m5_max_40c/recipes/mlp-optimization/selected-contexts.json) references the existing attention recipes without duplicating them.
 
 Selected native configuration:
 
@@ -196,8 +196,8 @@ Run GPU jobs serially. Model and pack paths below are local inputs; the original
   --model /tmp/monolith-models/Qwen3.8-27B-NVFP4 \
   --pack /tmp/monolith-m5max/attention-tasks/pack-33k --capacity 33024 \
   --part mlp --layers all --ctx 128 --reps 9 --steps 32 --fp8-mode mxfp8 \
-  --mlp-config profiles/recipes/m5max-27b/mlp-optimization/selected-mega.json \
-  --mlp-control-config profiles/recipes/m5max-27b/mlp-optimization/selected-native.json \
+  --mlp-config monolith/backends/metal/m5_max_40c/recipes/mlp-optimization/selected-mega.json \
+  --mlp-control-config monolith/backends/metal/m5_max_40c/recipes/mlp-optimization/selected-native.json \
   --out /tmp/recheck-mlp.jsonl
 ```
 

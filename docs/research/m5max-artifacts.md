@@ -1,7 +1,7 @@
 # M5 Max experiment artifacts
 
 Selected executable recipes live under
-[`profiles/recipes/m5max-27b`](../../profiles/recipes/m5max-27b/).
+[`monolith/backends/metal/m5_max_40c/recipes`](../../monolith/backends/metal/m5_max_40c/recipes/).
 Raw measurements, sweep configurations, logs and generated figures are excluded
 from the current source tree and retained at commit
 `11a1f02e8632ebc75dcfbff48c89e8ea0900947a`:

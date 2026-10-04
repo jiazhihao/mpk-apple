@@ -99,7 +99,7 @@ for the selected configuration and saved M5 Pro choices. The serving adapter now
 accepts `--autotune`, `--attention` and `--max-context`; omitting `--autotune`
 retains its historical untuned behavior.
 
-`gemv_bench.py` runs the production-shaped `kernels/gemv_T.metal` (assembled by `monolith.kernels` from a format plugin's
+`gemv_bench.py` runs the production-shaped `kernels/common/gemv_T.metal` (assembled by `monolith.kernels` from a format plugin's
 decode snippet and a pack geometry) on the target's shapes, checks every run against the exact format oracle (the leaf-op
 gate: ≤ 2 BF16 ULPs at the output's magnitude, float32 accumulation noise < 1e-4), and streams ≥ 2 GB of identical packs
 per measurement (min-of-3, GB/s of useful bytes). Knobs = the profile values of design D4/D8: rows per block `R`, tokens
@@ -214,7 +214,7 @@ draft recipe while holding the target fixed. `--generation-tokens` sets the
 length of the four actual generation checks (64 by default).
 
 The selected M5 Max decoder and draft configurations live in
-[`profiles/recipes/m5max-27b`](../../profiles/recipes/m5max-27b/).
+[`monolith/backends/metal/m5_max_40c/recipes`](../../monolith/backends/metal/m5_max_40c/recipes/).
 Measurements and generated figures are kept in the
 [M5 Max evidence archive](../../docs/research/m5max-artifacts.md); restore those
 ignored result directories before running plots or commands that read saved inputs.

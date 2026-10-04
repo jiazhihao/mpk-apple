@@ -268,5 +268,8 @@
     },
     "previous_engine": null
   },
-  "probe_evidence": "https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/probes/results/Apple-M5-Max_40c_macOS26.5.1_20261001-130937.txt"
+  "probe_evidence": "https://github.com/jiazhihao/mpk-apple/blob/11a1f02e8632ebc75dcfbff48c89e8ea0900947a/probes/results/Apple-M5-Max_40c_macOS26.5.1_20261001-130937.txt",
+  "name": "apple-m5-max-40c",
+  "backend": "m5_max_40c",
+  "validation": "measured"
 }

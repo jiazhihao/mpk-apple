@@ -317,7 +317,7 @@ def test_verify_select(dev):
 
 
 def model_accept(state, tokens, ring_cap, eos, ctx_cap=0):
-    """The Python model of accept_scan (mirrors kernels/spec_ops.metal); returns (state, ring writes)."""
+    """The Python model of accept_scan (mirrors kernels/common/spec_ops.metal); returns (state, ring writes)."""
     s = dict(state)
     writes = []
     if s["done"]:

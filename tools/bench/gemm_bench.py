@@ -35,7 +35,7 @@ class GemmBench:
         self.dev = nt.Device()
         self.info = self.dev.info()
         self.queue = nt.Queue(self.dev)
-        self.profile = profile_for_device(self.info.gpu_cores, self.info.apple_family)
+        self.profile = profile_for_device(self.info.gpu_cores, self.info.apple_family, self.info.name)
         self._pipelines: Dict[str, nt.Pipeline] = {}
 
     def pipeline(self, fmt: str, function: str, macros: Dict[str, str]) -> nt.Pipeline:
@@ -113,7 +113,7 @@ class GemmBench:
                 "t_active": t_act, "lane_order": lane_order, "tg_per_core": tg_per_core, "tg": tg, "n_sg": n_sg, "n_tiles": n_tiles, "ksplit": ksplit,
                 "tiles_per_sg": round(tiles_per_sg, 2), "copies": copies, "ms": round(ms, 4), "scale_placement": pinfo.scale_placement,
                 "gbps": round(useful / 1e9 / (ms / 1e3), 1),
-                "pct_nominal": round(100 * useful / 1e9 / (ms / 1e3) / self.profile.nominal_gbps, 1) if self.profile else None,
+                "pct_nominal": round(100 * useful / 1e9 / (ms / 1e3) / self.profile.nominal_gbps, 1) if self.profile and self.profile.nominal_gbps > 0 else None,
                 "tflops": round(2 * tm * n * k / (ms / 1e3) / 1e12, 2),
                 "max_ulp_at_rms": round(chk.max_ulp_at_rms, 3) if chk else None, "max_ulp_elementwise": chk.max_ulp_elementwise if chk else None,
                 "max_rel_err": chk.max_rel_err if chk else None, "ok": chk.ok() if chk else None, "out_bf16": out_bf16, "macros": macros}

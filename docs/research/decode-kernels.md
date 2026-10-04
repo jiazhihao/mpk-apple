@@ -49,7 +49,7 @@ GB/s counts the K and V bytes of the context once; at T = 4 the kernel re-stream
    Speculative verification (T = 1 + γ) therefore needs the v2 structure below before M6 measures its cost.
 4. The 0.8B's 8/2 layers cost 82–182 µs at 1–8 K (6 layers: 0.5–1.1 ms per token) [M].
 
-**v2 — built and measured (#34) [M].** `gqa_decode_v2` + `gqa_merge_v2` (`kernels/gqa_decode_v2.metal`; the
+**v2 — built and measured (#34) [M].** `gqa_decode_v2` + `gqa_merge_v2` (`kernels/common/gqa_decode_v2.metal`; the
 profile's `engine.attention = "v2"` or `--attention v2` selects it): one threadgroup per (kv head, batch of 12
 chunks) with the block's rep·T query rows normed + RoPE'd once into threadgroup memory (BF16, ≤ 32 rows), the
 step's new keys appended by their batch behind a threadgroup barrier, lane-per-key scoring against the rows in
@@ -291,7 +291,7 @@ calibration (not needed: the head is calibrated as shipped).
 
 ## 6. The accelerator GEMM for T > 1 (#50) — `apple-m5-pro-20c_gemm.jsonl`
 
-`kernels/gemm_tile.metal`: `y = x · Wᵀ` for T ≤ TM token rows through `mpp::tensor_ops::matmul2d` (MSL 4.0 from
+`kernels/common/gemm_tile.metal`: `y = x · Wᵀ` for T ≤ TM token rows through `mpp::tensor_ops::matmul2d` (MSL 4.0 from
 the Command Line Tools), reading the engine's block-lane-major pack — the same slabs, the same format snippets
 (`decode_word`, `decode_scale`, `decode_bias`) as `gemv_T`. The design's untested refinement of `p14` — filling a
 **cooperative right-input tensor** straight from the pack words instead of staging a dequantized tile through
@@ -373,7 +373,7 @@ cache (48 uints), so NVFP4 reloads them per tile. The remedy is a K-split (two S
 reduced through threadgroup memory) with the scale cache sized to the split — the follow-up alongside the staged
 variant for T ≥ 32. On the lm_head shape every format is within 5 % of its wide-shape number.
 
-Profile rows (`profiles/apple-m5-pro-20c.json`, relative to `p13`'s T = 1 pass as the shader rows are):
+Profile rows (`monolith/backends/metal/m5_pro/config.json`, relative to `p13`'s T = 1 pass as the shader rows are):
 `accelerator_nvfp4` 8: 1.03, 16: 1.04, 32: 2.32; `accelerator_fp8` 8: 1.09, 16: 1.16, 32: 2.10.
 
 **The K-split (2026-09-26 [M], #103).** `KSPLIT = S` in `gemm_tile`: one row tile per threadgroup of S SIMD-groups,
@@ -1009,7 +1009,7 @@ gives the whole GPU 8 blocks (one per kv head) and every SIMD-group a 32-key chu
 attention is one SIMD-group's chain of ~8 dependent memory and reduction latencies on 5 of 240 SIMD-groups, plus a
 second dispatch to fold the chunks.
 
-**v3** (`kernels/gqa_decode_v3.metal`; profile `attention: v3`, and `auto` takes it up to 4 query rows per block) is
+**v3** (`kernels/common/gqa_decode_v3.metal`; profile `attention: v3`, and `auto` takes it up to 4 query rows per block) is
 the structure of MLX's decode attention: one threadgroup of 32 SIMD-groups (1024 threads; 16 at D = 256, 8 at D = 32)
 per (kv head, query row) block — heads · T threadgroups, so at T = 1 a head per core (plain decode's static program and an LM drafter's chain steps) — lane-per-dim as v1, SIMD-group s
 taking keys s, s + 32, s + 64, … (4 keys each at 128) with a per-key online softmax in exact FP32 rescaling, then the
