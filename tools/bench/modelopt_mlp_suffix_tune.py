@@ -19,10 +19,6 @@ from monolith.compiler.mlp_fusion import tune_mlp_suffix
 from monolith.compiler.static_fusion import written_buffers
 from monolith.formats.fp import bf16_to_f32
 from monolith.generate import Session
-from monolith.runtime import Engine
-from tools.bench.layer_vs_mlx import our_model
-from tools.bench.modelopt_layer_bench import build,inputs,initialize,run_engine,metrics
-from tools.bench.modelopt_mega_tune import source_digest,task_distribution
 
 
 def tail(program,count):
@@ -49,6 +45,11 @@ def seed_tail(source,target,names):
 
 
 def main():
+    from monolith.runtime import Engine
+    from tools.bench.layer_vs_mlx import our_model
+    from tools.bench.modelopt_layer_bench import build,inputs,initialize,run_engine,metrics
+    from tools.bench.modelopt_mega_tune import source_digest,task_distribution
+
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--model',required=True);ap.add_argument('--pack',required=True)
     ap.add_argument('--configs',type=Path,required=True);ap.add_argument('--out',type=Path,required=True)

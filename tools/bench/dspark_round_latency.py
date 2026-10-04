@@ -19,8 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from monolith.core.profile import COST_FORMAT, load_profile
 from monolith.generate import load_session
 from monolith.runtime import _native as nt
-from monolith.runtime import Engine
-from tools.bench.modelopt_mega_tune import source_digest
 
 
 def prefill(session, ids):
@@ -69,6 +67,9 @@ def comparison_buffers(engine):
 
 def compare_draft_fusion(session, fused, restore, expected, *, reps, warmup):
     """Alternate complete rounds with identical tuned tasks, changing only draft fusion."""
+    from monolith.runtime import Engine
+    from tools.bench.modelopt_mega_tune import source_digest
+
     saved = session.drafter.kernel_config
     if not saved or not saved.get('mixer') or not saved['mixer'].get('fuse', True):
         raise ValueError('--compare-draft-fusion needs a fused draft mixer recipe')
@@ -114,6 +115,9 @@ def compare_draft_fusion(session, fused, restore, expected, *, reps, warmup):
 
 def compare_recipe(session, candidate, baseline_config, restore, expected, *, reps, warmup):
     """Pair complete rounds and draft spans, with the target recipe held fixed."""
+    from monolith.runtime import Engine
+    from tools.bench.modelopt_mega_tune import source_digest
+
     saved = session.drafter.kernel_config
     session.drafter.kernel_config = baseline_config['draft']
     try:
@@ -159,6 +163,8 @@ def compare_recipe(session, candidate, baseline_config, restore, expected, *, re
 
 
 def main():
+    from tools.bench.modelopt_mega_tune import source_digest
+
     ap = argparse.ArgumentParser(description=__doc__)
     for name in ('model','pack','drafter','drafter-pack','profile','inputs','out'):
         ap.add_argument('--'+name, type=Path, required=True)
