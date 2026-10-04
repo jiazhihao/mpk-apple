@@ -1,21 +1,24 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "wheel", "cmake>=3.24; sys_platform == 'darwin'", "nanobind>=2; sys_platform == 'darwin'"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "monolith"
-version = "0.0.1"
-description = "A megakernel-style LLM inference engine for Apple silicon: front-end, compiler and runtime bindings (working codename)."
+name = "lithos-metal"
+version = "0.1.0"
+description = "lithos-metal: local LLM inference on Apple silicon."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.26"]
 
+[project.scripts]
+lithos-metal = "monolith.cli:main"
+
 [project.optional-dependencies]
 # Oracles, goldens and weight loading. The contract tier and the runtime never need these.
 oracle = ["torch>=2.4", "safetensors>=0.4", "transformers>=5.0", "huggingface_hub>=0.30"]
 dev = ["pytest>=8"]
-serve = ["fastapi>=0.115", "pydantic>=2.9", "uvicorn>=0.30", "transformers>=5.0", "safetensors>=0.4", "huggingface_hub>=0.30"]
+serve = ["fastapi>=0.115", "pydantic>=2.9", "uvicorn>=0.30", "transformers>=5.0", "safetensors>=0.4", "huggingface_hub>=0.30", "jinja2>=3.1"]
 
 [tool.setuptools.packages.find]
 include = ["monolith*"]

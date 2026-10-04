@@ -145,6 +145,27 @@ def test_serving_recipe_selection_keeps_fixed_verification_and_precision():
     assert assets.options(128)[1]['profile'].accelerator_min_t['bf16'] == 2
 
 
+@pytest.mark.parametrize('quantization', [None, 'nvfp4'])
+def test_hybrid_draft_precision_recipe_is_scoped_to_validated_shape(quantization):
+    from monolith.backends.metal.m5_max_40c.serving import recipes
+    target = SimpleNamespace(hidden_size=2048, num_hidden_layers=40, num_experts=256,
+        num_experts_per_tok=8, moe_intermediate_size=512, shared_expert_intermediate_size=512)
+    cfg = SimpleNamespace(hidden_size=2048, intermediate_size=6144, num_hidden_layers=6,
+        num_attention_heads=32, num_key_value_heads=8, head_dim=128, vocab_size=248320,
+        block_size=7, target_layer_ids=[1,6,11,16,22,27,32,37], markov_rank=256, target_hidden=2048)
+    model, draft = SimpleNamespace(config=target), SimpleNamespace(cfg=cfg)
+    assert recipes(model, draft, quantization) == {'0': {'bf16_min_t': 2, 'draft_attention': 'mma'}}
+    assert recipes(model, draft, 'int8') == {}
+    cfg.markov_rank = 128
+    assert recipes(model, draft, quantization) == {}
+    cfg.markov_rank = 256
+    cfg.target_hidden = 4096
+    assert recipes(model, draft, quantization) == {}
+    cfg.target_hidden = 2048
+    cfg.block_size = 8
+    assert recipes(model, draft, quantization) == {}
+
+
 def test_prepare_builds_target_and_draft_caches(checkpoint, tmp_path):
     pytest.importorskip('fastapi')
     from monolith.serve import parse_args

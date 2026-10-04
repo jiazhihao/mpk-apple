@@ -258,10 +258,13 @@ def _embed(ctx: _Ctx, op: Op) -> None:
     h = op.outputs[0]
     t_c, t_src = ctx.rows_of(op)
     info = ctx.slab_info(table.name)
-    macros = dict(kernels.embed_macros(info, ids=op.attrs.get("ids")), **ctx.t_macros(t_c, t_src))
+    macros = dict(kernels.embed_macros(info, ids=op.attrs.get("ids"), row_scales=True), **ctx.t_macros(t_c, t_src))
+    bindings = [(0, *ctx.buf(tokens)), (1, *ctx.windows[table.name]), (2, *ctx.buf(h))]
+    if macros.get("EMBED_ROW_SCALE") == "1":
+        bindings.append((4, *ctx.row_scales[table.name]))
     k = ctx.kernel(f"embed|{info.format}", kernels.embed_source(info.format), "embed", macros)
     prm = ctx.params("embed", kernels.embed_params(info.k, t_c, info.n, mask_id=int(op.attrs.get("mask_id", 0))))
-    ctx.add(k, [(0, *ctx.buf(tokens)), (1, *ctx.windows[table.name]), (2, *ctx.buf(h)), (3, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind, writes=[2])
+    ctx.add(k, [*bindings, (3, prm, 0)], (t_c, 1, 1), (32, 1, 1), op.kind, writes=[2])
 
 
 def _rmsnorm_stat(ctx: _Ctx, op: Op) -> None:

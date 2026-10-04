@@ -8,12 +8,12 @@ def recipes(model, drafter, quantization):
     if drafter is None or quantization not in (None, 'nvfp4'):
         return {}
     target, draft = model.config, drafter.cfg
-    if (quantization is None and
-            tuple(getattr(target, k, None) for k in ('hidden_size','num_hidden_layers','num_experts',
+    if (tuple(getattr(target, k, None) for k in ('hidden_size','num_hidden_layers','num_experts',
                   'num_experts_per_tok','moe_intermediate_size','shared_expert_intermediate_size')) == (2048,40,256,8,512,512)
             and tuple(getattr(draft,k,None) for k in ('hidden_size','intermediate_size','num_hidden_layers',
                   'num_attention_heads','num_key_value_heads','head_dim','vocab_size')) == (2048,6144,6,32,8,128,248320)
-            and draft.block_size == 7 and draft.target_layer_ids == [1,6,11,16,22,27,32,37]):
+            and draft.block_size == 7 and draft.target_layer_ids == [1,6,11,16,22,27,32,37]
+            and draft.markov_rank == 256 and draft.target_hidden == 2048):
         return {'0':dict(bf16_min_t=2,draft_attention='mma')}
     fields = ('hidden_size', 'intermediate_size', 'num_hidden_layers',
               'num_attention_heads', 'num_key_value_heads', 'head_dim', 'vocab_size')

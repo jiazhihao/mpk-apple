@@ -8,7 +8,8 @@ class MetalBackend:
 
     @property
     def kernel_directories(self):
-        root = Path(__file__).resolve().parents[3] / "kernels"
+        from ...resources import kernel_root
+        root = kernel_root()
         return (root / self.id, root / "common") if self.id != "common" else (root / "common",)
 
     def emit(self, shared_emit, *args, **kwargs):

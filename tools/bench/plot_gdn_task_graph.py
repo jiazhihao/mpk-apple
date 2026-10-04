@@ -1,4 +1,4 @@
-"""Draw the requested LMK computation-to-task figure (no GPU execution).
+"""Draw the requested lithos-metal computation-to-task figure (no GPU execution).
 
 The right panel is a PROPOSED balanced schedule, not the measured static-stage
 default. Representative workers pull finer ready tiles from shared pools;
@@ -31,7 +31,7 @@ NEUTRAL = "#edf0f3"
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", type=Path, default=ROOT / "docs/research/figures/gdn-lmk-balanced-schedule")
+    parser.add_argument("--out", type=Path, default=ROOT / "docs/research/figures/gdn-lithos-metal-balanced-schedule")
     args = parser.parse_args()
     plt.rcParams.update({
         "font.family": "DejaVu Sans", "font.size": 11,
@@ -64,7 +64,7 @@ def main():
         else:
             ax.plot((a[0], b[0]), (a[1], b[1]), color=color, linewidth=width, zorder=1)
 
-    label(7.075, 8.56, "LMK converts Gated DeltaNet in Qwen3.8 27B into a megakernel", 17, "medium")
+    label(7.075, 8.56, "lithos-metal converts Gated DeltaNet in Qwen3.8 27B into a megakernel", 17, "medium")
     label(1.99, 8.10, "(a) Computation graph", 12, "medium")
     label(9.60, 8.10, "(b) Proposed worker task graph", 12, "medium")
     label(9.60, 7.78,
@@ -96,7 +96,7 @@ def main():
 
     # Requested graph-to-task transformation label. Not a benchmarked claim.
     path([(4.07, 4.54), (4.34, 4.54)], width=1.5)
-    box(4.34, 4.25, .90, .58, "LMK", NEUTRAL, 14)
+    box(4.34, 4.25, .90, .58, "lithos-\nmetal", NEUTRAL, 11)
     path([(5.24, 4.54), (5.70, 4.54)], width=1.5)
     label(4.79, 3.96, "Tile +\nschedule", 10, color=MUTED)
 

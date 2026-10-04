@@ -37,7 +37,7 @@ EVIDENCE = ROOT / "monolith/backends/metal/m5_max_40c/recipes/attention-optimiza
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path,
-                        default=ROOT / "docs/research/figures/attention-lmk-task-graph")
+                        default=ROOT / "docs/research/figures/attention-lithos-metal-task-graph")
     args = parser.parse_args()
     recipes = json.loads((EVIDENCE / "selected-contexts.json").read_text())
     config = json.loads((EVIDENCE / recipes["8192"]).read_text())["attention"]
@@ -77,7 +77,7 @@ def main():
         else:
             ax.plot((a[0], b[0]), (a[1], b[1]), color=color, linewidth=width, zorder=1)
 
-    label(7.075, 8.56, "LMK converts full attention in Qwen3.8 27B into a megakernel", 17, "medium")
+    label(7.075, 8.56, "lithos-metal converts full attention in Qwen3.8 27B into a megakernel", 17, "medium")
     label(1.99, 8.10, "(a) Computation graph", 12, "medium")
     label(9.60, 8.10, "(b) Example worker task graph", 12, "medium")
     label(9.60, 7.78,
@@ -109,7 +109,7 @@ def main():
     label(.24, 3.46, "Residual", 9, ha="left")
 
     path([(4.07, 4.54), (4.34, 4.54)], width=1.5)
-    box(4.34, 4.25, .90, .58, "LMK", NEUTRAL, 14)
+    box(4.34, 4.25, .90, .58, "lithos-\nmetal", NEUTRAL, 11)
     path([(5.24, 4.54), (5.70, 4.54)], width=1.5)
     label(4.79, 3.96, "Tile +\nschedule", 10, color=MUTED)
 

@@ -62,7 +62,14 @@ def checkpoint_identity(directory):
 
 def default_pack_cache():
     root = Path(os.environ.get('XDG_CACHE_HOME', str(Path.home() / '.cache')))
-    return root / 'monolith' / 'packs'
+    # Reuse existing large packs across the public CLI rename.
+    current = root / 'lithos-metal' / 'packs'
+    if not current.exists():
+        for brand in ('lmk', 'monolith'):
+            legacy = root / brand / 'packs'
+            if legacy.is_dir():
+                return legacy
+    return current
 
 
 def validate_pack(path, model, capacity, *, quantization=None, identity=None):

@@ -133,6 +133,18 @@ def test_prepared_and_partitioned_attention(attention,sgs,prepare,chunk_tiles):
         dict(attention_prepare=prepare,attention_chunk_tiles=chunk_tiles))
 
 
+@pytest.mark.parametrize('key_tile', [16, 32])
+def test_partitioned_attention_preserves_fp16_probabilities(attention, key_tile):
+    dev, program, shape = attention
+    program = copy.deepcopy(program)
+    for kernel in program.kernels.values():
+        kernel.macros['MMA_PROB_FP16'] = '1'
+    test_attention_geometry_preserves_causal_cache_and_replay(
+        (dev, program, shape), 4, 16, 80, 4, 4,
+        dict(schedule='queue', task_grain='tile', task_batch=1, task_seed=True, task_stats=True),
+        dict(attention_prepare=True, attention_chunk_tiles=8, attention_key_tile=key_tile))
+
+
 @pytest.mark.parametrize('sgs,qm,key_tile',[(1,16,32),(4,16,32),(8,8,32),(4,16,64),(8,8,64),(4,8,128),(8,16,64),(4,16,128)])
 @pytest.mark.parametrize('cached',[False,True])
 def test_cooperative_attention(attention,sgs,qm,key_tile,cached):

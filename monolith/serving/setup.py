@@ -9,6 +9,7 @@ from ..backends.metal import config_for_device, get_backend
 from ..backends.metal.config import COST_FORMAT
 from ..formats import PackLayout
 from ..models import resolve_model
+from ..models.catalog import default_draft
 from ..nn.pack_plan import bind_formats
 from ..formats.safetensors_reader import SafetensorsDir
 from ..spec import DRAFTERS
@@ -56,6 +57,8 @@ class ServingAssets:
 def prepare(args, *, device_info=None):
     if device_info is None:
         from ..runtime import _native
+        if _native is None:
+            raise RuntimeError('The Metal runtime is unavailable. Install lithos-metal on Apple silicon with macOS 26+; see docs/installation.md')
         device_info = _native.Device().info()
     profile = config_for_device(device_info.gpu_cores, device_info.apple_family, device_info.name)
     if profile is None:
@@ -63,6 +66,10 @@ def prepare(args, *, device_info=None):
     backend = get_backend(profile.backend)
     resolve = dict(download_dir=args.download_dir, local_files_only=args.local_files_only)
     model_dir = resolve_checkpoint(args.model, revision=args.revision, **resolve)
+    if not args.draft and not getattr(args, 'no_draft', False):
+        args.draft = default_draft(args.model, model_dir)
+        if args.draft:
+            LOG.info('Automatically selected DSpark head: %s (seven proposals plus anchor)', args.draft)
     draft_dir = resolve_checkpoint(args.draft, revision=args.draft_revision, **resolve) if args.draft else None
     architecture = json.loads((model_dir/'config.json').read_text())['architectures'][0]
     cls = resolve_model(architecture)

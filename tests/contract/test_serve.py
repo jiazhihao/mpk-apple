@@ -34,7 +34,7 @@ def test_response_and_auth():
     {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]},
     {"max_tokens": 0}, {"max_tokens": 2, "max_completion_tokens": 3},
     {"temperature": -1}, {"top_p": 0}, {"stop": ""}, {"stop": ["a"] * 5},
-    {"stream": True}, {"n": 2}, {"tools": []}, {"max_tokens": True},
+    {"n": 2}, {"max_tokens": True}, {"tools": [{"type": "web_search"}]},
 ])
 def test_reject_unsupported_and_invalid_requests(options):
     def unexpected(_request):

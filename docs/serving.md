@@ -1,31 +1,63 @@
-# Local Chat Completions endpoint
+# lithos-metal serving and coding agents
 
-Install the optional server dependencies in the existing environment (the Metal runtime must already be built):
-
-```bash
-.venv/bin/python -m pip install -e '.[serve]'
-```
-
-Start the server with a target and an optional DSpark drafter. Model arguments accept
-Hugging Face repository IDs or local checkpoint paths:
+Install lithos-metal with `pip install '.[serve]'` from a checkout; this builds the Metal runtime
+and includes the kernel sources. The [installation guide](installation.md) covers the
+precompiled Homebrew release bundle.
 
 ```bash
-.venv/bin/python -m monolith.serve \
-  --model nvidia/Qwen3.8-27B-NVFP4 \
-  --draft RadixArk/Qwen3.8-27B-DSpark \
-  --served-model-name lithos --max-context 33018 \
-  --host 127.0.0.1 --port 8000
+lithos-metal serve --model nvidia/Qwen3.8-27B-NVFP4
+# Or:
+lithos-metal serve --model nvidia/Qwen3.6-35B-A3B-NVFP4
 ```
+
+The matching published LithosAI NVFP4 DSpark head is selected automatically. An explicit
+`--draft PATH_OR_HUB_ID` overrides it; `--no-draft` disables speculation. Automatic pairing
+uses the known target ID, a Hub snapshot path, checkpoint provenance, or a recognizable
+local directory name plus architecture/dimensions. Unrecognized or renamed local copies
+need an explicit `--draft`; arbitrary fine-tunes are not matched by tensor dimensions alone.
+
+The default served model ID is the full Hugging Face ID, or the local directory name.
+`--served-model-name NAME` overrides it. The launchers discover it through `/v1/models`:
+
+```bash
+lithos-metal opencode
+lithos-metal claude
+lithos-metal codex
+lithos-metal hermes
+lithos-metal codex --url http://127.0.0.1:8001 -- exec 'Explain this repository'
+lithos-metal env                      # Shell exports for another OpenAI-compatible client
+lithos-metal run -- your-client       # Run with OPENAI_BASE_URL, OPENAI_API_KEY and OPENAI_MODEL
+```
+
+Install the agent itself separately. lithos-metal uses process-local configuration and forwards
+arguments after `--`; it does not change client approval/sandbox settings or global config
+files. `--print-config` prints a redacted launch plan. Set `LITHOS_METAL_URL` for another endpoint and
+`LITHOS_METAL_API_KEY` for an authenticated server. `lithos-metal env` intentionally prints shell-ready exports
+including the configured key; avoid putting its output in public logs.
+
+| Client | Connection |
+|---|---|
+| OpenCode | Inline `@ai-sdk/openai-compatible` provider, Chat Completions |
+| Claude Code | Anthropic base URL and model environment, Messages and token counting |
+| Codex | Custom `lithos-metal` provider, stateless Responses over SSE |
+| Hermes | Custom provider and OpenAI endpoint environment |
+| Other clients | `/v1/chat/completions`, `/v1/responses`, or `/v1/messages` |
+
+Configuration references: [OpenCode](https://opencode.ai/docs/config/),
+[Claude Code](https://code.claude.com/docs/en/llm-gateway),
+[Codex](https://developers.openai.com/codex/config-advanced/),
+[Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/).
 
 DSpark is currently the only serving drafter (`--draft-kind dspark`). `--drafter` is an alias
-for `--draft`; omit it for target-only generation. Local paths can name a checkpoint directory,
+for `--draft`; use `--no-draft` for target-only generation. Local paths can name a checkpoint directory,
 its `config.json`, or one of its safetensors files, with the configuration, all weight shards,
 and tokenizer files alongside it. Hugging Face IDs use `snapshot_download`; `--revision` and
 `--draft-revision` pin revisions, `--download-dir` changes the Hub cache, and
 `--local-files-only` requires already downloaded snapshots. Remote Python code is not loaded.
 
 `--pack` is optional. By default, target and draft packs are built once under
-`${XDG_CACHE_HOME:-~/.cache}/monolith/packs`; `--pack /path/to/cache` selects another root.
+`${XDG_CACHE_HOME:-~/.cache}/lithos-metal/packs`; an existing `lmk/packs` or
+`monolith/packs` cache is reused. `--pack /path/to/cache` selects another root.
 `--draft-pack` optionally selects a separate draft cache. Entries are keyed by checkpoint path,
 configuration/index hashes, shard sizes/mtimes, chip backend, layout, context capacity and
 quantization. Concurrent startups share a file lock; a pack becomes visible only after
@@ -38,22 +70,39 @@ without source identity metadata must have been prepared from the selected check
 Use a cache root to manage checkpoint identity automatically.
 
 On the matching 40-core M5 Max, the 27B target plus seven-token DSpark drafter selects the
-previously measured target/draft recipes automatically. `--draft-quantization auto` uses
-NVFP4 for this combination and retains the Markov embedding in BF16. An explicit existing
+previously measured target/draft recipes automatically. The validated 35B-A3B hybrid
+MoE and its six-layer DSpark drafter also select NVFP4 automatically; see the
+[conversion and acceptance checks](qwen-hybrid-moe.md#nvfp4-draft-conversion).
+`--draft-quantization auto` uses NVFP4 for these combinations and retains the Markov
+embedding in BF16. An explicit existing
 draft pack determines its precision. Other combinations retain source precision unless
 `--draft-quantization nvfp4` is requested. Use `--draft-quantization none` for source-precision
 draft weights; draft quantization can affect proposal acceptance. The 32-core M5 Max has an
 independent backend and does not inherit the 40-core serving recipes.
 
+Preconverted NVFP4 heads are published as
+[`LithosAI/Qwen3.8-27B-DSpark-NVFP4`](https://huggingface.co/LithosAI/Qwen3.8-27B-DSpark-NVFP4)
+and [`LithosAI/Qwen3.6-35B-A3B-DSpark-NVFP4`](https://huggingface.co/LithosAI/Qwen3.6-35B-A3B-DSpark-NVFP4).
+They contain NVFP4 codes, block scales and tensor scales in standard safetensors.
+The initial local cache build only arranges these bytes into the chip's layout;
+it does not dequantize or requantize NVFP4 weights. Both exports reproduce the
+previously tested packs byte for byte, even with CPU NVFP4 quantization and
+dequantization disabled. The Markov embedding and auxiliary parameters retain
+their selected source precision. To use BF16 draft matrices, choose the original
+upstream checkpoint with `--draft-quantization none`; that option does not restore
+BF16 weights from an NVFP4 checkpoint. The release cards include pinned provenance,
+validation, and a compatibility patch for the recorded engine base revision.
+
 The default is seven proposals plus one anchor (eight verification rows), or the
 checkpoint's smaller supported block. `--draft-block-size` explicitly selects a
 different supported proposal count. `load_session` and the generation CLI use
 the same DSpark default, with fixed verification unless another rule is requested.
-Both NVFP4 and
-source-precision recipes select the largest 128/4K/8K/16K/32K key not exceeding the prompt
+For the 27B model, both NVFP4 and source-precision recipes select the largest
+128/4K/8K/16K/32K key not exceeding the prompt
 length (128 is also used for shorter prompts). NVFP4 uses its long-context draft recipe
 from 4K onward, combined with each context's target recipe from the existing files.
-Selection happens once per request. `--kernel-config` can override the recipe JSON and
+The 35B-A3B uses one configuration across contexts. Selection happens once per request.
+`--kernel-config` can override the recipe JSON and
 `--kernel-config-key` can pin an entry. Recipes live in the selected chip backend.
 
 The checkpoint must include its tokenizer and chat template.
@@ -69,7 +118,7 @@ be rebuilt when switching between prefill and decode to fit the device's memory.
 ```bash
 curl http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"lithos","messages":[{"role":"user","content":"What is the capital of France?"}],"max_completion_tokens":64}'
+  -d '{"model":"nvidia/Qwen3.8-27B-NVFP4","messages":[{"role":"user","content":"What is the capital of France?"}],"max_completion_tokens":64}'
 ```
 
 Use the OpenAI Python SDK with a local base URL (install `openai` separately):
@@ -79,29 +128,32 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")
 response = client.chat.completions.create(
-    model="lithos",
+    model="nvidia/Qwen3.8-27B-NVFP4",
     messages=[{"role": "user", "content": "What is the capital of France?"}],
     max_completion_tokens=64,
 )
 print(response.choices[0].message.content)
 ```
 
-This implements the text-only, non-streaming subset of the
-[Chat Completions API](https://developers.openai.com/api/reference/python/resources/chat/subresources/completions/methods/create).
-Supported fields: `model`, `messages` (system/user/assistant, strings or text-part lists),
-`max_completion_tokens` or `max_tokens`, `temperature`, `top_p`, `seed`, `stop`, `n=1`, `stream=false`.
-Defaults are 256 output tokens, greedy decoding (`temperature=0`), `top_p=1`, and seed 0.
-Sampling settings are compiled into the engine; changing them rebuilds the cached session while
-preserving the selected drafter, precision and kernel recipes.
-The response includes an assistant message, finish reason, and tokenizer-based usage counts.
-Stop strings truncate the final text after generation; usage counts all generated tokens, including EOS
-and any text discarded by a stop string.
+The APIs support text messages, developer/system instructions, function tools, tool-result
+history, greedy or stochastic sampling, output limits and stop strings. Responses also adapts
+client-executed custom tools (such as patch input); grammar constraints are not enforced.
+Streaming text is emitted as bounded decode batches finish; complete tool calls are validated
+and emitted at the end of generation. SSE keep-alives cover compilation and prefill. Client
+disconnection stops further work at a prefill-chunk/decode-batch boundary; an active Metal
+dispatch finishes first. Non-streaming requests retain the original native pump path.
 
-Each request supplies the full conversation; GPU sequence state resets between requests. One generation runs
-at a time, with overlapping requests receiving HTTP 429. Run one server worker per GPU.
-Invalid or unsupported fields return an OpenAI-shaped HTTP 400 error instead of being silently ignored.
-Streaming, tool calls, images, JSON-schema output and the Responses API are not implemented.
-The default context capacity is 4096; adjust with `--max-context` to fit the checkpoint and available memory.
+Defaults are 256 output tokens, greedy decoding, `top_p=1`, seed 0, and thinking disabled.
+Sampling changes rebuild the session while preserving the selected draft and kernel recipes.
+Usage counts all generated tokens, including EOS and text truncated by stop strings.
+
+Each request supplies the full conversation. Responses is stateless: `previous_response_id`
+and background jobs are unsupported. One generation runs at a time; overlapping requests
+receive HTTP 429. Images/audio/documents, server-hosted tools, strict JSON-schema decoding,
+extended thinking, and grammar-constrained custom tools are not implemented. Invalid tools
+and incomplete model tool calls produce errors instead of executable calls. Agents still
+apply their own tool permissions. These are protocol adapters, not full cloud API replicas.
+The default context capacity is 32768; use `--max-context` to fit the model and device memory.
 DSpark reserves another `block_size - 1` positions internally for its attention block (six for
 this drafter). Thus `--max-context 33018` uses the same 33024-position capacity as the earlier
 27B benchmarks. Changing capacity creates another cache entry rather than modifying an old pack.
@@ -110,15 +162,15 @@ from single-token decode. Short prompts use smaller prefill buckets. Increasing 
 temporary GPU memory; it does not change the context capacity or the decode graph's token bound.
 
 By default the server listens only on localhost. For access through an SSH tunnel, forward port 8000.
-Set `MONOLITH_API_KEY` before launch to require `Authorization: Bearer <key>` on `/v1/*`;
-use that key in the client. For a shared deployment, terminate TLS at a reverse proxy and keep the
+Set `LITHOS_METAL_API_KEY` before launch (`LMK_API_KEY` and `MONOLITH_API_KEY` remain aliases) to require `Authorization: Bearer <key>` on `/v1/*`;
+use that key in the client. Messages also accepts `x-api-key`. For a shared deployment, terminate TLS at a reverse proxy and keep the
 Mac endpoint private. No OpenAI account or OpenAI API key is required to run this local model.
 
-Responses expose `X-Monolith-Decode-Steps`, `X-Monolith-Decode-GPU-Ms`,
-`X-Monolith-Decode-Step-Ms` and `X-Monolith-Verify-Tokens`. Step time is the total GPU decode
+Non-streaming responses expose `X-Lithos-Metal-Decode-Steps`, `X-Lithos-Metal-Decode-GPU-Ms`,
+`X-Lithos-Metal-Decode-Step-Ms` and `X-Lithos-Metal-Verify-Tokens`. Step time is the total GPU decode
 time divided by the number of rounds, including target verification, acceptance/commit and
 draft generation. It excludes packing, compilation and prefill. The verification header
-reports the configured width; the terminal round can be shorter. HTTP wall time includes
+reports the configured width (legacy `X-Monolith-*` names are also returned); the terminal round can be shorter. HTTP wall time includes
 all request work and must be reported separately.
 
 Save an ordinary Chat Completions request as `request.json`, then measure both timings
@@ -131,6 +183,24 @@ Save an ordinary Chat Completions request as `request.json`, then measure both t
 
 Server/cache contract tests (requires `httpx`):
 `.venv/bin/python -m pytest tests/contract/test_serve.py tests/contract/test_serving_cache.py`.
+
+## CLI and protocol validation
+
+[M] October 4, 2026, M5 Max 40-core: both published NVFP4 target/draft pairs passed
+real HTTP checks for non-streaming and streaming text, XML tool-call conversion, a
+Responses tool-result continuation, and streaming Anthropic tool use. Both selected
+DSpark automatically and reported eight verification rows. Streamed and non-streamed
+greedy text matched for each model. The 27B short text request measured 42.77 ms per
+GPU decode round without streaming and 42.83 ms with streaming; these are smoke-test
+observations, not a new benchmark suite. Cold compilation and prefill are excluded.
+
+The 35B checks also passed from a fresh offline wheel installation outside the checkout,
+with no PyTorch dependency. The official OpenAI and Anthropic Python SDKs reconstructed
+streamed text and tool calls against a deterministic HTTP backend. Agent launch plans,
+argument forwarding, credential redaction and preservation of OpenCode permissions are
+contract-tested; the four interactive agent applications have not all been exercised
+end to end. The Homebrew formula passed Ruby syntax checking; `brew install` awaits
+publication of the tap and release.
 
 ## Measured serving configuration
 

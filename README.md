@@ -1,9 +1,48 @@
-# Monolith *(working codename)*
+# lithos-metal
 
 A megakernel-style LLM inference engine for Apple silicon (M3 / M4 / M5, macOS 26+). First target:
 [`nvidia/Qwen3.8-27B-NVFP4`](https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4), batch-1 decode latency, with
 [DSpark](docs/research/dspark.md) speculative decoding; the engine itself is model-agnostic by construction. This is a
 standalone repository: code from MPK and other projects is copied in with its license headers, never depended on.
+
+## Install and run
+
+On Apple silicon with macOS 26+, install from a checkout (Xcode Command Line Tools and
+Python 3.12 are needed to build the runtime):
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install '.[serve]'
+lithos-metal serve --model nvidia/Qwen3.8-27B-NVFP4
+```
+
+Or serve `nvidia/Qwen3.6-35B-A3B-NVFP4`. Both targets automatically download their matching
+**LithosAI NVFP4 DSpark heads**, use seven proposals plus an anchor, and select the chip's
+kernel recipes. Downloads and weight packs are cached. Use `--no-draft` for target-only
+inference or `--draft PATH_OR_HUB_ID` to override the head. The tested 27B/35B setup is a
+40-core M5 Max with 48 GB memory; other registered chip backends select their own configurations.
+
+Leave the server running and attach an installed agent from another terminal:
+
+```bash
+lithos-metal opencode
+lithos-metal claude
+lithos-metal codex
+lithos-metal hermes
+# Other OpenAI-compatible clients:
+lithos-metal env
+lithos-metal run -- your-client
+```
+
+These commands discover the served model and configure the child process. They preserve
+client approval settings and do not rewrite global configuration. The endpoint supports
+text, tool calls and SSE through Chat Completions, Responses, and Anthropic Messages.
+See [serving and client setup](docs/serving.md) for options and API limits.
+
+A precompiled, offline Homebrew bundle and release workflow are included. The intended
+public command is `brew install lithos-ai/tap/lithos-metal`; **the tap is not published yet**.
+See [release instructions](docs/installation.md) for building and publishing it.
 
 The idea, carried over from MPK: compile the *whole generation loop* — every layer, sampling, speculative
 accept/rollback, stop detection — into one GPU-resident static program so that no CPU work and no CPU↔GPU
@@ -26,10 +65,6 @@ Picking this up on another machine? Start with [`CLAUDE.md`](CLAUDE.md); §4 of 
 
 The [input-normalization fusion](docs/research/norm-projection-fusion.md) moves RMS scaling after eligible projections and is enabled by default. It changes BF16 rounding; use `--no-commute-norm` or `Session(..., commute_norm=False)` to disable it. The research note records measured gains and regressions.
 
-To expose a local model through `/v1/chat/completions` for OpenAI-compatible clients, see [the serving guide](docs/serving.md).
 
-Status: design and plan drafted 2026-09-19, revised 2026-09-22 (M5 Pro measurements) and 2026-09-23 (build phase,
-DSpark). The hardware-characterization half of M0 is done for the M3 Pro (13 probes) and the M5 Pro (16 probes,
-including the first real FP8/NVFP4 decode kernels and an M5 `matmul2d` path). Engine code starts with the PRs listed
-in the plan's §6. The M3 Pro and M4 tasks were dropped from the roadmap on 2026-09-25: the M5 Pro on hand (24 GB) is
-the only machine, and the 27B target's baselines and goldens wait for a machine that hosts it.
+
+The Python import namespace remains `monolith` for compatibility with existing integrations.

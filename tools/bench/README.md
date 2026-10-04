@@ -204,8 +204,8 @@ for timings, numerical checks, rejected runs, and exact reproduction metadata.
 `dspark_round_latency.py` measures complete non-terminal DSpark rounds after real
 prefill: target verification of the anchor plus the checkpoint's proposal count,
 acceptance and recurrent-state commit, then the next draft block. Use
-`--draft-block-size` to benchmark a shorter block; the default preserves the
-checkpoint setting (seven for the 27B head, eight for the Koopah 35B head).
+`--draft-block-size` to benchmark another supported block; the default is seven
+proposals, or the checkpoint's smaller supported block.
 It also times the same dispatches as three
 ICB stages, checking split/full token identity. `dspark_tune.py` compares native,
 normalized and fused draft-layer recipes with exact control/fusion and cache
@@ -234,6 +234,22 @@ independent real prefills. It shares only identical file-backed weights and
 keeps each precision's caches and recurrent state private. It reports acceptance
 with latency and checks equal committed target prefixes; use actual generation
 checks to evaluate the throughput effect of changed acceptance.
+
+`dspark_quantization.py` evaluates a draft pack with real greedy generations and
+matched-prefix acceptance. Supply local `--model`, `--pack`, `--drafter`,
+`--drafter-pack`, `--profile`, `--prompts` and `--out` paths. The prompt JSON is a
+list of objects with `text` and `category` fields. Run the source-precision pack
+first, then pass its output as `--reference` when running the quantized pack.
+By default it generates 96 tokens per prompt and checks one seven-proposal block
+at offsets 0/24/48/72 of each reference continuation. Both packs receive the same
+target prefix and anchor at each offset. This separates proposal quality from
+changes in the generated trajectory; free-running acceptance and GPU decode
+time are also reported. `--matched-only` skips candidate free-running generation
+when screening precision choices. This comparison qualifies the conversion
+against the existing engine, not the target model's independent accuracy.
+See the [35B NVFP4 conversion](../../docs/qwen-hybrid-moe.md#nvfp4-draft-conversion)
+for the measured quality and latency tradeoff.
+
 See the [M5 Max DSpark study](../../docs/research/m5max-27b-dspark.md)
 for checkpoint revisions, context recipes, memory handling and measurements.
 The [draft refinement study](../../docs/research/m5max-27b-dspark-refinement.md)

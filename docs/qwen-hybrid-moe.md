@@ -105,7 +105,6 @@ revision `60f38a99168b6f6552501270e4efa0108fcc2c42`.
 .venv/bin/python -m monolith.serve \
   --model nvidia/Qwen3.6-35B-A3B-NVFP4 \
   --draft Koopah/Qwen3.6-35B-A3B-NVFP4-DSPARK-v2 \
-  --draft-quantization none \
   --max-context 4096 --port 8000
 ```
 
@@ -124,8 +123,10 @@ now preserves a checkpoint-owned frozen vocabulary head as well as embeddings;
 it shares the target vocabulary head only when the checkpoint has none. Cache
 keys distinguish this corrected draft pack from older packs that omitted the
 head. The 40-core M5 Max selects BF16 matrix projections from two draft rows and
-matrix attention for the seven-proposal block. `--draft-quantization auto` retains
-source precision here. The performance tables below record the earlier explicit
+matrix attention for the seven-proposal block. These earlier measurements explicitly
+retain source precision with `--draft-quantization none`; the later
+[NVFP4 conversion](#nvfp4-draft-conversion) is now the matching chip's automatic choice.
+The performance tables below record the earlier explicit
 eight- and seven-proposal measurements; the later MoE tuning section measures
 the new default.
 
@@ -333,3 +334,138 @@ locally under the ignored
 `tools/bench/results/m5max-qwen-llama/hybrid35/moe-megakernel/` directory.
 The contaminated early queue sweep is explicitly excluded from trial totals;
 it was rerun with StepState reset after each trial.
+
+## NVFP4 draft conversion
+
+[M] The October 4 conversion keeps the NVIDIA target and its selected MoE
+kernels unchanged and requantizes the Koopah draft's BF16 matrices into NVFP4.
+The draft pack shrinks from **3,132,768,256 to 993,951,744 bytes**, a **68.3%**
+reduction. The 46 converted source matrices cover the token embedding, feature
+projection, all six attention/MLP layers, frozen vocabulary projection and
+Markov output projection. The Markov embedding stays BF16; normalization and
+confidence parameters retain their source precision. Activations retain the
+existing BF16/FP32 numerics. The original checkpoint and BF16 pack are preserved.
+
+The conversion exposed a quantized-embedding gather bug: the kernel applied
+block scales but omitted the NVFP4 tensor scale. The compiler now binds the
+pack's per-row scale table, and the gather multiplies by that scale before BF16
+rounding. Regression tests cover nonunit and differing row scales, both scale
+layouts, invalid token IDs and inactive-row bounds. The early pre-fix acceptance
+run diagnoses this bug and is excluded from the conversion's quality results.
+
+### Proposal quality
+
+`tools/bench/dspark_quantization.py` compares 16 prompts: four code, four math,
+four explanation, two writing and two language prompts (Chinese and Spanish).
+Each generates 96 tokens greedily with seven proposals plus the anchor. A
+separate comparison re-prefills the same BF16-reference continuation at offsets
+0, 24, 48 and 72 and measures accepted proposals from one verification round.
+All 64 matched prefixes produce the same target anchor for both packs.
+
+| Metric | BF16 draft | NVFP4 draft |
+|---|---:|---:|
+| Mean accepted proposals per matched block, out of 7 | 3.9219 | 3.8594 |
+| Matched-prefix proposal acceptance | 56.03% | 55.13% |
+| Free-running rounds for the 16 generations | 409 | 418 |
+| Free-running mean accepted proposals per round | 2.8093 | 2.7297 |
+| Aggregate GPU decode throughput | 134.7 tok/s | 151.4 tok/s |
+
+NVFP4 retains **98.4%** of BF16's mean matched-prefix acceptance. Fifty-seven
+blocks tie, four accept fewer and three accept more proposals. **All 16 complete
+96-token output sequences match BF16 exactly.** Decode throughput uses the
+1,520 tokens generated after prefill divided by their total GPU decode time;
+it includes terminal rounds and actual acceptance. These are finite prompt-set
+results, not a general quality guarantee. The independent target/HF and
+plain/speculative numerical gaps documented above remain open.
+
+Keeping the large token embedding in BF16 increases the pack to 1.725 GB and
+does not improve aggregate matched-prefix acceptance (3.8125/7). Additional
+16-prefix screens preserving the feature or vocabulary projections also cost
+more storage. The selected pack quantizes those matrices and retains only the
+Markov embedding among the weight slabs.
+
+### Runtime and use
+
+The preconverted safetensors checkpoint is published at
+[`LithosAI/Qwen3.6-35B-A3B-DSpark-NVFP4`](https://huggingface.co/LithosAI/Qwen3.6-35B-A3B-DSpark-NVFP4),
+revision `5335e125637b290836ffe260e5314a06de6f78bb`. Its 952,165,546 bytes of
+safetensors repack to the exact 993,951,744-byte tested Metal pack. Loading and
+packing succeed with CPU NVFP4 quantization and dequantization disabled; only
+the hardware layout is built. All 13 uploaded files have verified hashes.
+
+Eleven alternating pairs after three warmups compare source-precision and NVFP4
+drafts with the same target configuration and independent real prefills. Full
+rounds include target verification, acceptance/commit and the next draft block.
+Draft spans are measured separately, so their medians need not sum with other
+stage medians to the full-round median.
+
+| Context | BF16 draft stage | NVFP4 draft stage | BF16 full round | NVFP4 full round |
+|---|---:|---:|---:|---:|
+| 128 | 5.62 ms | 3.00 ms | 27.42 ms | 25.17 ms |
+| 4K | 6.56 ms | 3.89 ms | 30.07 ms | 27.49 ms |
+| 8K | 7.25 ms | 4.71 ms | 32.29 ms | 29.50 ms |
+| 16K | 9.32 ms | 6.76 ms | 36.75 ms | 34.43 ms |
+| 32K | 13.91 ms | 11.27 ms | 48.76 ms | 46.38 ms |
+
+At 128 tokens this reduces draft latency by **46.6%** and complete-round latency
+by **8.2%**. Both packs accept all seven proposals on this repeated hash-map
+fixture at every context, with identical committed tokens and next proposals;
+each pack's replays and split/full execution agree exactly. Loading, compilation,
+prefill, HTTP work and correctness readback are excluded. These paired BF16
+measurements are the comparison baseline, rather than the earlier MoE study's
+measurements from a different run.
+
+The serving CLI now selects this NVFP4 conversion automatically for the
+validated 35B/DSpark shapes on 40-core M5 Max. Seven proposals plus the anchor
+remain the default. The same configuration serves every measured context:
+BF16 matrix threshold two and matrix draft attention, with the existing target
+megakernels. No additional context-specific recipe files are needed.
+An explicitly supplied existing draft pack still determines precision;
+`--draft-quantization none` selects a source-precision cache.
+
+```bash
+.venv/bin/python -m monolith.serve \
+  --model nvidia/Qwen3.6-35B-A3B-NVFP4 \
+  --draft LithosAI/Qwen3.6-35B-A3B-DSpark-NVFP4 \
+  --draft-quantization nvfp4 \
+  --max-context 32768 --host 127.0.0.1 --port 8000
+```
+
+Missing packs are created automatically. To create the evaluated draft pack
+explicitly from a local checkpoint, use:
+
+```bash
+.venv/bin/python tools/pack_weights.py \
+  --model /path/to/Koopah-Qwen3.6-35B-A3B-NVFP4-DSPARK-v2 \
+  --out /path/to/draft-nvfp4 --drafter-kind dspark \
+  --max-context 33024 --lane-order interleaved16 --scale-placement block \
+  --quantize nvfp4 --quantize-keep markov_w1
+```
+
+Validation passes **905 contract tests and 141 relevant GPU tests**, with Metal
+shader validation enabled for the latter. Three real 96-token generations also
+pass shader validation and match the BF16 reference. The wider draft checks
+exposed stale probability-type names in partitioned-attention specialization;
+those now preserve the kernel's BF16/FP16 probability type, with causal-cache,
+replay and 16/32-key FP16 regression coverage. This repair does not change the
+selected serving graph or the paired performance measurements.
+
+A missing automatic draft cache builds in 35.21 seconds; a second `prepare`
+reuses it in 1.48 seconds. Its `weights.pack` SHA-256 matches the manually
+converted, quality-tested pack exactly. These startup times are separate from
+the per-round measurements.
+
+Three real Chat Completions requests using that automatic cache return HTTP 200
+and identical 48-token output for the 24-token prime-function prompt. Each
+reports eight verification rows and seven decode rounds. Warm requests take
+300.6 and 262.5 ms end to end and report 23.22 and 24.02 ms mean GPU round time,
+including the terminal round. The cold request takes 22.82 seconds with loading
+and compilation. This is an endpoint smoke test on one prompt, separate from
+the paired context benchmark and prompt-set quality evaluation. The test server
+is stopped afterward.
+
+Prompt fixtures, quality outputs, paired samples, validation logs, source hashes
+and reproduction scripts are retained locally under the ignored
+`tools/bench/results/m5max-qwen-llama/hybrid35/dspark-nvfp4/` directory. The
+pre-fix `quality-all.json` is explicitly excluded; the qualified full-conversion
+result is `quality-all-fixed.json`.

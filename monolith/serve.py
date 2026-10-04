@@ -1,65 +1,26 @@
-"""Single-model, non-streaming Chat Completions server. Run with ``python -m monolith.serve``."""
+"""lithos-metal text/tool server: Chat Completions, Responses and Anthropic Messages."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import queue
 import logging
 import os
 import secrets
 import threading
 import time
-import uuid
 from pathlib import Path
-from typing import Literal
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
 
-class TextPart(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    type: Literal["text"]
-    text: str
-
-
-class Message(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    role: Literal["system", "user", "assistant"]
-    content: str | list[TextPart]
-
-
-class ChatRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
-    model: str
-    messages: list[Message] = Field(min_length=1)
-    max_tokens: int | None = Field(default=None, ge=1)
-    max_completion_tokens: int | None = Field(default=None, ge=1)
-    temperature: float = Field(default=0.0, ge=0, le=2)
-    top_p: float = Field(default=1.0, gt=0, le=1)
-    seed: int = Field(default=0, ge=0, le=2**64 - 1)
-    stop: str | list[str] | None = None
-    stream: Literal[False] = False
-    n: Literal[1] = 1
-
-    @model_validator(mode="after")
-    def validate_options(self):
-        if self.max_tokens is not None and self.max_completion_tokens is not None:
-            raise ValueError("Pass only one of max_tokens and max_completion_tokens")
-        stops = [self.stop] if isinstance(self.stop, str) else self.stop or []
-        if len(stops) > 4 or any(not s for s in stops):
-            raise ValueError("stop must contain at most four nonempty strings")
-        return self
-
-    @property
-    def token_limit(self):
-        return self.max_completion_tokens or self.max_tokens or 256
-
-
-class APIError(Exception):
-    def __init__(self, message, status=400, code="invalid_request_error", param=None):
-        self.message, self.status, self.code, self.param = message, status, code, param
+from .serving.protocol import (APIError, ChatRequest, Message, TextPart, anthropic_request,
+                               responses_request, parse_completion)
+from .serving.events import WireResponse
 
 
 class Backend:
@@ -77,15 +38,14 @@ class Backend:
         self.assets = assets
         self.last_metrics = {}
 
-    def complete(self, request):
+    def complete(self, request, *, on_text=None, on_start=None, cancelled=None):
         from jinja2 import TemplateError
         from .generate import load_session
 
-        messages = [{"role": m.role, "content": m.content if isinstance(m.content, str)
-                     else "".join(p.text for p in m.content)} for m in request.messages]
+        messages, tools = request.template_inputs()
         try:
             ids = self.tokenizer.apply_chat_template(messages, tokenize=True, return_dict=False, add_generation_prompt=True,
-                                                     enable_thinking=False)
+                                                     enable_thinking=False, **({'tools': tools} if tools else {}))
         except (ValueError, TemplateError) as exc:
             raise APIError(str(exc), param="messages") from exc
         limit = request.token_limit
@@ -93,6 +53,8 @@ class Backend:
             raise APIError(f"Prompt ({len(ids)} tokens) plus output budget ({limit}) exceeds context capacity "
                            f"({self.max_context}); reduce messages or max_completion_tokens.",
                            code="context_length_exceeded")
+        if on_start:
+            on_start(len(ids))
         assets = getattr(self, 'assets', None)
         recipe_key, options = assets.options(len(ids)) if assets else (None, {'max_context': self.max_context})
         sampling = (request.temperature, request.top_p, request.seed, recipe_key)
@@ -104,7 +66,18 @@ class Backend:
             self.sampling = sampling
         try:
             started = time.perf_counter()
-            generation = self.session.generate(ids, limit)
+            def publish(tokens):
+                if on_text and not tools:
+                    text, _ = self.visible_text(tokens, request)
+                    # Delay the unfinished word and stop-string prefix. This also
+                    # avoids emitting a replacement character for partial UTF-8.
+                    stops = [request.stop] if isinstance(request.stop, str) else request.stop or []
+                    hold = max([len(s) for s in stops] + [1])
+                    safe = text[:-hold]
+                    boundary = max(safe.rfind(' '), safe.rfind('\n')) + 1
+                    on_text(safe[:boundary])
+            options = dict(on_tokens=publish, cancelled=cancelled) if on_text is not None else {}
+            generation = self.session.generate(ids, limit, **options)
             tokens = generation.tokens
             self.last_metrics = dict(steps=getattr(generation, 'steps', 0),
                 decode_gpu_ms=getattr(generation, 'decode_ms', 0.0), wall_ms=(time.perf_counter()-started)*1000,
@@ -113,28 +86,34 @@ class Backend:
             logging.getLogger(__name__).info('Generation: %s', self.last_metrics)
         except ValueError as exc:
             raise APIError(str(exc)) from exc
+        content, finish = self.visible_text(tokens, request)
+        return content, finish, len(ids), len(tokens)
+
+    def visible_text(self, tokens, request):
         eos = self.session.eos
         eos_ids = {eos} if isinstance(eos, int) else set(eos)
         end = next((i for i, token in enumerate(tokens) if token in eos_ids), None)
         finish = "stop" if end is not None else "length"
         visible = tokens[:end] if end is not None else tokens
-        content = self.tokenizer.decode(visible, skip_special_tokens=True)
+        content = self.tokenizer.decode(visible, skip_special_tokens=True, clean_up_tokenization_spaces=False)
         stops = [request.stop] if isinstance(request.stop, str) else request.stop or []
         positions = [content.index(s) for s in stops if s in content]
         if positions:
             content, finish = content[:min(positions)], "stop"
-        return content, finish, len(ids), len(tokens)
+        return content, finish
 
 
 def create_app(backend, model_name, api_key=None):
-    app = FastAPI(title="Monolith Chat", version="0.1")
+    app = FastAPI(title="lithos-metal", version="0.1.0")
     lock = threading.Lock()
     created = int(time.time())
 
     @app.exception_handler(APIError)
-    async def api_error(_request, exc):
+    async def api_error(request, exc):
         kind = {401: "authentication_error", 429: "rate_limit_error", 500: "server_error"}.get(
             exc.status, "invalid_request_error")
+        if request.url.path.startswith('/v1/messages'):
+            return JSONResponse(status_code=exc.status, content={'type': 'error', 'error': {'type': kind, 'message': exc.message}})
         return JSONResponse(status_code=exc.status, content={"error": {
             "message": exc.message, "type": kind, "param": exc.param, "code": exc.code}})
 
@@ -145,8 +124,9 @@ def create_app(backend, model_name, api_key=None):
         return await api_error(request, APIError(f"{param}: {error['msg']}", param=param))
 
     async def authorize(request: Request):
-        if api_key and not secrets.compare_digest(request.headers.get("authorization", "").encode(),
-                                                 f"Bearer {api_key}".encode()):
+        bearer = request.headers.get('authorization', '').removeprefix('Bearer ')
+        key = request.headers.get('x-api-key', '') if request.url.path.startswith('/v1/messages') else ''
+        if api_key and not any(secrets.compare_digest(value.encode(), api_key.encode()) for value in (bearer, key)):
             raise APIError("Invalid API key", 401, "invalid_api_key")
 
     @app.get("/health")
@@ -156,16 +136,26 @@ def create_app(backend, model_name, api_key=None):
     @app.get("/v1/models", dependencies=[Depends(authorize)])
     async def models():
         return {"object": "list", "data": [{"id": model_name, "object": "model", "created": created,
-                                             "owned_by": "monolith"}]}
+            "owned_by": "lithos-metal", "context_window": getattr(backend, 'max_context', 32768)}]}
 
-    @app.post("/v1/chat/completions", dependencies=[Depends(authorize)])
-    def chat(request: ChatRequest):
+    def validate_model(request):
         if request.model != model_name:
             raise APIError(f"Unknown model; use {model_name!r}", 404, "model_not_found", "model")
+
+    def execute(request, wire, **options):
+        content, finish, prompt_tokens, completion_tokens = backend.complete(request, **options)
+        message, finish = parse_completion(content, request, finish)
+        return wire.body(message, finish, prompt_tokens, completion_tokens)
+
+    def dispatch(request, protocol, custom=()):
+        validate_model(request)
         if not lock.acquire(blocking=False):
             raise APIError("The model is busy; retry after the current request finishes", 429, "model_busy")
+        wire = WireResponse(protocol, model_name, custom)
+        if request.stream:
+            return stream(request, wire)
         try:
-            content, finish, prompt_tokens, completion_tokens = backend.complete(request)
+            body = execute(request, wire)
             metrics = dict(getattr(backend, 'last_metrics', {}))
         except APIError:
             raise
@@ -174,25 +164,117 @@ def create_app(backend, model_name, api_key=None):
             raise APIError("Generation failed; see server logs", 500, "generation_failed") from exc
         finally:
             lock.release()
-        headers = {f'X-Monolith-{name}': str(metrics[key]) for name, key in (
+        headers = {f'X-{brand}-{name}': str(metrics[key]) for brand in ('Lithos-Metal', 'LMK', 'Monolith') for name, key in (
             ('Decode-Steps', 'steps'), ('Decode-GPU-Ms', 'decode_gpu_ms'),
             ('Decode-Step-Ms', 'decode_step_ms'), ('Verify-Tokens', 'verify_tokens')) if key in metrics}
-        return JSONResponse(headers=headers, content={"id": f"chatcmpl-{uuid.uuid4().hex}", "object": "chat.completion", "created": int(time.time()),
-                "model": model_name, "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
-                                                  "finish_reason": finish, "logprobs": None}],
-                "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-                          "total_tokens": prompt_tokens + completion_tokens}})
+        return JSONResponse(headers=headers, content=body)
+
+    def stream(request, wire):
+        events = queue.Queue()
+        cancelled = threading.Event()
+        def worker():
+            try:
+                options = dict(on_text=lambda text: events.put(('text', text)),
+                               on_start=lambda count: events.put(('start', count)),
+                               cancelled=cancelled.is_set) if isinstance(backend, Backend) else {}
+                result = execute(request, wire, **options)
+                if not options:
+                    usage = result['usage']
+                    events.put(('start', usage.get('input_tokens', usage.get('prompt_tokens', 0))))
+                events.put(('result', result))
+            except APIError as exc:
+                events.put(('error', (exc.message, exc.code)))
+            except Exception:
+                logging.getLogger(__name__).exception('Streaming generation failed')
+                events.put(('error', ('Generation failed; see server logs', 'generation_failed')))
+            finally:
+                lock.release()
+        # A worker owns the lock from here, even if the response is never consumed.
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        async def generate():
+            try:
+                last_ping = time.monotonic()
+                while True:
+                    if events.empty():
+                        if not thread.is_alive() and events.empty():
+                            yield wire.error('Generation worker terminated', 'generation_failed')
+                            break
+                        await asyncio.sleep(.01)
+                        if time.monotonic() - last_ping > 5:
+                            yield ': keep-alive\n\n'
+                            last_ping = time.monotonic()
+                        continue
+                    kind, value = events.get_nowait()
+                    if kind == 'start':
+                        wire.input_tokens = value
+                        for event in wire.start():
+                            yield event
+                    elif kind == 'text':
+                        if not value.startswith(wire.text):
+                            raise RuntimeError('Decoded text changed after streaming')
+                        for event in wire.delta(value[len(wire.text):]):
+                            yield event
+                    elif kind == 'error':
+                        yield wire.error(*value)
+                        break
+                    else:
+                        if wire.protocol == 'chat':
+                            text = value['choices'][0]['message'].get('content') or ''
+                        elif wire.protocol == 'messages':
+                            text = ''.join(b['text'] for b in value['content'] if b['type'] == 'text')
+                        else:
+                            text = ''.join(p['text'] for b in value['output'] if b['type'] == 'message' for p in b['content'])
+                        for event in wire.delta(text[len(wire.text):]):
+                            yield event
+                        for event in wire.finish(value, bool((request.stream_options or {}).get('include_usage'))):
+                            yield event
+                        break
+            finally:
+                cancelled.set()
+        return StreamingResponse(generate(), media_type='text/event-stream',
+                                 headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+    @app.post("/v1/chat/completions", dependencies=[Depends(authorize)])
+    def chat(request: ChatRequest):
+        return dispatch(request, 'chat')
+
+    def convert(body, converter):
+        try:
+            return converter(body)
+        except (ValidationError, KeyError, TypeError, AttributeError) as exc:
+            raise APIError(f'Invalid request: {exc}') from exc
+
+    @app.post('/v1/messages', dependencies=[Depends(authorize)])
+    def messages(body: dict):
+        return dispatch(convert(body, anthropic_request), 'messages')
+
+    @app.post('/v1/messages/count_tokens', dependencies=[Depends(authorize)])
+    def count_tokens(body: dict):
+        request = convert({**body, 'max_tokens': 1}, anthropic_request)
+        validate_model(request)
+        messages, tools = request.template_inputs()
+        ids = backend.tokenizer.apply_chat_template(messages, tokenize=True, return_dict=False,
+                add_generation_prompt=True, enable_thinking=False, **({'tools': tools} if tools else {}))
+        return {'input_tokens': len(ids)}
+
+    @app.post('/v1/responses', dependencies=[Depends(authorize)])
+    def responses(body: dict):
+        request, custom = convert(body, responses_request)
+        return dispatch(request, 'responses', custom)
 
     return app
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="lithos-metal serve", description=__doc__)
     parser.add_argument("--model", required=True, help="Hugging Face repo ID or local checkpoint path")
-    parser.add_argument("--draft", "--drafter", dest="draft", help="DSpark Hugging Face repo ID or local checkpoint path")
+    draft = parser.add_mutually_exclusive_group()
+    draft.add_argument("--draft", "--drafter", dest="draft", help="Override the automatically selected DSpark head (Hub ID or local path)")
+    draft.add_argument("--no-draft", action='store_true', help="Disable automatic DSpark speculative decoding")
     parser.add_argument("--draft-kind", choices=['dspark'], default='dspark')
     parser.add_argument("--draft-block-size", type=int, help="Draft proposals per round (default: up to seven, plus one target anchor)")
-    parser.add_argument("--pack", help="Local pack-cache directory (default: $XDG_CACHE_HOME/monolith/packs); existing packs also accepted")
+    parser.add_argument("--pack", help="Local pack-cache directory (default: $XDG_CACHE_HOME/lithos-metal/packs; reuses legacy cache); existing packs also accepted")
     parser.add_argument("--draft-pack", help="Optional separate draft cache or existing draft pack")
     parser.add_argument("--draft-quantization", choices=['auto', 'none', 'nvfp4'], default='auto',
                         help="auto uses validated chip-specific NVFP4 draft recipes when available; otherwise source precision")
@@ -203,11 +285,14 @@ def parse_args(argv=None):
     parser.add_argument("--kernel-config", help="Optional explicit target/draft recipe JSON; defaults to matching chip recipes")
     parser.add_argument("--kernel-config-key", help="Pin a context key in the selected recipe map")
     parser.add_argument("--served-model-name", default=None)
-    parser.add_argument("--max-context", type=int, default=4096)
+    parser.add_argument("--max-context", type=int, default=32768)
     parser.add_argument("--prefill-chunk-size", type=int, default=128, help="Prompt tokens per prefill pass (default: 128)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
+    from .models.catalog import default_draft
+    if not args.draft and not args.no_draft:
+        args.draft = default_draft(args.model)
     if args.max_context < 1:
         parser.error("--max-context must be positive")
     if args.prefill_chunk_size < 1:
@@ -216,7 +301,7 @@ def parse_args(argv=None):
         parser.error('--draft-block-size must be positive')
     if not args.draft and (args.draft_pack or args.draft_revision or args.draft_block_size is not None or args.kernel_config or args.kernel_config_key
                           or args.draft_quantization != 'auto'):
-        parser.error('draft options require --draft')
+        parser.error('draft options require --draft or a target with an automatic DSpark head')
     return args
 
 
@@ -227,9 +312,12 @@ def main(argv=None):
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     assets = prepare(args)
-    api_key = os.environ.get("MONOLITH_API_KEY")
+    api_key = os.environ.get("LITHOS_METAL_API_KEY") or os.environ.get("LMK_API_KEY") or os.environ.get("MONOLITH_API_KEY")
     backend = Backend(str(assets.model_dir), str(assets.pack_dir), args.max_context, args.prefill_chunk_size, assets=assets)
-    app = create_app(backend, args.served_model_name or Path(args.model).name, api_key)
+    model_name = args.served_model_name or (assets.model_dir.name if Path(args.model).expanduser().exists() else args.model)
+    app = create_app(backend, model_name, api_key)
+    logging.getLogger(__name__).info('lithos-metal ready: http://%s:%s — model=%s; DSpark=%s; verification rows=%s',
+                                   args.host, args.port, model_name, args.draft or 'disabled', assets.gamma + 1)
     uvicorn.run(app, host=args.host, port=args.port, workers=1)
 
 

@@ -102,8 +102,8 @@ def _group_tiles(source,key_tile=32):
     end = source.index('\n#if DIRECT_KV\n// Prepare', start)
     body = source[start:end]
     body = _replace(body, 'chunks = (ctx + KN - 1u) / KN;', 'chunks = (ctx + CH - 1u) / CH;')
-    body = _replace(body, '  threadgroup bfloat prob[QM * KN];',
-        '  threadgroup bfloat prob[QM * KN];\n  threadgroup float row_md[QM * 2];\n  threadgroup float carry[QM * 2];')
+    body = _replace(body, '  threadgroup GqaProbability prob[QM * KN];',
+        '  threadgroup GqaProbability prob[QM * KN];\n  threadgroup float row_md[QM * 2];\n  threadgroup float carry[QM * 2];')
     begin = '''#if !DIRECT_KV
     for (uint kk = sgi; kk < KN; kk += MMA_SG) {'''
     if body.count(begin)!=2:
@@ -111,7 +111,7 @@ def _group_tiles(source,key_tile=32):
     body = body.replace(begin, '''
     matmul2d<value_desc, execution_simdgroups<MMA_SG>> value_op;
     GqaTG vt(kv_tile, dextents<int, 2>(D, KN));
-    auto accum = value_op.get_destination_cooperative_tensor<GqaTG, GqaTG, float>();
+    auto accum = value_op.get_destination_cooperative_tensor<GqaProbTG, GqaTG, float>();
     for (uint16_t i=0; i<accum.get_capacity(); i++) if (accum.is_valid_element(i)) accum[i]=0.0f;
     for (uint r=sgi; r<QM; r+=MMA_SG) if (lane==0) { row_md[2*r]=-INFINITY; row_md[2*r+1]=0.0f; }
     for (uint sub=0; sub<CH/KN && c*CH+sub*KN<ctx; sub++) {
@@ -123,7 +123,7 @@ def _group_tiles(source,key_tile=32):
         body=body.replace('KN / 32','((KN + 31u) / 32u)')
         body=body.replace('row < rows && key < ctx && key <= position + t ?', 'row < rows && lane + u * 32 < KN && key < ctx && key <= position + t ?')
         body=body.replace('row < rows && key < ctx ?', 'row < rows && lane + u * 32 < KN && key < ctx ?')
-        body=body.replace('prob[r * KN + lane + u * 32] = bfloat(pr);', 'if (lane + u * 32 < KN) prob[r * KN + lane + u * 32] = bfloat(pr);')
+        body=_replace(body, 'prob[r * KN + lane + u * 32] = GqaProbability(pr);', 'if (lane + u * 32 < KN) prob[r * KN + lane + u * 32] = GqaProbability(pr);')
     begin = body.index('      if (lane == 0 && row < rows) {')
     endmd = body.index('\n    }\n#if !DIRECT_KV', begin)
     body = body[:begin]+'''      if (lane == 0) {
@@ -135,7 +135,7 @@ def _group_tiles(source,key_tile=32):
         carry[2*r]=a; carry[2*r+1]=b;
       }'''+body[endmd:]
     # The value operation and staged view live outside the bounded inner loop.
-    body = _replace(body, '    matmul2d<value_desc, execution_simdgroups<MMA_SG>> value_op;\n    GqaTG pt', '    GqaTG pt')
+    body = _replace(body, '    matmul2d<value_desc, execution_simdgroups<MMA_SG>> value_op;\n    GqaProbTG pt', '    GqaProbTG pt')
     body = _replace(body, '#else\n    GqaTG vt(kv_tile, dextents<int, 2>(D, KN));\n#endif', '#endif')
     begin = body.index('    for (uint16_t i = 0; i < out.get_capacity(); i++) if (out.is_valid_element(i)) {')
     body = body[:begin]+'''    for (uint16_t i=0; i<out.get_capacity(); i++) if (out.is_valid_element(i)) {

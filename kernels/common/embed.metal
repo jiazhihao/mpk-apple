@@ -7,7 +7,8 @@
 // Tokens outside [0, vocab) read row 0 (never out of bounds; the sampler guarantees valid ids).
 // EMBED_DEQUANT 1: the packed slab is a quantized format (its decode snippet is pasted ahead of this file): every
 //                 element is decoded (code · scale [+ bias] of its group) and rounded to BF16 — the row the reference
-//                 model's dequantized embedding holds. Needs a per-tensor scale of 1 (int4_affine, int8).
+//                 model's dequantized embedding holds. EMBED_ROW_SCALE applies the packed slab's per-row
+//                 tensor scales (NVFP4 / FP8); otherwise the tensor scale is one.
 // EMBED_IDS 1: a draft block (design §5.8) — row 0 reads tokens[0] (the anchor), rows ≥ 1 take the mask id from params.
 // With STEP_STATE, T_SRC selects the row count: 0 = t_this_step, 1 = n_inject, 2 = the static T_STATIC_ROWS.
 #ifndef EMBED_PACKED
@@ -18,6 +19,9 @@
 #endif
 #ifndef EMBED_DEQUANT
 #define EMBED_DEQUANT 0
+#endif
+#ifndef EMBED_ROW_SCALE
+#define EMBED_ROW_SCALE 0
 #endif
 #ifndef SCALE_BIAS
 #define SCALE_BIAS 0
@@ -95,6 +99,9 @@ static inline uint4 payload_scale_word(device const uint4* wb, uint ln, uint r, 
 
 kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* table [[buffer(1)]], device uint4* h [[buffer(2)]],
                   constant EmbedParams& p [[buffer(3)]],
+#if EMBED_ROW_SCALE
+                  device const float* row_scales [[buffer(4)]],
+#endif
 #if STEP_STATE
                   device const StepState* st [[buffer(15)]],
 #endif
@@ -135,6 +142,9 @@ kernel void embed(device const int* tokens [[buffer(0)]], device const uint4* ta
       float v = wv[e] * decode_scale(scw + SCALE_UOFF, SCALE_SOFF(lane) + g);
 #if SCALE_BIAS
       v += decode_bias(scw + SCALE_UOFF, SCALE_SOFF(lane) + g);
+#endif
+#if EMBED_ROW_SCALE
+      v *= row_scales[tok];
 #endif
       uint u = as_type<uint>(v); u += 0x7FFFu + ((u >> 16) & 1u);
       orow[c] = ushort(u >> 16);

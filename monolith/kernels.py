@@ -13,7 +13,9 @@ from .formats import FORMATS
 from .formats.blm import PackInfo
 from .backends.metal.context import current_backend
 
-KERNELS_DIR = Path(__file__).resolve().parents[1] / "kernels" / "common"
+from .resources import kernel_root
+
+KERNELS_DIR = kernel_root() / "common"
 PRELUDE = "#include <metal_stdlib>\nusing namespace metal;\n"
 
 # PERM_OUT: a kernel that produces a tile GEMV's input writes it in x_permute's order (gemm_tile.metal's x') straight
@@ -398,9 +400,10 @@ def embed_source(fmt: Optional[str] = None) -> str:
     return PRELUDE + FORMATS.get(fmt).msl_decode + "\n" + template("embed.metal")
 
 
-def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None) -> Dict[str, str]:
+def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None, row_scales: bool = False) -> Dict[str, str]:
     """``info`` = the slab a tied lm_head streams (gather from the pack: a BF16 slab, or a quantized one decoded on
-    the fly — a format with block scales and a per-tensor scale of 1), None = a row-major BF16 table.
+    the fly — a format with block scales), None = a row-major BF16 table. ``row_scales=True`` binds
+    the per-row tensor-scale table at buffer 4; otherwise quantized tensor scales must be one.
     ``ids="block"``: a draft block — row 0 reads the token at ``tokens[0]`` (the anchor), the other rows the mask id.
     ``ids="ingest"``: an LM drafter's ingest — row t reads the committed token ``tokens[checkpoint_index − n_inject + t]``
     (the last ``n_inject`` of the step's pending tokens); ``ids="ingest_anchor"``: those rows, then the anchor (its first chain step)."""
@@ -413,11 +416,11 @@ def embed_macros(info: Optional[PackInfo] = None, *, ids: Optional[str] = None) 
                   "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1"}
     else:
         f = FORMATS.get(info.format)
-        if not f.scale_group or abs(info.tensor_scale - 1.0) > 0:
-            raise ValueError(f"embed: a packed {info.format} table needs block scales and no per-tensor scale")
+        if not f.scale_group or (not row_scales and abs(info.tensor_scale - 1.0) > 0):
+            raise ValueError(f"embed: a packed {info.format} table needs block scales and tensor scales must be bound")
         if info.lanes_per_word > 1:
             raise ValueError(f"embed: sub-word units (K={info.k}) are the shader GEMV's; the gather reads whole-word units")
-        macros = {"EMBED_PACKED": "1", "EMBED_DEQUANT": "1", "R": str(info.rows), "UNIT_WORDS": unit_words(info),
+        macros = {"EMBED_PACKED": "1", "EMBED_DEQUANT": "1", "EMBED_ROW_SCALE": str(int(row_scales)), "R": str(info.rows), "UNIT_WORDS": unit_words(info),
                   "K": str(info.k), "LANE_ORDER": "0" if info.lane_order == "contiguous" else "1", **unit_geometry(info, f)}
     if ids not in (None, "block", "ingest", "ingest_anchor"):
         raise ValueError(f"embed: unknown ids mode {ids!r}")

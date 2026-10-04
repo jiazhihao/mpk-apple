@@ -189,7 +189,8 @@ class Session:
                 if spec.role in ("state", "step_state", "ring"):
                     eng.buffers[name].fill(0)
 
-    def generate(self, prompt_ids: List[int], max_new_tokens: int, *, steps_per_cb: int = 8, in_flight: int = 3) -> Generation:
+    def generate(self, prompt_ids: List[int], max_new_tokens: int, *, steps_per_cb: int = 8, in_flight: int = 3,
+                 on_tokens=None, cancelled=None) -> Generation:
         p = len(prompt_ids)
         if p < 1:
             raise ValueError("the prompt must have at least one token")
@@ -213,6 +214,8 @@ class Session:
         prefill_ms = 0.0
         tokens: List[int] = []
         for k, chunk in enumerate(chunks):
+            if cancelled and cancelled():
+                return Generation([], prefill_ms, 0, 0, 0, 0)
             # the host writes each chunk's tokens and length; the advance emits only after the last chunk
             state = self.layout.unpack(st.read(0, self.layout.size))
             state.update(t_this_step=len(chunk), pending_tokens=chunk, prefill_left=len(chunks) - 1 - k,
@@ -222,10 +225,12 @@ class Session:
             r1 = pre.run(1, steps_per_cb=1, in_flight=1)
             prefill_ms += r1.gpu_ms
             tokens += r1.tokens
+        if on_tokens:
+            on_tokens(tokens)
         dec_ms = dec_wall = host = 0.0
         steps = 0
         n_pre = len(tokens)
-        if max_new_tokens > 1 and not r1.done:
+        if max_new_tokens > 1 and not r1.done and not (cancelled and cancelled()):
             if self.decoder_kernel_config is not None:
                 self.buffers = {n: b for n, b in pre.buffers.items()
                                 if pre.program.buffers[n].role in ('state', 'step_state', 'ring')
@@ -233,7 +238,28 @@ class Session:
                 self.engines.clear()
                 self._last_engine = None
                 del pre
-            if self.drafter is None:
+            if on_tokens:
+                # Bound each host pump for incremental output/cancellation, while
+                # retaining the complete speculative round and its kernel recipe.
+                dec = self.engine(0 if self.drafter is not None else 1)
+                self._last_engine = dec
+                while len(tokens) < max_new_tokens and not (cancelled and cancelled()):
+                    need = max_new_tokens - len(tokens)
+                    r2 = dec.run(min(4 if self.drafter else 8, need),
+                                 steps_per_cb=self.spec_steps_per_cb if self.drafter else steps_per_cb,
+                                 in_flight=self.spec_in_flight if self.drafter else in_flight,
+                                 max_tokens=need)
+                    tokens += r2.tokens
+                    dec_ms += r2.gpu_ms
+                    dec_wall += r2.wall_ms
+                    host += r2.host_busy_ms
+                    steps += r2.steps
+                    on_tokens(tokens[:max_new_tokens])
+                    if r2.done:
+                        break
+                    if not r2.tokens:
+                        raise RuntimeError('Streaming decode made no progress')
+            elif self.drafter is None:
                 dec = self.engine(1)
                 self._last_engine = dec
                 r2 = dec.run(max_new_tokens - 1, steps_per_cb=steps_per_cb, in_flight=in_flight)
@@ -249,7 +275,7 @@ class Session:
                 r2 = dec.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
                 tokens += r2.tokens
                 dec_ms, dec_wall, host, steps = r2.gpu_ms, r2.wall_ms, r2.host_busy_ms, r2.steps
-        if len(tokens) < max_new_tokens:
+        if len(tokens) < max_new_tokens and not (cancelled and cancelled()):
             err = int(self._last_engine.state()["error"])        # 1: the ring overflowed; 2: the context filled (the pump's over-run
             if err:                                               # past a request that fits sets 2 harmlessly, so only a short result is one)
                 raise RuntimeError(f"generate: the program stopped with error {err} after {len(tokens)} of {max_new_tokens} tokens "

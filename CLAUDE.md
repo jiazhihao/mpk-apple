@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-Context for anyone (human or agent) picking this repo up on another machine. Working codename: **Monolith** — a
-placeholder; do not use the MPK or Mirage names for this engine.
+Context for anyone (human or agent) picking this repo up on another machine. Project name: **lithos-metal**. The Python import namespace remains
+`monolith` for compatibility; use `lithos-metal` for public CLI examples.
 
 ## What this is
 
