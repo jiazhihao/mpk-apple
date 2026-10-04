@@ -1,0 +1,30 @@
+FORMAT nvfp4
+START precision-refine-nvfp4-mixer-128
+END precision-refine-nvfp4-mixer-128 0
+START precision-refine-nvfp4-mixer-128-finalists
+END precision-refine-nvfp4-mixer-128-finalists 0
+START precision-refine-nvfp4-mixer-32768
+END precision-refine-nvfp4-mixer-32768 0
+START precision-refine-nvfp4-mixer-32768-finalists
+END precision-refine-nvfp4-mixer-32768-finalists 0
+START precision-refine-nvfp4-markov-128
+END precision-refine-nvfp4-markov-128 0
+START precision-refine-nvfp4-markov-128-finalists
+END precision-refine-nvfp4-markov-128-finalists 0
+START precision-refine-nvfp4-feature_scalar-128
+END precision-refine-nvfp4-feature_scalar-128 0
+START precision-refine-nvfp4-feature_scalar-128-finalists
+END precision-refine-nvfp4-feature_scalar-128-finalists 0
+START precision-refine-nvfp4-context_kv_scalar-128
+END precision-refine-nvfp4-context_kv_scalar-128 0
+START precision-refine-nvfp4-context_kv_scalar-128-finalists
+END precision-refine-nvfp4-context_kv_scalar-128-finalists 0
+START precision-refine-nvfp4-mlp-128
+END precision-refine-nvfp4-mlp-128 0
+START precision-refine-nvfp4-mlp-128-finalists
+END precision-refine-nvfp4-mlp-128-finalists 0
+START full-nvfp4-refined-128
+END full-nvfp4-refined-128 0
+START full-nvfp4-refined-32768
+END full-nvfp4-refined-32768 0
+DONE precision refinement nvfp4

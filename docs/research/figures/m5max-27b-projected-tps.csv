@@ -1,0 +1,21 @@
+backend,context_tokens,target_rows,assumed_accepted_tokens,latency_ms,projected_tps,latency_basis
+Lithos Metal,128,8,6,35.74960286403075,167.83403224982015,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+Lithos Metal,4096,8,6,37.76497265370563,158.8773823568825,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+Lithos Metal,8192,8,6,39.16208463255316,153.20941304060585,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+Lithos Metal,16384,8,6,42.0380546846427,142.72782232694306,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+Lithos Metal,32768,8,6,47.4046484362334,126.56986599259204,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+MLX,128,8,6,66.78026553208838,89.84690240737301,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+MLX,4096,8,6,71.95114306432515,83.38991910991506,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+MLX,8192,8,6,76.3535429091462,78.58181521634768,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+MLX,16384,8,6,86.0129816578592,69.75691208876685,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+MLX,32768,8,6,101.17876697177053,59.300979638089835,sum of isolated decoder-layer minima; 128-token GDN reused at all contexts
+Ollama,128,8,6,71.1903545,84.28108052194065,median full forward; final state; FP8 projections materialized to BF16
+Ollama,4096,8,6,75.8528545,79.10051690935374,median full forward; final state; FP8 projections materialized to BF16
+Ollama,8192,8,6,82.89725,72.37875804082765,median full forward; final state; FP8 projections materialized to BF16
+Ollama,16384,8,6,92.6529165,64.75781040308644,median full forward; final state; FP8 projections materialized to BF16
+Ollama,32768,8,6,113.8179375,52.71576810992556,median full forward; final state; FP8 projections materialized to BF16
+vLLM-Metal,128,8,6,78.03339599922765,76.89015610776937,median paged-prefill full-forward proxy; FP8 projections materialized to BF16
+vLLM-Metal,4096,8,6,94.511354000133,63.48443595455797,median paged-prefill full-forward proxy; FP8 projections materialized to BF16
+vLLM-Metal,8192,8,6,112.4027290061349,53.3794868954874,median paged-prefill full-forward proxy; FP8 projections materialized to BF16
+vLLM-Metal,16384,8,6,147.1444995040656,40.776243897817054,median paged-prefill full-forward proxy; FP8 projections materialized to BF16
+vLLM-Metal,32768,8,6,215.46187499916414,27.847153933953635,median paged-prefill full-forward proxy; FP8 projections materialized to BF16

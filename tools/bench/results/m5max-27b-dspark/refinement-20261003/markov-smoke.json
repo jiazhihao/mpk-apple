@@ -1,0 +1,11 @@
+[
+  {
+    "markov": {
+      "workers": 80,
+      "sgs": 4,
+      "rg": 4,
+      "rsplit": 1,
+      "x_hoist": true
+    }
+  }
+]

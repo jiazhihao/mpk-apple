@@ -35,7 +35,7 @@ The 8-token baseline uses the same implementation with `prefill_chunk_size=8`.
 
 All 16 greedy output tokens matched between chunk sizes at every prompt length. These measurements cover this
 model and device; they do not establish a speedup for other models, drafters, or Apple GPU generations.
-Raw samples: [`apple-m5-pro-20c_prefill_20260928.jsonl`](../../tools/bench/results/apple-m5-pro-20c_prefill_20260928.jsonl).
+Raw samples: [`apple-m5-pro-20c_prefill_20260928.jsonl`](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_prefill_20260928.jsonl).
 
 ```sh
 python tools/bench/prefill_chunks.py --model /path/to/checkpoint --pack /path/to/pack

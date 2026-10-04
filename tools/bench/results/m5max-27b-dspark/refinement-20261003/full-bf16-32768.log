@@ -1,0 +1,35 @@
+PREFILL 32768 1 / 256
+PREFILL 32768 33 / 256
+PREFILL 32768 65 / 256
+PREFILL 32768 97 / 256
+PREFILL 32768 129 / 256
+PREFILL 32768 161 / 256
+PREFILL 32768 193 / 256
+PREFILL 32768 225 / 256
+READY optimized 32768 313
+Traceback (most recent call last):
+  File "/Users/zhihaojia/lithos/mpk-apple/tools/bench/dspark_round_latency.py", line 276, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/Users/zhihaojia/lithos/mpk-apple/tools/bench/dspark_round_latency.py", line 245, in main
+    row['recipe_comparison']=compare_recipe(s,e,previous,restore,samples[0],reps=a.reps,warmup=a.warmup)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/zhihaojia/lithos/mpk-apple/tools/bench/dspark_round_latency.py", line 134, in compare_recipe
+    for label in engines:run(label)
+                         ^^^^^^^^^^
+  File "/Users/zhihaojia/lithos/mpk-apple/tools/bench/dspark_round_latency.py", line 126, in run
+    result = e.run(1,steps_per_cb=1,in_flight=1)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/zhihaojia/lithos/mpk-apple/monolith/runtime/engine.py", line 88, in run
+    raise RuntimeError("Megakernel: bounded worker barrier timed out")
+RuntimeError: Megakernel: bounded worker barrier timed out
+PREFILL 32768 1 / 256
+PREFILL 32768 33 / 256
+PREFILL 32768 65 / 256
+PREFILL 32768 97 / 256
+PREFILL 32768 129 / 256
+PREFILL 32768 161 / 256
+PREFILL 32768 193 / 256
+PREFILL 32768 225 / 256
+READY optimized 32768 313
+RESULT 32768 62.708083336474374 {'verification': 48.9956249948591, 'accept_commit': 1.3281250139698386, 'draft': 12.992749980185181} accepted 7

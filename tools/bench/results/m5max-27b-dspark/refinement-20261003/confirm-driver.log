@@ -1,0 +1,21 @@
+START mlp-coupled
+END mlp-coupled 0
+START markov-chain-confirm
+END markov-chain-confirm 0
+START mixer-projection-refine
+END mixer-projection-refine 0
+START mixer-confirm-128
+END mixer-confirm-128 0
+START mixer-confirm-4096
+END mixer-confirm-4096 0
+START mixer-confirm-8192
+END mixer-confirm-8192 0
+START mixer-confirm-16384
+END mixer-confirm-16384 0
+START mixer-confirm-32768
+END mixer-confirm-32768 0
+START full-bf16-32768
+END full-bf16-32768 0
+START baseline-generation
+END baseline-generation 0
+DONE BF16 confirmation

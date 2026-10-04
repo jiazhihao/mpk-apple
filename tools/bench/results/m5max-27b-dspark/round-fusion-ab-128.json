@@ -1,0 +1,676 @@
+{
+  "mode": "optimized",
+  "config": {
+    "bf16_min_t": 2,
+    "draft_attention": "mma",
+    "draft": {
+      "mixer": {
+        "workers": 80,
+        "sgs": 4,
+        "tn": 32,
+        "compact": true,
+        "split": true,
+        "barrier": "simd",
+        "task_barrier": false,
+        "schedule": "queue",
+        "task_grain": "tile",
+        "task_seed": true,
+        "task_seed_bound": true
+      },
+      "mlp": {
+        "workers": 80,
+        "sgs": 4,
+        "tn": 16,
+        "compact": true,
+        "ksplit": 4,
+        "mode": "native",
+        "staged_tk": 128
+      }
+    },
+    "target": {
+      "gdn": {
+        "shape": [
+          5120,
+          16,
+          48,
+          128,
+          128,
+          4
+        ],
+        "workers": 80,
+        "sgs": 8,
+        "tn": 32,
+        "split": true,
+        "compact": true,
+        "gdn_sl": 8,
+        "barrier": "simd",
+        "task_barrier": false,
+        "scalar_sgs": 8,
+        "fp8_layout": "tile",
+        "q_outer": 0,
+        "fp8_decode": "subtract",
+        "fp8_tile_block": 8,
+        "restrict_weights": false,
+        "gemm_overrides": {
+          "3": {
+            "tn": 32,
+            "ksplit": 4,
+            "groups": 120,
+            "ragged_teams": true
+          },
+          "0": {
+            "tn": 32,
+            "ksplit": 2,
+            "groups": 240,
+            "ragged_teams": true
+          },
+          "1": {
+            "tn": 16,
+            "ksplit": 8,
+            "groups": 240,
+            "ragged_teams": true
+          },
+          "2": {
+            "tn": 32,
+            "ksplit": 8,
+            "groups": 120,
+            "ragged_teams": true
+          }
+        },
+        "perm_sgs": 64,
+        "direct_norm": true,
+        "dual_permute": true
+      },
+      "attention": {
+        "attention_chunk_tiles": 3,
+        "attention_compact_partials": true,
+        "attention_groups": 320,
+        "attention_prepare": false,
+        "attention_qm": 8,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "direct_norm": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 2,
+            "q_outer": 0,
+            "tn": 32
+          },
+          "1": {
+            "fp8_tile_block": 32
+          }
+        },
+        "merge_unroll": 4,
+        "perm_sgs": 32,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 4,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "task_seed_bound": true,
+        "tn": 32,
+        "workers": 160
+      },
+      "mlp": {
+        "cache_external_inputs": false,
+        "compact": true,
+        "gemm_overrides": {
+          "1": {
+            "groups": 640
+          }
+        },
+        "ksplit": 4,
+        "mode": "native",
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 32,
+        "post_norm_loads": 16,
+        "post_norm_once": true,
+        "post_norm_prefold": false,
+        "sgs": 4,
+        "staged_tk": 64,
+        "tn": 32,
+        "workers": 160
+      }
+    }
+  },
+  "chip": "Apple M5 Max",
+  "cores": 40,
+  "weights": "target NVFP4/FP8; draft original BF16, shared target embedding and LM head",
+  "semantics": "seven drafts plus anchor verified; acceptance/commit and next drafting included; nonterminal replay",
+  "prompt_sha256": "c913ab9975beb8c592556d4e9a63305edfdbb1b89ead4fc24126ad492a753628",
+  "contexts": [
+    {
+      "context": 128,
+      "prefill_ms": 342.84558333456516,
+      "initial_drafts": [
+        10885,
+        11,
+        1558,
+        13914,
+        11,
+        2193,
+        27396
+      ],
+      "samples": [
+        {
+          "gpu_ms": 51.95262501365505,
+          "wall_ms": 52.50354164838791,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 51.87799999839626,
+          "wall_ms": 52.2513333261013,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 51.88666668254882,
+          "wall_ms": 52.298291712999344,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 52.30875001871027,
+          "wall_ms": 52.872749984264374,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 52.15474998112768,
+          "wall_ms": 52.61487498879433,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 52.60383334825747,
+          "wall_ms": 53.78954169154167,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 53.23708330979571,
+          "wall_ms": 54.36229166388512,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 52.721249987371266,
+          "wall_ms": 53.156333327293396,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 52.912333339918405,
+          "wall_ms": 54.062375009059906,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 52.39229169092141,
+          "wall_ms": 53.53700000047684,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        },
+        {
+          "gpu_ms": 52.649916644440964,
+          "wall_ms": 53.675999999046326,
+          "tokens": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396,
+            11
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            321,
+            33625,
+            15579,
+            13,
+            8618,
+            9064,
+            369
+          ]
+        }
+      ],
+      "generated_source_sha256": "58b46eaa437c09ba7f777cb20a7ed6646b946a743cf9dda3199f4d1f777cd528",
+      "dispatches": 313,
+      "gpu_ms_min": 51.87799999839626,
+      "gpu_ms_median": 52.39229169092141,
+      "gpu_ms_max": 53.23708330979571,
+      "wall_ms_median": 53.156333327293396,
+      "stage_medians": {
+        "verification": 39.714999991701916,
+        "accept_commit": 1.5443750016856939,
+        "draft": 11.017166660167277
+      },
+      "stages": [
+        {
+          "verification": 39.714999991701916,
+          "accept_commit": 1.3269583287183195,
+          "draft": 11.189333337824792
+        },
+        {
+          "verification": 39.845499995863065,
+          "accept_commit": 1.2981249892618507,
+          "draft": 10.93462502467446
+        },
+        {
+          "verification": 39.69087501172908,
+          "accept_commit": 1.6091249999590218,
+          "draft": 10.978750011418015
+        },
+        {
+          "verification": 40.07495834957808,
+          "accept_commit": 1.3090416905470192,
+          "draft": 11.354625021340325
+        },
+        {
+          "verification": 40.32383332378231,
+          "accept_commit": 1.5440416464116424,
+          "draft": 11.171874997671694
+        },
+        {
+          "verification": 39.63150002527982,
+          "accept_commit": 1.8153749988414347,
+          "draft": 11.192375008249655
+        },
+        {
+          "verification": 39.68124999664724,
+          "accept_commit": 1.3295416720211506,
+          "draft": 10.945624992018566
+        },
+        {
+          "verification": 39.205499982926995,
+          "accept_commit": 1.5443750016856939,
+          "draft": 11.068749998230487
+        },
+        {
+          "verification": 39.23504165140912,
+          "accept_commit": 1.5929166693240404,
+          "draft": 10.924750007689
+        },
+        {
+          "verification": 39.96512500452809,
+          "accept_commit": 1.6142083331942558,
+          "draft": 10.90620830655098
+        },
+        {
+          "verification": 39.782541658496484,
+          "accept_commit": 1.6478750039823353,
+          "draft": 11.017166660167277
+        }
+      ],
+      "split_bit_exact": true,
+      "replay_bit_exact": true,
+      "draft_fusion_comparison": {
+        "pairs": [
+          {
+            "control": {
+              "gpu_ms": 53.74658331857063,
+              "wall_ms": 54.24029165506363
+            },
+            "fused": {
+              "gpu_ms": 53.70495832175948,
+              "wall_ms": 54.72654169797897
+            },
+            "order": [
+              "control",
+              "fused"
+            ]
+          },
+          {
+            "fused": {
+              "gpu_ms": 53.642208338715136,
+              "wall_ms": 54.5886667072773
+            },
+            "control": {
+              "gpu_ms": 52.911374979885295,
+              "wall_ms": 54.02245834469795
+            },
+            "order": [
+              "fused",
+              "control"
+            ]
+          },
+          {
+            "control": {
+              "gpu_ms": 53.277375001925975,
+              "wall_ms": 54.38162499666214
+            },
+            "fused": {
+              "gpu_ms": 53.1394999998156,
+              "wall_ms": 54.24187499284744
+            },
+            "order": [
+              "control",
+              "fused"
+            ]
+          },
+          {
+            "fused": {
+              "gpu_ms": 53.439083334524184,
+              "wall_ms": 54.12187501788139
+            },
+            "control": {
+              "gpu_ms": 52.30379168642685,
+              "wall_ms": 52.77129164338112
+            },
+            "order": [
+              "fused",
+              "control"
+            ]
+          },
+          {
+            "control": {
+              "gpu_ms": 52.114708320004866,
+              "wall_ms": 52.5297916829586
+            },
+            "fused": {
+              "gpu_ms": 51.7587500216905,
+              "wall_ms": 52.15170830488205
+            },
+            "order": [
+              "control",
+              "fused"
+            ]
+          },
+          {
+            "fused": {
+              "gpu_ms": 52.38037501112558,
+              "wall_ms": 53.51962500810623
+            },
+            "control": {
+              "gpu_ms": 52.404999994905666,
+              "wall_ms": 53.49933335185051
+            },
+            "order": [
+              "fused",
+              "control"
+            ]
+          },
+          {
+            "control": {
+              "gpu_ms": 52.75916666141711,
+              "wall_ms": 53.81554165482521
+            },
+            "fused": {
+              "gpu_ms": 53.43004167662002,
+              "wall_ms": 54.581583350896835
+            },
+            "order": [
+              "control",
+              "fused"
+            ]
+          },
+          {
+            "fused": {
+              "gpu_ms": 53.03949999506585,
+              "wall_ms": 54.07199999690056
+            },
+            "control": {
+              "gpu_ms": 53.66220831638202,
+              "wall_ms": 54.69537499547005
+            },
+            "order": [
+              "fused",
+              "control"
+            ]
+          },
+          {
+            "control": {
+              "gpu_ms": 52.332833351101726,
+              "wall_ms": 52.73825001716614
+            },
+            "fused": {
+              "gpu_ms": 52.43562499526888,
+              "wall_ms": 52.89624997973442
+            },
+            "order": [
+              "control",
+              "fused"
+            ]
+          },
+          {
+            "fused": {
+              "gpu_ms": 52.63349998858757,
+              "wall_ms": 53.041333347558975
+            },
+            "control": {
+              "gpu_ms": 53.071500005899,
+              "wall_ms": 54.17612501978874
+            },
+            "order": [
+              "fused",
+              "control"
+            ]
+          },
+          {
+            "control": {
+              "gpu_ms": 52.831583336228505,
+              "wall_ms": 53.86008331179619
+            },
+            "fused": {
+              "gpu_ms": 52.167249988997355,
+              "wall_ms": 52.62670832872391
+            },
+            "order": [
+              "control",
+              "fused"
+            ]
+          }
+        ],
+        "tokens_equal": true,
+        "control_source_sha256": "f1705d27087d8cc2d8bb112f514aa744025953ab41690c473777c59c9b772f8f",
+        "control_dispatches": 328,
+        "control_gpu_ms_min": 52.114708320004866,
+        "fused_gpu_ms_min": 51.7587500216905,
+        "control_gpu_ms_median": 52.831583336228505,
+        "fused_gpu_ms_median": 53.03949999506585
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+START cooperative-shader-validation
+END cooperative-shader-validation 0
+START mixer-cooperative-128
+END mixer-cooperative-128 0
+START mixer-cooperative-32768
+END mixer-cooperative-32768 0
+DONE cooperative screen

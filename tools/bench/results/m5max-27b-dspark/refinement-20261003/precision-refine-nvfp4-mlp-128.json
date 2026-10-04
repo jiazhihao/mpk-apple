@@ -1,0 +1,1469 @@
+[
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 2,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 160
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 320
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 320
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 160
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 4,
+          "tn": 32,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 32,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 2,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 4,
+          "tn": 32,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 4,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 4,
+          "tn": 32,
+          "compact": true,
+          "ksplit": 2,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 4,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 160
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 2,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 320
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 4,
+          "staged_tk": 128,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "groups": 80,
+          "sgs": 1,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 1,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "groups": 160,
+          "sgs": 1,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 1,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "groups": 80,
+          "sgs": 2,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 2,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "groups": 160,
+          "sgs": 2,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 2,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "groups": 80,
+          "sgs": 16,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "groups": 160,
+          "sgs": 16,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "groups": 80,
+          "sgs": 32,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "groups": 160,
+          "sgs": 32,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 2,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 160
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 320
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 320
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 160
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 4,
+          "tn": 32,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 8,
+          "tn": 32,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 2,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 4,
+          "tn": 32,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 4,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 4,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 4,
+          "tn": 32,
+          "compact": true,
+          "ksplit": 2,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 4,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 160
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 2,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 320
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 4,
+          "staged_tk": 128,
+          "ragged_teams": true,
+          "groups": 40
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 80,
+          "sgs": 1,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 1,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 160,
+          "sgs": 1,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 1,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 80,
+          "sgs": 2,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 2,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 160,
+          "sgs": 2,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 2,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 80,
+          "sgs": 16,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 160,
+          "sgs": 16,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 80,
+          "sgs": 32,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 160,
+          "sgs": 32,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 80
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 160
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 320
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 640
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 1280
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 16,
+      "q_outer": 0
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 16,
+      "q_outer": 1
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 0
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 64,
+      "q_outer": 0
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 64,
+      "q_outer": 1
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 128,
+      "q_outer": 0
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 128,
+      "q_outer": 1
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1
+    }
+  }
+]

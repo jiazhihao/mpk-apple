@@ -1,0 +1,1242 @@
+{
+  "trial_count": 5606,
+  "passed_trials": 5406,
+  "rejected_trials": 200,
+  "coverage": {
+    "cache-final-128.jsonl": {
+      "trials": 3,
+      "passed": 3,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "cache-final-32768.jsonl": {
+      "trials": 3,
+      "passed": 3,
+      "rejected": 0,
+      "contexts": [
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "cached-inputs-repaired.jsonl": {
+      "trials": 4,
+      "passed": 4,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "context_kv-finalists.jsonl": {
+      "trials": 10,
+      "passed": 10,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv"
+      ],
+      "failure_first_lines": {}
+    },
+    "context_kv-geometry.jsonl": {
+      "trials": 144,
+      "passed": 144,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv"
+      ],
+      "failure_first_lines": {}
+    },
+    "context_kv_scalar-finalists.jsonl": {
+      "trials": 10,
+      "passed": 10,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv_scalar"
+      ],
+      "failure_first_lines": {}
+    },
+    "context_kv_scalar-geometry.jsonl": {
+      "trials": 480,
+      "passed": 480,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv_scalar"
+      ],
+      "failure_first_lines": {}
+    },
+    "feature-finalists.jsonl": {
+      "trials": 10,
+      "passed": 10,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature"
+      ],
+      "failure_first_lines": {}
+    },
+    "feature-geometry.jsonl": {
+      "trials": 144,
+      "passed": 144,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature"
+      ],
+      "failure_first_lines": {}
+    },
+    "feature_scalar-finalists.jsonl": {
+      "trials": 10,
+      "passed": 10,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature_scalar"
+      ],
+      "failure_first_lines": {}
+    },
+    "feature_scalar-geometry.jsonl": {
+      "trials": 480,
+      "passed": 480,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature_scalar"
+      ],
+      "failure_first_lines": {}
+    },
+    "final-selected-nvfp4-shader.jsonl": {
+      "trials": 4,
+      "passed": 4,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    },
+    "fp8_e4m3-context_kv.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv"
+      ],
+      "failure_first_lines": {}
+    },
+    "fp8_e4m3-feature.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature"
+      ],
+      "failure_first_lines": {}
+    },
+    "fp8_e4m3-markov.jsonl": {
+      "trials": 36,
+      "passed": 36,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "fp8_e4m3-mlp.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "int4_affine-context_kv.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv"
+      ],
+      "failure_first_lines": {}
+    },
+    "int4_affine-feature.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature"
+      ],
+      "failure_first_lines": {}
+    },
+    "int4_affine-markov.jsonl": {
+      "trials": 36,
+      "passed": 36,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "int4_affine-mlp.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "int8-context_kv.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv"
+      ],
+      "failure_first_lines": {}
+    },
+    "int8-feature.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature"
+      ],
+      "failure_first_lines": {}
+    },
+    "int8-markov.jsonl": {
+      "trials": 36,
+      "passed": 36,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "int8-mlp.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "lm_head-finalists.jsonl": {
+      "trials": 10,
+      "passed": 10,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "lm_head"
+      ],
+      "failure_first_lines": {}
+    },
+    "lm_head-geometry.jsonl": {
+      "trials": 144,
+      "passed": 144,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "lm_head"
+      ],
+      "failure_first_lines": {}
+    },
+    "lm_head-layout.jsonl": {
+      "trials": 59,
+      "passed": 33,
+      "rejected": 26,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "lm_head"
+      ],
+      "failure_first_lines": {
+        "MSL compile failed: program_source:494:19: error: zero-length arrays are not permitted in C++": 26
+      }
+    },
+    "lm_head-narrow-repaired.jsonl": {
+      "trials": 26,
+      "passed": 26,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "lm_head"
+      ],
+      "failure_first_lines": {}
+    },
+    "markov-activation.jsonl": {
+      "trials": 360,
+      "passed": 360,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "markov-chain-confirm.jsonl": {
+      "trials": 7,
+      "passed": 7,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov_chain"
+      ],
+      "failure_first_lines": {}
+    },
+    "markov-finalists.jsonl": {
+      "trials": 10,
+      "passed": 10,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "markov-geometry.jsonl": {
+      "trials": 280,
+      "passed": 280,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "markov-smoke.jsonl": {
+      "trials": 1,
+      "passed": 1,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "markov_chain-fusion.jsonl": {
+      "trials": 36,
+      "passed": 36,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov_chain"
+      ],
+      "failure_first_lines": {}
+    },
+    "middle-finalists-16384.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        16384
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "middle-finalists-4096.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        4096
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "middle-finalists-8192.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        8192
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "middle-grid-16384.jsonl": {
+      "trials": 146,
+      "passed": 146,
+      "rejected": 0,
+      "contexts": [
+        16384
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "middle-grid-4096.jsonl": {
+      "trials": 146,
+      "passed": 146,
+      "rejected": 0,
+      "contexts": [
+        4096
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "middle-grid-8192.jsonl": {
+      "trials": 146,
+      "passed": 146,
+      "rejected": 0,
+      "contexts": [
+        8192
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-confirm-128.jsonl": {
+      "trials": 11,
+      "passed": 11,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-confirm-16384.jsonl": {
+      "trials": 11,
+      "passed": 11,
+      "rejected": 0,
+      "contexts": [
+        16384
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-confirm-32768.jsonl": {
+      "trials": 11,
+      "passed": 11,
+      "rejected": 0,
+      "contexts": [
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-confirm-4096.jsonl": {
+      "trials": 11,
+      "passed": 11,
+      "rejected": 0,
+      "contexts": [
+        4096
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-confirm-8192.jsonl": {
+      "trials": 11,
+      "passed": 11,
+      "rejected": 0,
+      "contexts": [
+        8192
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-cooperative-128.jsonl": {
+      "trials": 84,
+      "passed": 84,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-cooperative-32768.jsonl": {
+      "trials": 84,
+      "passed": 84,
+      "rejected": 0,
+      "contexts": [
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-geometry.jsonl": {
+      "trials": 504,
+      "passed": 336,
+      "rejected": 168,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {
+        "{'cosine': 0.9998228279080275, 'relative_l2': 0.02012637876335954, 'max_abs': 6.0, 'finite': True}": 42,
+        "{'cosine': 0.9994079561432991, 'relative_l2': 0.0431186353670638, 'max_abs': 12.0, 'finite': True}": 30,
+        "{'cosine': 0.9998228269975414, 'relative_l2': 0.020126430772324667, 'max_abs': 6.0, 'finite': True}": 42,
+        "{'cosine': 0.9994079561449061, 'relative_l2': 0.043118635373824335, 'max_abs': 12.0, 'finite': True}": 30,
+        "{'cosine': 0.9994079646327587, 'relative_l2': 0.043118570326682995, 'max_abs': 12.0, 'finite': True}": 6,
+        "{'cosine': 0.9994079587052518, 'relative_l2': 0.043118598388244826, 'max_abs': 12.0, 'finite': True}": 6,
+        "{'cosine': 0.9994079646343653, 'relative_l2': 0.04311857033344354, 'max_abs': 12.0, 'finite': True}": 6,
+        "{'cosine': 0.9994079587080501, 'relative_l2': 0.043118598368353044, 'max_abs': 12.0, 'finite': True}": 6
+      }
+    },
+    "mixer-native.jsonl": {
+      "trials": 96,
+      "passed": 96,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-projection-refine.jsonl": {
+      "trials": 168,
+      "passed": 168,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mixer-scheduling.jsonl": {
+      "trials": 204,
+      "passed": 200,
+      "rejected": 4,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {
+        "MSL compile failed: program_source:119:19: warning: unused variable 'v' [-Wunused-variable]": 4
+      }
+    },
+    "mixer-wide.jsonl": {
+      "trials": 288,
+      "passed": 288,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "mlp-coupled.jsonl": {
+      "trials": 9,
+      "passed": 9,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "mlp-finalists.jsonl": {
+      "trials": 10,
+      "passed": 10,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "mlp-geometry.jsonl": {
+      "trials": 144,
+      "passed": 144,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "mlp-independent.jsonl": {
+      "trials": 48,
+      "passed": 48,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "nvfp4-context_kv.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv"
+      ],
+      "failure_first_lines": {}
+    },
+    "nvfp4-feature.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature"
+      ],
+      "failure_first_lines": {}
+    },
+    "nvfp4-markov.jsonl": {
+      "trials": 36,
+      "passed": 36,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "nvfp4-mlp.jsonl": {
+      "trials": 32,
+      "passed": 32,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "order-shader-validation.jsonl": {
+      "trials": 2,
+      "passed": 0,
+      "rejected": 2,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {
+        "{'cosine': 0.9999183441769436, 'relative_l2': 0.01278004869556605, 'max_abs': 0.1640625, 'finite': True}": 1,
+        "{'cosine': 0.9998930808471642, 'relative_l2': 0.014622985625118391, 'max_abs': 0.25, 'finite': True}": 1
+      }
+    },
+    "precision-refine-nvfp4-context_kv_scalar-128-finalists.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv_scalar"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-context_kv_scalar-128.jsonl": {
+      "trials": 48,
+      "passed": 48,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "context_kv_scalar"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-feature_scalar-128-finalists.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature_scalar"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-feature_scalar-128.jsonl": {
+      "trials": 48,
+      "passed": 48,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "feature_scalar"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-markov-128-finalists.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-markov-128.jsonl": {
+      "trials": 360,
+      "passed": 360,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "markov"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-mixer-128-finalists.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-mixer-128.jsonl": {
+      "trials": 49,
+      "passed": 49,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-mixer-32768-finalists.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-mixer-32768.jsonl": {
+      "trials": 49,
+      "passed": 49,
+      "rejected": 0,
+      "contexts": [
+        32768
+      ],
+      "kinds": [
+        "mixer"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-mlp-128-finalists.jsonl": {
+      "trials": 8,
+      "passed": 8,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "precision-refine-nvfp4-mlp-128.jsonl": {
+      "trials": 62,
+      "passed": 62,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "mlp"
+      ],
+      "failure_first_lines": {}
+    },
+    "shader-fp8_e4m3.jsonl": {
+      "trials": 4,
+      "passed": 4,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    },
+    "shader-int4_affine.jsonl": {
+      "trials": 4,
+      "passed": 4,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    },
+    "shader-int8.jsonl": {
+      "trials": 4,
+      "passed": 4,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    },
+    "shader-nvfp4.jsonl": {
+      "trials": 4,
+      "passed": 4,
+      "rejected": 0,
+      "contexts": [
+        128,
+        32768
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    },
+    "smoke.jsonl": {
+      "trials": 1,
+      "passed": 1,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "lm_head"
+      ],
+      "failure_first_lines": {}
+    },
+    "validation-fp8_e4m3.jsonl": {
+      "trials": 1,
+      "passed": 1,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    },
+    "validation-int4_affine.jsonl": {
+      "trials": 1,
+      "passed": 1,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    },
+    "validation-int8.jsonl": {
+      "trials": 1,
+      "passed": 1,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    },
+    "validation-nvfp4.jsonl": {
+      "trials": 1,
+      "passed": 1,
+      "rejected": 0,
+      "contexts": [
+        128
+      ],
+      "kinds": [
+        "all"
+      ],
+      "failure_first_lines": {}
+    }
+  },
+  "bf16_paired": {
+    "128": {
+      "full": {
+        "baseline": {
+          "min": 48.781625024275854,
+          "median": 48.881916678510606,
+          "max": 49.01354166213423,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 47.823999979300424,
+          "median": 47.92087498935871,
+          "max": 47.977250011172146,
+          "samples": 9
+        }
+      },
+      "draft": {
+        "baseline": {
+          "min": 10.378500010119751,
+          "median": 10.419750004075468,
+          "max": 10.474958340637386,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 9.413333347765729,
+          "median": 9.424000018043444,
+          "max": 9.460375003982335,
+          "samples": 9
+        }
+      },
+      "next_drafts_equal": true,
+      "split_tokens_equal": true,
+      "dispatches": 313
+    },
+    "16384": {
+      "full": {
+        "baseline": {
+          "min": 56.834124989109114,
+          "median": 57.08941665943712,
+          "max": 57.17037498834543,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 55.89962500380352,
+          "median": 55.97941667656414,
+          "max": 56.507583329221234,
+          "samples": 9
+        }
+      },
+      "draft": {
+        "baseline": {
+          "min": 12.415749981300905,
+          "median": 12.432583345798776,
+          "max": 12.484250008128583,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 11.255874997004867,
+          "median": 11.27275000908412,
+          "max": 11.483416688861325,
+          "samples": 9
+        }
+      },
+      "next_drafts_equal": true,
+      "split_tokens_equal": true,
+      "dispatches": 333
+    },
+    "32768": {
+      "full": {
+        "baseline": {
+          "min": 64.04750002548099,
+          "median": 64.27766667911783,
+          "max": 64.5841250079684,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 62.71554168779403,
+          "median": 62.905083323130384,
+          "max": 62.973500025691465,
+          "samples": 9
+        }
+      },
+      "draft": {
+        "baseline": {
+          "min": 14.227708335965872,
+          "median": 14.262958342442289,
+          "max": 14.392666693311185,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 12.782416655682027,
+          "median": 12.795375019777566,
+          "max": 12.815666676033288,
+          "samples": 9
+        }
+      },
+      "next_drafts_equal": true,
+      "split_tokens_equal": true,
+      "dispatches": 313
+    },
+    "4096": {
+      "full": {
+        "baseline": {
+          "min": 50.98587501561269,
+          "median": 51.15629167994484,
+          "max": 51.358124997932464,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 49.848124996060506,
+          "median": 49.989249993814155,
+          "max": 50.23025002446957,
+          "samples": 9
+        }
+      },
+      "draft": {
+        "baseline": {
+          "min": 11.028750013792887,
+          "median": 11.068583320593461,
+          "max": 11.100125004304573,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 9.890375018585473,
+          "median": 9.906291670631617,
+          "max": 9.927375009283423,
+          "samples": 9
+        }
+      },
+      "next_drafts_equal": true,
+      "split_tokens_equal": true,
+      "dispatches": 333
+    },
+    "8192": {
+      "full": {
+        "baseline": {
+          "min": 52.949125005397946,
+          "median": 53.06274999747984,
+          "max": 53.15749999135733,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 51.776250009424984,
+          "median": 51.966500002890825,
+          "max": 52.428249997319654,
+          "samples": 9
+        }
+      },
+      "draft": {
+        "baseline": {
+          "min": 11.457041662652045,
+          "median": 11.479583336040378,
+          "max": 11.509666655911133,
+          "samples": 9
+        },
+        "candidate": {
+          "min": 10.356916638556868,
+          "median": 10.424416657770053,
+          "max": 10.433833347633481,
+          "samples": 9
+        }
+      },
+      "next_drafts_equal": true,
+      "split_tokens_equal": true,
+      "dispatches": 333
+    }
+  },
+  "generation": {
+    "full-bf16-128.json": {
+      "tokens_equal": true,
+      "decode_tokens": 508,
+      "gpu_decode_ms": 7208.857791731134,
+      "gpu_ms_per_decode_token": 14.190664944352626,
+      "rounds": 152,
+      "accepted_proposals": 365,
+      "mean_accepted": 2.401315789473684
+    },
+    "full-fp8_e4m3-128.json": {
+      "tokens_equal": true,
+      "decode_tokens": 508,
+      "gpu_decode_ms": 6647.26904159761,
+      "gpu_ms_per_decode_token": 13.085175278735454,
+      "rounds": 151,
+      "accepted_proposals": 365,
+      "mean_accepted": 2.4172185430463577
+    },
+    "full-int4_affine-128.json": {
+      "tokens_equal": true,
+      "decode_tokens": 508,
+      "gpu_decode_ms": 6540.93516690773,
+      "gpu_ms_per_decode_token": 12.875856627771121,
+      "rounds": 153,
+      "accepted_proposals": 365,
+      "mean_accepted": 2.3856209150326797
+    },
+    "full-int8-128.json": {
+      "tokens_equal": true,
+      "decode_tokens": 508,
+      "gpu_decode_ms": 6757.424500101479,
+      "gpu_ms_per_decode_token": 13.302016732483226,
+      "rounds": 151,
+      "accepted_proposals": 366,
+      "mean_accepted": 2.423841059602649
+    },
+    "full-nvfp4-128.json": {
+      "tokens_equal": true,
+      "decode_tokens": 508,
+      "gpu_decode_ms": 6330.3272083285265,
+      "gpu_ms_per_decode_token": 12.461274032142768,
+      "rounds": 149,
+      "accepted_proposals": 374,
+      "mean_accepted": 2.51006711409396
+    },
+    "full-nvfp4-refined-128.json": {
+      "tokens_equal": true,
+      "decode_tokens": 508,
+      "gpu_decode_ms": 6334.531625208911,
+      "gpu_ms_per_decode_token": 12.469550443324627,
+      "rounds": 150,
+      "accepted_proposals": 367,
+      "mean_accepted": 2.4466666666666668
+    }
+  },
+  "interpretation": "Trials include repeated confirmations and rejected configurations. Hot microbenchmarks shortlist; paired real-prefill rounds and generation determine final selection."
+}

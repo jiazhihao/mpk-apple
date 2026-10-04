@@ -1,0 +1,153 @@
+[
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 0
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 128,
+      "q_outer": 0
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 160
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 160,
+          "sgs": 32,
+          "tn": 16,
+          "staged_tk": 64,
+          "ksplit": 4,
+          "ragged_teams": true
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 64,
+      "q_outer": 0
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "1": {
+          "groups": 1280
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 32,
+      "q_outer": 1,
+      "gemm_overrides": {
+        "0": {
+          "sgs": 8,
+          "tn": 16,
+          "compact": true,
+          "ksplit": 1,
+          "staged_tk": 64,
+          "ragged_teams": true,
+          "groups": 320
+        }
+      }
+    }
+  },
+  {
+    "mlp": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "mode": "native",
+      "staged_tk": 64,
+      "ksplit": 4,
+      "ragged_teams": true,
+      "nvfp4_layout": "tile",
+      "nvfp4_tile_block": 16,
+      "q_outer": 0
+    }
+  }
+]

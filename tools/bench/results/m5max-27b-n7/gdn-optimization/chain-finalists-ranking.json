@@ -1,0 +1,390 @@
+[
+  {
+    "index": 2,
+    "config": {
+      "workers": 80,
+      "sgs": 8,
+      "tn": 32,
+      "split": true,
+      "compact": true,
+      "gdn_sl": 8,
+      "barrier": "simd",
+      "task_barrier": false,
+      "scalar_sgs": 8,
+      "fp8_layout": "tile",
+      "q_outer": 0,
+      "fp8_decode": "subtract",
+      "fp8_tile_block": 8,
+      "restrict_weights": false,
+      "gemm_overrides": {
+        "3": {
+          "tn": 32,
+          "ksplit": 4,
+          "groups": 120,
+          "ragged_teams": true
+        },
+        "0": {
+          "tn": 32,
+          "ksplit": 2,
+          "groups": 240,
+          "ragged_teams": true
+        },
+        "1": {
+          "tn": 16,
+          "ksplit": 8,
+          "groups": 240,
+          "ragged_teams": true
+        },
+        "2": {
+          "tn": 32,
+          "ksplit": 8,
+          "groups": 120,
+          "ragged_teams": true
+        }
+      },
+      "perm_sgs": 64,
+      "direct_norm": true,
+      "dual_permute": true
+    },
+    "wall_over_previous": 0.8984037490013272,
+    "wall_over_original": 0.949330950633408,
+    "paired_geomean": 0.889790332467591,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999743067224456,
+    "replay_bit_exact": true
+  },
+  {
+    "index": 3,
+    "config": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "split": true,
+      "compact": true,
+      "task_barrier": false,
+      "scalar_sgs": 4,
+      "fp8_layout": "tile",
+      "schedule": "queue",
+      "gemm_overrides": {
+        "1": {
+          "tn": 16,
+          "ksplit": 4,
+          "groups": 120,
+          "ragged_teams": true
+        }
+      },
+      "perm_sgs": 64,
+      "direct_norm": true,
+      "dual_permute": true,
+      "barrier": "simd",
+      "poll_sgs": 2,
+      "q_outer": 0,
+      "fp8_decode": "half",
+      "k_unroll": 1,
+      "unroll": false,
+      "gdn_sl": 8,
+      "gdn_unroll": 8,
+      "gdn_vector": 2,
+      "gdn_fused_norm": false,
+      "restrict_weights": true
+    },
+    "wall_over_previous": 0.9040966775718794,
+    "wall_over_original": 0.9545335828840271,
+    "paired_geomean": 0.8980617107731459,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999823340719205,
+    "replay_bit_exact": true
+  },
+  {
+    "index": 4,
+    "config": {
+      "workers": 80,
+      "sgs": 8,
+      "tn": 32,
+      "split": true,
+      "compact": true,
+      "gdn_sl": 8,
+      "barrier": "simd",
+      "task_barrier": false,
+      "scalar_sgs": 8,
+      "fp8_layout": "tile",
+      "q_outer": 0,
+      "fp8_decode": "subtract",
+      "fp8_tile_block": 8,
+      "restrict_weights": false,
+      "gemm_overrides": {
+        "3": {
+          "tn": 32,
+          "ksplit": 4,
+          "groups": 120,
+          "ragged_teams": true
+        },
+        "0": {
+          "tn": 32,
+          "ksplit": 2,
+          "groups": 240,
+          "ragged_teams": true
+        },
+        "2": {
+          "tn": 32,
+          "ksplit": 8,
+          "groups": 120,
+          "ragged_teams": true
+        }
+      },
+      "perm_sgs": 64,
+      "direct_norm": true,
+      "dual_permute": true
+    },
+    "wall_over_previous": 0.9109424795568604,
+    "wall_over_original": 0.9519378584892739,
+    "paired_geomean": 0.897638443786176,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999743067224456,
+    "replay_bit_exact": true
+  },
+  {
+    "index": 5,
+    "config": {
+      "workers": 80,
+      "sgs": 8,
+      "tn": 32,
+      "split": true,
+      "compact": true,
+      "task_barrier": false,
+      "scalar_sgs": 8,
+      "fp8_layout": "tile",
+      "fp8_tile_block": 8,
+      "restrict_weights": true,
+      "gemm_overrides": {
+        "3": {
+          "tn": 32,
+          "ksplit": 4,
+          "groups": 120,
+          "ragged_teams": true
+        }
+      },
+      "perm_sgs": 64,
+      "direct_norm": true,
+      "dual_permute": true,
+      "barrier": "simd",
+      "poll_sgs": 4,
+      "flag_stride": 4,
+      "arrival": "rmw",
+      "q_outer": 0,
+      "fp8_decode": "half",
+      "k_unroll": 1,
+      "unroll": true,
+      "gdn_sl": 8,
+      "gdn_unroll": 0,
+      "gdn_vector": 4,
+      "gdn_fused_norm": false
+    },
+    "wall_over_previous": 0.9151637720001241,
+    "wall_over_original": 0.9564298428009562,
+    "paired_geomean": 0.8992892076754031,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999800758275409,
+    "replay_bit_exact": true
+  },
+  {
+    "index": 8,
+    "config": {
+      "workers": 80,
+      "sgs": 8,
+      "tn": 32,
+      "split": true,
+      "compact": true,
+      "task_barrier": false,
+      "scalar_sgs": 8,
+      "fp8_layout": "tile",
+      "fp8_tile_block": 8,
+      "restrict_weights": true,
+      "gemm_overrides": {
+        "3": {
+          "tn": 32,
+          "ksplit": 4,
+          "groups": 120,
+          "ragged_teams": true
+        }
+      },
+      "perm_sgs": 64,
+      "direct_norm": true,
+      "dual_permute": true,
+      "barrier": "simd",
+      "q_outer": 0,
+      "fp8_decode": "half",
+      "k_unroll": 1,
+      "unroll": true,
+      "gdn_sl": 8,
+      "gdn_unroll": 0,
+      "gdn_vector": 4,
+      "gdn_fused_norm": false
+    },
+    "wall_over_previous": 0.916278183577648,
+    "wall_over_original": 0.956265832917053,
+    "paired_geomean": 0.8975367264241565,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999800758275409,
+    "replay_bit_exact": true
+  },
+  {
+    "index": 6,
+    "config": {
+      "workers": 80,
+      "sgs": 8,
+      "tn": 32,
+      "split": true,
+      "compact": true,
+      "task_barrier": false,
+      "scalar_sgs": 8,
+      "fp8_layout": "tile",
+      "fp8_tile_block": 8,
+      "restrict_weights": true,
+      "gemm_overrides": {
+        "3": {
+          "tn": 32,
+          "ksplit": 4,
+          "groups": 120,
+          "ragged_teams": true
+        }
+      },
+      "perm_sgs": 64,
+      "direct_norm": true,
+      "dual_permute": true,
+      "barrier": "simd",
+      "q_outer": 0,
+      "fp8_decode": "subtract",
+      "gdn_sl": 8,
+      "gdn_unroll": 0,
+      "gdn_vector": 4,
+      "gdn_fused_norm": false
+    },
+    "wall_over_previous": 0.9203012991491906,
+    "wall_over_original": 0.9578929428917698,
+    "paired_geomean": 0.9018077556933124,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999800758275409,
+    "replay_bit_exact": true
+  },
+  {
+    "index": 7,
+    "config": {
+      "workers": 80,
+      "sgs": 8,
+      "tn": 32,
+      "split": true,
+      "compact": true,
+      "gdn_sl": 8,
+      "barrier": "simd",
+      "task_barrier": false,
+      "scalar_sgs": 8,
+      "fp8_layout": "tile",
+      "q_outer": 0,
+      "fp8_decode": "subtract",
+      "fp8_tile_block": 8,
+      "restrict_weights": false,
+      "gemm_overrides": {
+        "3": {
+          "tn": 32,
+          "ksplit": 4,
+          "groups": 120,
+          "ragged_teams": true
+        },
+        "1": {
+          "tn": 16,
+          "ksplit": 8,
+          "groups": 240,
+          "ragged_teams": true
+        }
+      },
+      "perm_sgs": 64,
+      "direct_norm": true,
+      "dual_permute": true
+    },
+    "wall_over_previous": 0.9203742455103169,
+    "wall_over_original": 0.9574078718296154,
+    "paired_geomean": 0.9099367908773377,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999800758275409,
+    "replay_bit_exact": true
+  },
+  {
+    "index": 0,
+    "config": {
+      "workers": 120,
+      "sgs": 16,
+      "tn": 16,
+      "split": true,
+      "compact": true,
+      "gdn_sl": 4,
+      "barrier": "simd",
+      "task_barrier": false,
+      "scalar_sgs": 4,
+      "q_outer": 0,
+      "fp8_layout": "tile",
+      "fp8_decode": "subtract"
+    },
+    "wall_over_previous": 0.9486505474368037,
+    "wall_over_original": 0.9985192789967998,
+    "paired_geomean": 0.9476390025720002,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999813092642876,
+    "replay_bit_exact": true
+  },
+  {
+    "index": 1,
+    "config": {
+      "workers": 120,
+      "sgs": 16,
+      "tn": 16,
+      "split": true,
+      "compact": true,
+      "task_barrier": false,
+      "scalar_sgs": 4,
+      "fp8_layout": "tile",
+      "gemm_overrides": {
+        "0": {
+          "q_outer": 1,
+          "fp8_decode": "half"
+        },
+        "1": {
+          "q_outer": 0,
+          "fp8_decode": "standard"
+        },
+        "2": {
+          "q_outer": 1,
+          "fp8_decode": "half"
+        },
+        "3": {
+          "q_outer": 0,
+          "fp8_decode": "subtract"
+        }
+      },
+      "barrier": "simd",
+      "fp8_decode": "subtract",
+      "unroll": true,
+      "q_outer": 0,
+      "gdn_sl": 4,
+      "gdn_unroll": 8,
+      "gdn_vector": 2,
+      "gdn_fused_norm": false,
+      "restrict_weights": false
+    },
+    "wall_over_previous": 0.9518133267807697,
+    "wall_over_original": 0.9941592376549541,
+    "paired_geomean": 0.9569502277946196,
+    "paired_wins": 9,
+    "pairs": 9,
+    "min_cosine": 0.9999823340719205,
+    "replay_bit_exact": true
+  }
+]

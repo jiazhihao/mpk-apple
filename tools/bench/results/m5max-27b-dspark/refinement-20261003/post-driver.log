@@ -1,0 +1,7 @@
+START native-versus-mega-4096
+END native-versus-mega-4096 0
+START native-versus-mega-8192
+END native-versus-mega-8192 0
+START native-versus-mega-16384
+END native-versus-mega-16384 0
+DONE final comparisons

@@ -1,0 +1,59 @@
+{
+  "layers": 48,
+  "selected": "default",
+  "total_pairs": 432,
+  "min_cosine": 0.999883354758342,
+  "mean_min_wall_us": {
+    "production": 646.2456868612207,
+    "default": 599.7246364713646,
+    "matched_control": 596.0173611092614,
+    "megakernel": 598.8622233077573,
+    "previous_geometry": 642.0042318107638,
+    "packed_control": 598.8742675447915,
+    "mlx": 1052.4204622489226,
+    "mlx_bf16": 1093.0017617454268,
+    "mlx_best": 1050.1169687605245
+  },
+  "comparisons": {
+    "production": {
+      "mean_ratio": 0.9280167339061826,
+      "min_ratio": 0.9242199197057384,
+      "max_ratio": 0.9324110945925954,
+      "layers_faster": 48,
+      "layers_over_3pct": 48,
+      "paired_wins": 431
+    },
+    "previous_geometry": {
+      "mean_ratio": 0.9342108830712691,
+      "min_ratio": 0.9094292705154078,
+      "max_ratio": 0.9435995385444917,
+      "layers_faster": 48,
+      "layers_over_3pct": 48,
+      "paired_wins": 432
+    },
+    "mlx_best": {
+      "mean_ratio": 0.5713906208673527,
+      "min_ratio": 0.5447152155458871,
+      "max_ratio": 0.608132917984204,
+      "layers_faster": 48,
+      "layers_over_3pct": 48,
+      "paired_wins": 432
+    },
+    "matched_control": {
+      "mean_ratio": 1.0062211412959163,
+      "min_ratio": 1.0027621897945975,
+      "max_ratio": 1.0111464793285567,
+      "layers_faster": 0,
+      "layers_over_3pct": 0,
+      "paired_wins": 24
+    },
+    "packed_control": {
+      "mean_ratio": 1.0014292922683972,
+      "min_ratio": 0.9925745355424264,
+      "max_ratio": 1.0075557738715284,
+      "layers_faster": 17,
+      "layers_over_3pct": 0,
+      "paired_wins": 187
+    }
+  }
+}

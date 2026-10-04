@@ -1,0 +1,24 @@
+[
+  {
+    "mixer": {
+      "workers": 160,
+      "sgs": 8,
+      "tn": 32,
+      "compact": true,
+      "split": true,
+      "barrier": "simd",
+      "task_barrier": false,
+      "schedule": "queue",
+      "task_grain": "tile",
+      "task_seed": true,
+      "task_seed_bound": true,
+      "attention_chunk_tiles": 8,
+      "attention_qm": 32,
+      "attention_cached_prefix": true,
+      "attention_compact_partials": true,
+      "attention_prepare": true,
+      "attention_key_tile": 16,
+      "attention_alias_scratch": true
+    }
+  }
+]

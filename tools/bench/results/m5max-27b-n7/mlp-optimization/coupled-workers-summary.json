@@ -1,0 +1,82 @@
+{
+  "cases": [
+    {
+      "workers": 120,
+      "oracle_pass": true,
+      "min_wall_us": 1288.4882814250886,
+      "median_wall_us": 1334.5221360214055,
+      "first_wall_us": 2632.2708330117166,
+      "first_to_min": 2.0429140652333935,
+      "original_wins": 8,
+      "mlx_wins": 9,
+      "pairs": 9
+    },
+    {
+      "workers": 140,
+      "oracle_pass": true,
+      "min_wall_us": 1314.1145836561918,
+      "median_wall_us": 1322.1158855594695,
+      "first_wall_us": 2609.3242187052965,
+      "first_to_min": 1.9856139267897865,
+      "original_wins": 8,
+      "mlx_wins": 9,
+      "pairs": 9
+    },
+    {
+      "workers": 144,
+      "oracle_pass": true,
+      "min_wall_us": 1308.9322918094695,
+      "median_wall_us": 1316.475261002779,
+      "first_wall_us": 2600.0598962418735,
+      "first_to_min": 1.9863975489882275,
+      "original_wins": 8,
+      "mlx_wins": 9,
+      "pairs": 9
+    },
+    {
+      "workers": 148,
+      "oracle_pass": true,
+      "min_wall_us": 1287.794271018356,
+      "median_wall_us": 1299.8554687947035,
+      "first_wall_us": 2571.584635414183,
+      "first_to_min": 1.9968908802340277,
+      "original_wins": 8,
+      "mlx_wins": 9,
+      "pairs": 9
+    },
+    {
+      "workers": 152,
+      "oracle_pass": true,
+      "min_wall_us": 1260.8111975714564,
+      "median_wall_us": 1299.6809892356396,
+      "first_wall_us": 2633.3841141313314,
+      "first_to_min": 2.0886427081260788,
+      "original_wins": 8,
+      "mlx_wins": 9,
+      "pairs": 9
+    },
+    {
+      "workers": 156,
+      "oracle_pass": true,
+      "min_wall_us": 1248.640624806285,
+      "median_wall_us": 1265.0755210779607,
+      "first_wall_us": 2533.611978869885,
+      "first_to_min": 2.0290962255556533,
+      "original_wins": 8,
+      "mlx_wins": 9,
+      "pairs": 9
+    },
+    {
+      "workers": 157,
+      "oracle_pass": true,
+      "min_wall_us": 1250.1445314846933,
+      "median_wall_us": 1255.3450521081686,
+      "first_wall_us": 2563.9218748547137,
+      "first_to_min": 2.0509003641441006,
+      "original_wins": 8,
+      "mlx_wins": 9,
+      "pairs": 9
+    }
+  ],
+  "decision": "Retain157: fewer workers did not eliminate the first-round slowdown and did not improve the best median. No source/configuration changes from this diagnostic. Original results retained."
+}

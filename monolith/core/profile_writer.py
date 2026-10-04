@@ -177,6 +177,9 @@ def decide(measurements: Mapping[str, Any], current: Optional[Mapping[str, Any]]
               "note": "written by tools/profile_writer.py from the kernel harnesses (min-of-N over >= 2 GB streamed per point): cost_T = the "
                       "pass cost relative to a T = 1 shader pass at the best geometry per T; accelerator_<fmt> = gemm_tile at TM rows in "
                       "the same unit; sibling_order and max_cb_ms are the probes' (p11, p6/p6b) and attention_rows the file's: they carry over"}
+    if cur.get("gdn_mixer_fusion"):
+        engine["gdn_mixer_fusion"] = dict(cur["gdn_mixer_fusion"])
+        notes["gdn_mixer_fusion"] = "retained from the layer study; leaf measurements do not select mixer fusion"
     return engine, notes
 
 

@@ -68,6 +68,13 @@ def _measurements():
             "attention_ms": {"v1": {(1024, 1): 0.05, (4096, 4): 0.2}, "v2": {(1024, 1): 0.06, (4096, 4): 0.21}}}
 
 
+def test_leaf_writer_preserves_layer_fusion_selection():
+    cfg = load_profiles()["apple-m5-max-40c"].gdn_mixer_fusion
+    engine, notes = decide(_measurements(), {"gdn_mixer_fusion": cfg})
+    assert engine["gdn_mixer_fusion"] == cfg
+    assert "layer study" in notes["gdn_mixer_fusion"]
+
+
 def test_decide_and_merge_produce_a_loadable_profile(tmp_path):
     engine, notes = decide(_measurements(), {"sibling_order": "alu_first", "max_cb_ms": 16, "lane_order": "contiguous", "attention_rows": 8})
     assert engine["attention_rows"] == 8                                                  # not measured: the file's value carries over

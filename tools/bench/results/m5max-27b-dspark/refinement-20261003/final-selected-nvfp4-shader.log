@@ -1,0 +1,9 @@
+2026-10-03 17:58:27.913 python[74240:5710547] Metal GPU Validation Enabled
+all 128 {} {'baseline': 57.89908333099447, 'candidate': 52.56174999522045}
+2026-10-03 17:58:37.525 python[74437:5711595] Metal GPU Validation Enabled
+all 128 {} {'baseline': 50.82283334922977, 'candidate': 60.924083314603195}
+2026-10-03 17:58:41.752 python[74607:5712254] Metal GPU Validation Enabled
+all 32768 {} {'baseline': 55.38583331508562, 'candidate': 50.61445833416656}
+2026-10-03 17:58:49.337 python[74775:5712886] Metal GPU Validation Enabled
+all 32768 {} {'baseline': 58.40320835704915, 'candidate': 57.38637500326149}
+PASS four exact selected NVFP4 shader checks

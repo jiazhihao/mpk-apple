@@ -3,7 +3,9 @@
 same machine, same day. Reads the JSON-lines results of gemv_bench / nvfp4_decode_study / kernel_knobs_study and
 mlx_baseline.py and prints Markdown.
 
-    python tools/bench/m1_gate_table.py tools/bench/results/apple-m5-pro-20c
+Restore historical inputs as described in tools/bench/results/README.md, then run:
+
+    python tools/bench/m1_gate_table.py /path/to/restored/results/apple-m5-pro-20c
 """
 from __future__ import annotations
 

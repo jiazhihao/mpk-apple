@@ -1,0 +1,91 @@
+{
+  "contexts": [
+    {
+      "ctx": 128,
+      "points": 16,
+      "median_us": {
+        "original_us": 626.7298177699558,
+        "control_us": 633.041015593335,
+        "megakernel_us": 645.8007812616415,
+        "mlx_best_us": 1218.4297031581082
+      },
+      "mega_original_ratio": {
+        "min": 1.024282014486873,
+        "median": 1.0302223863977706,
+        "max": 1.039142490642285
+      },
+      "original_wins": 16,
+      "megakernel_wins": 0,
+      "wins_over_original_by_3pct": 0,
+      "passes": 16,
+      "all_pairs_mlx_wins": 16
+    },
+    {
+      "ctx": 4096,
+      "points": 16,
+      "median_us": {
+        "original_us": 850.9759114822373,
+        "control_us": 886.689453094732,
+        "megakernel_us": 879.8938802210614,
+        "mlx_best_us": 1446.028000032129
+      },
+      "mega_original_ratio": {
+        "min": 1.0260284753793703,
+        "median": 1.0338627830728484,
+        "max": 1.0543436285117143
+      },
+      "original_wins": 16,
+      "megakernel_wins": 0,
+      "wins_over_original_by_3pct": 0,
+      "passes": 16,
+      "all_pairs_mlx_wins": 16,
+      "previous_median_us": 889.5748698269017,
+      "mega_previous_ratio": {
+        "min": 0.9788480643522857,
+        "median": 0.9886125392355068,
+        "max": 1.006234376253101
+      },
+      "faster_than_previous": 14,
+      "faster_than_previous_by_3pct": 0
+    },
+    {
+      "ctx": 8192,
+      "points": 16,
+      "median_us": {
+        "original_us": 1084.9700520629995,
+        "control_us": 1117.3177082673647,
+        "megakernel_us": 1118.1549479370005,
+        "mlx_best_us": 1771.2395780904444
+      },
+      "mega_original_ratio": {
+        "min": 0.9949311992347785,
+        "median": 1.029504353891436,
+        "max": 1.0456029846860804
+      },
+      "original_wins": 15,
+      "megakernel_wins": 1,
+      "wins_over_original_by_3pct": 0,
+      "passes": 16,
+      "all_pairs_mlx_wins": 16,
+      "previous_median_us": 1141.6295572998933,
+      "mega_previous_ratio": {
+        "min": 0.9427859649174654,
+        "median": 0.9760887256258634,
+        "max": 1.0055820291025932
+      },
+      "faster_than_previous": 15,
+      "faster_than_previous_by_3pct": 4
+    }
+  ],
+  "points": 48,
+  "paired_repetitions": 432,
+  "oracle_passes": 48,
+  "minimum_checked_cosine": 0.9996271689553311,
+  "max_mega_mlx_ratio": 0.6451615747358762,
+  "min_mega_mlx_ratio": 0.5279344756832156,
+  "shader_audit_points": 48,
+  "shader_audit_passes": 48,
+  "tuning_trials": 141,
+  "tuning_points": 282,
+  "decision": "Keep native attention as default; retain GDN mixer fusion default. Attention fusion remains opt-in."
+}

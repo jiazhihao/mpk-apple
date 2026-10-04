@@ -1,0 +1,101 @@
+{
+  "date": "2026-10-01",
+  "chip": "Apple M5 Max",
+  "gpu_cores": 40,
+  "n": 7,
+  "rows": 8,
+  "checkpoint": "nvidia/Qwen3.8-27B-NVFP4",
+  "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+  "scope": "Profile-selected static eight-row GDN mixer plus native MLP; native attention; dynamic/speculative programs excluded",
+  "geometry": {
+    "shape": [
+      5120,
+      16,
+      48,
+      128,
+      128,
+      4
+    ],
+    "workers": 120,
+    "sgs": 16,
+    "tn": 16,
+    "split": true,
+    "compact": true,
+    "gdn_sl": 4,
+    "barrier": "simd",
+    "task_barrier": false,
+    "scalar_sgs": 4
+  },
+  "tests": {
+    "affected_gpu": 132,
+    "runtime": 6,
+    "contract": 248,
+    "contract_skipped": 1,
+    "final_selection_gpu_rerun": 9
+  },
+  "audit": {
+    "points": 96,
+    "passed": 96,
+    "fused_gdn_layers": 48,
+    "native_attention_points": 48,
+    "min_default_cosine": 0.9996271689553311,
+    "shader_validation": true,
+    "timings": "instrumented; not performance evidence"
+  },
+  "chain": {
+    "layers": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "dispatches": [
+      45,
+      19
+    ],
+    "fused_mixers": 4,
+    "min_cosine": 0.9999877553616658,
+    "replay_bit_exact": true
+  },
+  "paired_check": {
+    "layers": [
+      0,
+      1,
+      2
+    ],
+    "reps": 9,
+    "steps": 32,
+    "shader_validation": false,
+    "default_vs_original": [
+      1.0268798108215826,
+      0.9895888959914896,
+      1.005133272331744
+    ],
+    "default_matches_explicit_fusion": true
+  },
+  "source_sha256": {
+    "monolith/compiler/gdn_fusion.py": "fe8ae0f92e498cfcad875d3599a099c41c4310dff71fcc7da8b03dd7007aab93",
+    "monolith/compiler/static_fusion.py": "641210ffb4bcf4515972e529378f40f7939eddca81ef600613256e4fa58e6381",
+    "monolith/compiler/emit.py": "559d54cf43085419abef58ac5156edaa09c35bb1df21b07f63deebe71308f4bd",
+    "monolith/core/profile.py": "c4b0ac3a4edc14562dc28557608548d6cabc9529ccb5004d9a9829f347e02722",
+    "monolith/core/profile_writer.py": "057db96909dc645fe16d8f2677c8bb19cd6a3afff501c80b20d6f10e77bae4b2",
+    "monolith/core/step_state.py": "f86b26dd68e8b26bb3b2fbe916213b637e039aa11b32cdb01d9b84ee553ac34a",
+    "monolith/runtime/engine.py": "6ceac8883575c41babad0428345ad6502feccd7985292b01229eeff3522f937b",
+    "monolith/generate.py": "3c05e422363154562bc4fc5231ad249284c1e78837a35c784800f5e94509eb7b",
+    "profiles/apple-m5-max-40c.json": "51432d5e7b8c6b6f90673148a0f39b15ecb066eca6f56c01ecfc561646f05dba",
+    "kernels/static_barrier_simd.metal": "f55f6e5978f1c67e394cd8600665afaa4a26bf601346c7958d33d942630fff74",
+    "kernels/static_barrier_serial.metal": "b56f6acfde98a97ffa2cc5d64ee7d1c0b2080c17d7a9e387e9a58f3650cec5aa",
+    "kernels/static_barrier_leader.metal": "5477ca3637a22097d9b9c6441262ddf27363c846055a7754fbd64c0bbea36733",
+    "tests/kernels/test_gdn_default.py": "e8143e00ddac1ab6cba68baff9808b8117133db16ea8550a8c8f24a2a49c2d43",
+    "tools/bench/modelopt_layer_bench.py": "04cc9cd9a65d18163a26b1bb375d59400e74bd2b1d2b81ecc9b443ef669bbbe4",
+    "tools/bench/gdn_block_static.py": "851f1d8d125b505a43f6673e57cfd0f2388313dd42dc8426db0c51b5c714d98a"
+  },
+  "artifacts_sha256": {
+    "layer-audit.json": "f0029fb8f1e2b028673d0e5b86fc4bfa17dd28ee03665aaec8bf5ad7f87d3d76",
+    "chain-audit.json": "65c1f49f33df37407828176a0705635d01ace172c672d897e933b990bc32a18c",
+    "paired-check.json": "c686d46697f1d5e27621a7b0851f710f6de4bf0bdf78e4b1c00736ea4cfe81eb"
+  },
+  "raw_archive": "/tmp/monolith-m5max/default-selection-evidence.tar.gz",
+  "raw_archive_sha256": "552981f42caba27539d0a490ed35ceedc3a68f177929a191e23863829614054b"
+}

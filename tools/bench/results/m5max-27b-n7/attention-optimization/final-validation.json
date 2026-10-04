@@ -1,0 +1,89 @@
+{
+  "contexts": {
+    "128": {
+      "shader_layers": 16,
+      "oracle_pass": true,
+      "replay_bit_exact": true,
+      "control_bit_exact": true,
+      "performance_layers": 16,
+      "mlx_pairs_won": 144,
+      "mlx_pairs": 144
+    },
+    "4096": {
+      "shader_layers": 16,
+      "oracle_pass": true,
+      "replay_bit_exact": true,
+      "control_bit_exact": true,
+      "performance_layers": 16,
+      "mlx_pairs_won": 144,
+      "mlx_pairs": 144
+    },
+    "8192": {
+      "shader_layers": 16,
+      "oracle_pass": true,
+      "replay_bit_exact": true,
+      "control_bit_exact": true,
+      "performance_layers": 16,
+      "mlx_pairs_won": 144,
+      "mlx_pairs": 144
+    },
+    "16384": {
+      "shader_layers": 16,
+      "oracle_pass": true,
+      "replay_bit_exact": true,
+      "control_bit_exact": true,
+      "performance_layers": 16,
+      "mlx_pairs_won": 144,
+      "mlx_pairs": 144
+    },
+    "32768": {
+      "shader_layers": 16,
+      "oracle_pass": true,
+      "replay_bit_exact": true,
+      "control_bit_exact": true,
+      "performance_layers": 16,
+      "mlx_pairs_won": 144,
+      "mlx_pairs": 144
+    }
+  },
+  "shared_shader_regressions": {
+    "tests": 681,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "evidence_sha256": {
+    "isolated-128-layer3.jsonl": "a4eb1062fb802a67c2ffdac13d1657199e1572b2419fa58e3ef64fa8ddc5a603",
+    "isolated-128-layer31.jsonl": "efe99ed3431012e2af0b6dabb0341e355fcd99210f8a9d83ec108e0f8aef0f61",
+    "isolated-128-layer63.jsonl": "13ee269c5aac0fc84ed5dba8d51172bc9e0a42817bf69d8996a0ab653cef2de2",
+    "task-audit-128.jsonl": "ae8fe6d6b1e7adf3419185c721516ba0e748a950fd3b686e64c3e7c8ed5d3f6d",
+    "all16-128-shader.jsonl": "24a0d97375e98b05f04bd56cf7a4a55e2c2b7c3ef82515dd466a97c8aa11bc74",
+    "all16-128.jsonl": "f172575c50ea4f7bd9d6fac2498b887bc757633c02a004b2e5001cbaddd9ad4b",
+    "isolated-4096-layer3.jsonl": "9dc3448e411e8a97e86a565adbff507ce83384fd7e7a17a39c8c6587b3d33696",
+    "isolated-4096-layer31.jsonl": "afe94952b240f1d9330eefb68fb56d866356d860d78560fcfc777efcd07cb2e8",
+    "isolated-4096-layer63.jsonl": "9ceef2e1609ff4aac90340ccd73fb90f97eb12ba1003f5fa873fb87c67b072ee",
+    "task-audit-4096.jsonl": "0545725f90f577b35ff266154549b6864e3c096ab424c5736704699968b5aeca",
+    "all16-4096-shader.jsonl": "8c692f6d8965c0df692f174cf3588a57866513255c4a2a4a5eab16a48d093687",
+    "all16-4096.jsonl": "d4a876a032a7fa9f8c5a7d522b713f4d5880aa1598f238c332ee11988000cb25",
+    "isolated-8192-layer3.jsonl": "4ca3362aeb807906bffb4c29dc79bb0c331a1e98de2a18556761c59f4c4b6ce4",
+    "isolated-8192-layer31.jsonl": "62644d802872afbab26d916f3ee7b12658ebc65d6f457baa0caea0cbffb7c132",
+    "isolated-8192-layer63.jsonl": "73d6efb2295c8c60ea6fb5583446883653d2cafa20518b76776327cfc60804a2",
+    "task-audit-8192.jsonl": "75b814747bf70f95d54e15c0a08ca872cd783545d0cd93b0b83e0dcef98d8801",
+    "all16-8192-shader.jsonl": "7e6c31cfd7fd4b90614112ac1ca11968551fa9d33dd7e636316758c5de424e19",
+    "all16-8192.jsonl": "8d9a3057aea6b4b7d392ec54c7e25d905fc20eef119dd61cbb80e6fc5bc9d0fd",
+    "isolated-16384-layer3.jsonl": "a91266b51123ac99a42900cbcd3037c1b6c2636b1c74a335199241eb78c12731",
+    "isolated-16384-layer31.jsonl": "ba512555f59ac831468a66b1cb719820eb6a0b8a884e7f547d250b988ef2fd2c",
+    "isolated-16384-layer63.jsonl": "ad113e74126924d1363291341ada8c47ace19994a5618175482a4b3116f7b49b",
+    "task-audit-16384.jsonl": "8371534854f43330d36132c92e7d9267f5c01d762bd7625dc3a230c73b008813",
+    "all16-16384-shader.jsonl": "ec367e4604f215684a951ae2ebc233bc396fa81c95886ebdbb1877781dae3671",
+    "all16-16384.jsonl": "19fb1861d2fb22a5fc013f8a0c545b8f3767ba9789182f29dcfb82d5ef8846c2",
+    "isolated-32768-layer3.jsonl": "e24e477bb09158c62afd2ab54c84b52ada678936872ae4d3a5e21fad4935f4c8",
+    "isolated-32768-layer31.jsonl": "69e7b41c680f84ecb984047997feffa7fcc1ee71ce76a27520e7460465636454",
+    "isolated-32768-layer63.jsonl": "6c9fa5734b222d7a28de4aa0a5bf213ce1a2662100f541ef54e05512939f260e",
+    "task-audit-32768.jsonl": "4513ebd0e246363d1ef4655617c3eb4f0d5e6cb24fca79d17eccb2bf3c0c1085",
+    "all16-32768-shader.jsonl": "8079201024e72e78d4c52a7a822e07c245e962854eb7fdbb70cad19d1adef49a",
+    "all16-32768.jsonl": "c9c2bfe346946eab1f7b7f563beefd935753a05514659750a0c8f9ee512687b1",
+    "shared-shader-regressions.xml": "da2d6179292be2d59f8b5893bacf548684e1e5644f87ed9c250d2b28828b97ae"
+  },
+  "instrumented_timings_excluded": true
+}

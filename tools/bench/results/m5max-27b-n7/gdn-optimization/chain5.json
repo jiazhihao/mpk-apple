@@ -1,0 +1,1302 @@
+{
+  "layers": 5,
+  "reps": 9,
+  "steps": 16,
+  "rows": 8,
+  "configs": {
+    "original": null,
+    "previous": {
+      "workers": 120,
+      "sgs": 16,
+      "tn": 16,
+      "split": true,
+      "compact": true,
+      "gdn_sl": 4,
+      "barrier": "simd",
+      "task_barrier": false,
+      "scalar_sgs": 4
+    },
+    "candidate": {
+      "workers": 80,
+      "sgs": 8,
+      "tn": 32,
+      "split": true,
+      "compact": true,
+      "gdn_sl": 8,
+      "barrier": "simd",
+      "task_barrier": false,
+      "scalar_sgs": 8,
+      "fp8_layout": "tile",
+      "q_outer": 0,
+      "fp8_decode": "subtract",
+      "fp8_tile_block": 8,
+      "restrict_weights": false,
+      "gemm_overrides": {
+        "3": {
+          "tn": 32,
+          "ksplit": 4,
+          "groups": 120,
+          "ragged_teams": true
+        },
+        "0": {
+          "tn": 32,
+          "ksplit": 2,
+          "groups": 240,
+          "ragged_teams": true
+        },
+        "1": {
+          "tn": 16,
+          "ksplit": 8,
+          "groups": 240,
+          "ragged_teams": true
+        },
+        "2": {
+          "tn": 32,
+          "ksplit": 8,
+          "groups": 120,
+          "ragged_teams": true
+        }
+      },
+      "perm_sgs": 64,
+      "direct_norm": true,
+      "dual_permute": true
+    }
+  },
+  "dispatches": {
+    "original": 45,
+    "previous": 19,
+    "candidate": 19
+  },
+  "results": {
+    "original": {
+      "gpu_us": 3138.2760407723254,
+      "wall_us": 3150.653645861894
+    },
+    "previous": {
+      "gpu_us": 3314.0494797407882,
+      "wall_us": 3329.25260392949
+    },
+    "candidate": {
+      "gpu_us": 2977.7838540212542,
+      "wall_us": 2991.0130207426846
+    }
+  },
+  "samples": {
+    "original": [
+      {
+        "wall_us": 3155.1614585332572,
+        "gpu_us": 3141.1223963004886
+      },
+      {
+        "wall_us": 3151.2005203403533,
+        "gpu_us": 3138.505207516573
+      },
+      {
+        "wall_us": 3155.0182290375233,
+        "gpu_us": 3139.9713548125874
+      },
+      {
+        "wall_us": 3152.515625115484,
+        "gpu_us": 3139.291666684585
+      },
+      {
+        "wall_us": 3150.653645861894,
+        "gpu_us": 3139.2630221489526
+      },
+      {
+        "wall_us": 3155.0364582799375,
+        "gpu_us": 3139.080728942645
+      },
+      {
+        "wall_us": 3155.510416254401,
+        "gpu_us": 3140.6354164573713
+      },
+      {
+        "wall_us": 3153.611978981644,
+        "gpu_us": 3138.2760407723254
+      },
+      {
+        "wall_us": 3152.5208330713212,
+        "gpu_us": 3141.187499750231
+      }
+    ],
+    "previous": [
+      {
+        "wall_us": 3385.690104216337,
+        "gpu_us": 3369.6093755679613
+      },
+      {
+        "wall_us": 3377.848958596587,
+        "gpu_us": 3364.622395565675
+      },
+      {
+        "wall_us": 3378.976562526077,
+        "gpu_us": 3366.3489575701533
+      },
+      {
+        "wall_us": 3329.25260392949,
+        "gpu_us": 3314.0494797407882
+      },
+      {
+        "wall_us": 3335.6197918765247,
+        "gpu_us": 3321.989583582763
+      },
+      {
+        "wall_us": 3414.617187343538,
+        "gpu_us": 3402.515625111846
+      },
+      {
+        "wall_us": 3330.07552055642,
+        "gpu_us": 3315.2499986499606
+      },
+      {
+        "wall_us": 3380.2109374664724,
+        "gpu_us": 3367.080729731242
+      },
+      {
+        "wall_us": 3358.3567710593343,
+        "gpu_us": 3341.492185882089
+      }
+    ],
+    "candidate": [
+      {
+        "wall_us": 2995.7343749701977,
+        "gpu_us": 2982.1067701050197
+      },
+      {
+        "wall_us": 2992.760416585952,
+        "gpu_us": 2978.875000280823
+      },
+      {
+        "wall_us": 2994.1041665151715,
+        "gpu_us": 2980.3072911818163
+      },
+      {
+        "wall_us": 2991.0130207426846,
+        "gpu_us": 2978.5338538204087
+      },
+      {
+        "wall_us": 2993.268229532987,
+        "gpu_us": 2978.3437503283494
+      },
+      {
+        "wall_us": 2999.624999705702,
+        "gpu_us": 2979.132811560703
+      },
+      {
+        "wall_us": 2991.0338539630175,
+        "gpu_us": 2977.7838540212542
+      },
+      {
+        "wall_us": 2999.195312615484,
+        "gpu_us": 2981.177082801878
+      },
+      {
+        "wall_us": 2994.695312343538,
+        "gpu_us": 2981.7213548994914
+      }
+    ]
+  },
+  "input_seeds": [
+    2000,
+    2001,
+    2002,
+    2003
+  ],
+  "generated_source_sha256": {
+    "original": "f23245e46684002a882bb13c23ccbba64dd3d2eda6b965a071c2344953ee5e0b",
+    "previous": "1e20000bf762189d5ad3c31f96f8661fe452da71dae230ee21753ae26dbdfa47",
+    "candidate": "ad66eced290e1433dec58db75806e174e176da2d123e0fc7b88f048a9e362c93"
+  },
+  "min_cosine": 0.9999743067224456,
+  "checks": [
+    {
+      "step": 0,
+      "buffer": "layers.0.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999998842743513,
+      "relative_l2": 0.00048110025717720264,
+      "max_abs": 0.015625,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.0.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999998140576463,
+      "relative_l2": 0.0006098240833589957,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.1.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999990722112962,
+      "relative_l2": 0.0013622253712241802,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.1.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.999999019949612,
+      "relative_l2": 0.0014000699339873027,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.2.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999964097010687,
+      "relative_l2": 0.002707612241216559,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.2.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999944322382889,
+      "relative_l2": 0.00336124018455739,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.3.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999962402308005,
+      "relative_l2": 0.0027689151334767993,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.3.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999944881840185,
+      "relative_l2": 0.003344872437733977,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.4.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999932843337184,
+      "relative_l2": 0.003717457246635177,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.4.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.999991996859122,
+      "relative_l2": 0.004023508505984458,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.0.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999999999879914,
+      "relative_l2": 4.900794528451324e-06,
+      "max_abs": 0.0009765625,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.0.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999999968944243,
+      "relative_l2": 7.88227184984905e-05,
+      "max_abs": 0.015625,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.0.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999999999932,
+      "relative_l2": 1.1636653101766562e-07,
+      "max_abs": 8.628703653812408e-06,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.0.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999999998924202,
+      "relative_l2": 1.4668297157249762e-05,
+      "max_abs": 0.0009049177169799805,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.1.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999986475121789,
+      "relative_l2": 0.001644742575238991,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.1.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999975037318106,
+      "relative_l2": 0.002235189189941019,
+      "max_abs": 0.0625,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.1.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999943348742,
+      "relative_l2": 0.00010653683611395547,
+      "max_abs": 0.0028550326824188232,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.1.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999999877189839,
+      "relative_l2": 0.00015672522637259908,
+      "max_abs": 0.003628253936767578,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.2.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999943154821131,
+      "relative_l2": 0.0033724625850705854,
+      "max_abs": 0.015625,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.2.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999928021803485,
+      "relative_l2": 0.0037989506623160906,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.2.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999515487086,
+      "relative_l2": 0.0003138133502246725,
+      "max_abs": 0.002293795347213745,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.2.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999999345478224,
+      "relative_l2": 0.0003631368381915136,
+      "max_abs": 0.0013717412948608398,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.3.self_attn.k_cache",
+      "engine": "previous",
+      "cosine": 0.9999961288049077,
+      "relative_l2": 0.002782546956141337,
+      "max_abs": 0.0390625,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.3.self_attn.k_cache",
+      "engine": "candidate",
+      "cosine": 0.9999956827724764,
+      "relative_l2": 0.0029385334226938514,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.3.self_attn.v_cache",
+      "engine": "previous",
+      "cosine": 0.9999892058894136,
+      "relative_l2": 0.004664184630954026,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.3.self_attn.v_cache",
+      "engine": "candidate",
+      "cosine": 0.9999860928690834,
+      "relative_l2": 0.005294095492614759,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.4.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999844335179977,
+      "relative_l2": 0.005652454640108536,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.4.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999801090654831,
+      "relative_l2": 0.006790980508587588,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.4.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999457090043,
+      "relative_l2": 0.0003295197996570351,
+      "max_abs": 0.0013660043478012085,
+      "finite": true
+    },
+    {
+      "step": 0,
+      "buffer": "layers.4.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999997147738294,
+      "relative_l2": 0.0007557749630722858,
+      "max_abs": 0.0020608454942703247,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.0.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999999205995002,
+      "relative_l2": 0.00039849922960626707,
+      "max_abs": 0.015625,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.0.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999996690254754,
+      "relative_l2": 0.0008136159070998427,
+      "max_abs": 0.015625,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.1.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999989806901556,
+      "relative_l2": 0.0014279392207673881,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.1.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999981067674528,
+      "relative_l2": 0.0019513411100325199,
+      "max_abs": 0.25,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.2.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999965859674803,
+      "relative_l2": 0.002619703862615374,
+      "max_abs": 0.25,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.2.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999927644162258,
+      "relative_l2": 0.00381042020066484,
+      "max_abs": 0.75,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.3.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999957323581289,
+      "relative_l2": 0.002925223027563603,
+      "max_abs": 0.25,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.3.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999935058027246,
+      "relative_l2": 0.0036087309659869147,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.4.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999926262909993,
+      "relative_l2": 0.0038414944484445376,
+      "max_abs": 0.25,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.4.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999889807092225,
+      "relative_l2": 0.0047426752797314385,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.0.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999999999880613,
+      "relative_l2": 4.886455834229231e-06,
+      "max_abs": 0.0009765625,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.0.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999999984551071,
+      "relative_l2": 5.5589999283033585e-05,
+      "max_abs": 0.015625,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.0.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999999999818,
+      "relative_l2": 1.9083668057745013e-07,
+      "max_abs": 8.628703653812408e-06,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.0.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.99999999971564,
+      "relative_l2": 2.3847822080587025e-05,
+      "max_abs": 0.0009049177169799805,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.1.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999990110319974,
+      "relative_l2": 0.0014063914933248414,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.1.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999978339746988,
+      "relative_l2": 0.0020815450944057542,
+      "max_abs": 0.0625,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.1.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999571619407,
+      "relative_l2": 0.0002929520339967783,
+      "max_abs": 0.0035509467124938965,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.1.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999998823099099,
+      "relative_l2": 0.00048578781127519763,
+      "max_abs": 0.005857944488525391,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.2.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999938671829434,
+      "relative_l2": 0.0035026883008784015,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.2.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999914466821368,
+      "relative_l2": 0.00418406024533879,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.2.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999996957502444,
+      "relative_l2": 0.0008046806713386654,
+      "max_abs": 0.002293795347213745,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.2.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999994735065837,
+      "relative_l2": 0.0010261703300033257,
+      "max_abs": 0.0027435123920440674,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.3.self_attn.k_cache",
+      "engine": "previous",
+      "cosine": 0.9999941048446012,
+      "relative_l2": 0.0034337374833844606,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.3.self_attn.k_cache",
+      "engine": "candidate",
+      "cosine": 0.9999929667723287,
+      "relative_l2": 0.003750524367407051,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.3.self_attn.v_cache",
+      "engine": "previous",
+      "cosine": 0.9999884750449275,
+      "relative_l2": 0.004809079731719314,
+      "max_abs": 0.041015625,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.3.self_attn.v_cache",
+      "engine": "candidate",
+      "cosine": 0.9999825833849363,
+      "relative_l2": 0.00590856370489281,
+      "max_abs": 0.0625,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.4.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999823552888254,
+      "relative_l2": 0.005974463964630457,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.4.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999743067224456,
+      "relative_l2": 0.007187546305947678,
+      "max_abs": 0.0625,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.4.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999997878329924,
+      "relative_l2": 0.0006539743700716668,
+      "max_abs": 0.0020794570446014404,
+      "finite": true
+    },
+    {
+      "step": 1,
+      "buffer": "layers.4.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999992054806282,
+      "relative_l2": 0.0012605904717905643,
+      "max_abs": 0.003444373607635498,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.0.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999998177732196,
+      "relative_l2": 0.0006036998668569771,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.0.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999996290217364,
+      "relative_l2": 0.0008613757057970184,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.1.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999993267949026,
+      "relative_l2": 0.0011603511842404918,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.1.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999990207885651,
+      "relative_l2": 0.0013994384548376693,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.2.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999963399934996,
+      "relative_l2": 0.0028019234322044415,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.2.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.999995908987055,
+      "relative_l2": 0.0029477327294511386,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.3.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999971162927369,
+      "relative_l2": 0.002422407715980177,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.3.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999967626387254,
+      "relative_l2": 0.002562280020283882,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.4.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999954499117008,
+      "relative_l2": 0.0030315506347867835,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.4.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999949816563349,
+      "relative_l2": 0.0031821488349311378,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.0.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999999999875394,
+      "relative_l2": 4.99207713728625e-06,
+      "max_abs": 0.0009765625,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.0.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999999999998096,
+      "relative_l2": 6.171413021519862e-07,
+      "max_abs": 0.0001220703125,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.0.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.99999999999998,
+      "relative_l2": 1.9921047117521965e-07,
+      "max_abs": 2.3813045118004084e-06,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.0.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999999997100685,
+      "relative_l2": 2.408032669348327e-05,
+      "max_abs": 0.0008652210235595703,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.1.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.999998958249182,
+      "relative_l2": 0.0014436150245411188,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.1.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999981988669637,
+      "relative_l2": 0.0018988294080290423,
+      "max_abs": 0.0625,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.1.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999358361714,
+      "relative_l2": 0.00035822865313204995,
+      "max_abs": 0.0035509467124938965,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.1.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999998478333997,
+      "relative_l2": 0.0005526143713702212,
+      "max_abs": 0.005857944488525391,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.2.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999942430440888,
+      "relative_l2": 0.0033932201463244683,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.2.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999923135385382,
+      "relative_l2": 0.0039617401889630414,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.2.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999993130325204,
+      "relative_l2": 0.0012008664522688156,
+      "max_abs": 0.0029980242252349854,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.2.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999993668007265,
+      "relative_l2": 0.001132828608379013,
+      "max_abs": 0.0033239126205444336,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.3.self_attn.k_cache",
+      "engine": "previous",
+      "cosine": 0.999992971590607,
+      "relative_l2": 0.0037492837514193117,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.3.self_attn.k_cache",
+      "engine": "candidate",
+      "cosine": 0.9999916449686489,
+      "relative_l2": 0.004087788434914393,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.3.self_attn.v_cache",
+      "engine": "previous",
+      "cosine": 0.999988129970709,
+      "relative_l2": 0.004873398813024897,
+      "max_abs": 0.041015625,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.3.self_attn.v_cache",
+      "engine": "candidate",
+      "cosine": 0.9999833383395524,
+      "relative_l2": 0.005799929086456076,
+      "max_abs": 0.0625,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.4.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999823340719205,
+      "relative_l2": 0.005945728211147563,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.4.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.999976764872755,
+      "relative_l2": 0.006865131155050526,
+      "max_abs": 0.0625,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.4.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999997045011102,
+      "relative_l2": 0.0007692790787918677,
+      "max_abs": 0.0020794570446014404,
+      "finite": true
+    },
+    {
+      "step": 2,
+      "buffer": "layers.4.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999996069633705,
+      "relative_l2": 0.0008866139801728258,
+      "max_abs": 0.003444373607635498,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.0.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999999330418576,
+      "relative_l2": 0.0003659463740960424,
+      "max_abs": 0.015625,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.0.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999996390589962,
+      "relative_l2": 0.0008496482470251017,
+      "max_abs": 0.015625,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.1.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999995416443727,
+      "relative_l2": 0.0009574511027091077,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.1.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999991116802776,
+      "relative_l2": 0.001332932390623434,
+      "max_abs": 0.0234375,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.2.mlp.h",
+      "engine": "previous",
+      "cosine": 0.999997837101286,
+      "relative_l2": 0.0021226640584542265,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.2.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999972537189847,
+      "relative_l2": 0.002383920196746526,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.3.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999977704664604,
+      "relative_l2": 0.0021501774044037705,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.3.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999972348154856,
+      "relative_l2": 0.00238761371246648,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.4.mlp.h",
+      "engine": "previous",
+      "cosine": 0.9999966264410837,
+      "relative_l2": 0.0026232478774868197,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.4.mlp.h",
+      "engine": "candidate",
+      "cosine": 0.9999959001333041,
+      "relative_l2": 0.0028895302590479567,
+      "max_abs": 0.5,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.0.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999999995632719,
+      "relative_l2": 2.955465238655372e-05,
+      "max_abs": 0.0078125,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.0.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999999998980849,
+      "relative_l2": 1.4277021993084067e-05,
+      "max_abs": 0.00390625,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.0.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999999996951,
+      "relative_l2": 7.80292773236028e-07,
+      "max_abs": 3.343261778354645e-05,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.0.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999999997064258,
+      "relative_l2": 2.423112387646389e-05,
+      "max_abs": 0.0008417665958404541,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.1.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999989121823506,
+      "relative_l2": 0.0014754575517635176,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.1.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999980681556578,
+      "relative_l2": 0.001965720838329377,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.1.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999999454803703,
+      "relative_l2": 0.0003302219418438669,
+      "max_abs": 0.0032347142696380615,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.1.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999998416983542,
+      "relative_l2": 0.0005644274541871793,
+      "max_abs": 0.003163054585456848,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.2.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999958191356095,
+      "relative_l2": 0.002892236210257089,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.2.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999949406974833,
+      "relative_l2": 0.0031826591532642186,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.2.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999990747876778,
+      "relative_l2": 0.0013941553929401787,
+      "max_abs": 0.0029980242252349854,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.2.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999996378537324,
+      "relative_l2": 0.0008519617360566618,
+      "max_abs": 0.0033239126205444336,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.3.self_attn.k_cache",
+      "engine": "previous",
+      "cosine": 0.9999926443489239,
+      "relative_l2": 0.003835526301650422,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.3.self_attn.k_cache",
+      "engine": "candidate",
+      "cosine": 0.9999911275318372,
+      "relative_l2": 0.004212465731482488,
+      "max_abs": 0.046875,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.3.self_attn.v_cache",
+      "engine": "previous",
+      "cosine": 0.9999887260635228,
+      "relative_l2": 0.004748469539448703,
+      "max_abs": 0.041015625,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.3.self_attn.v_cache",
+      "engine": "candidate",
+      "cosine": 0.9999843596477198,
+      "relative_l2": 0.005604674524953304,
+      "max_abs": 0.0625,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.4.linear_attn.conv_state",
+      "engine": "previous",
+      "cosine": 0.9999876919789414,
+      "relative_l2": 0.005040068766500683,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.4.linear_attn.conv_state",
+      "engine": "candidate",
+      "cosine": 0.9999861918524855,
+      "relative_l2": 0.005336133034304208,
+      "max_abs": 0.03125,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.4.linear_attn.rec_state",
+      "engine": "previous",
+      "cosine": 0.9999996478349065,
+      "relative_l2": 0.0008417261337500187,
+      "max_abs": 0.0020627975463867188,
+      "finite": true
+    },
+    {
+      "step": 3,
+      "buffer": "layers.4.linear_attn.rec_state",
+      "engine": "candidate",
+      "cosine": 0.9999996824810519,
+      "relative_l2": 0.0008046228164527011,
+      "max_abs": 0.002421766519546509,
+      "finite": true
+    }
+  ],
+  "replay_bit_exact": true,
+  "unique_weight_bytes": 21395341312,
+  "recommended_working_set": 40200896512,
+  "bound_weight_bytes": {
+    "original": 3617488896,
+    "previous": 3617488896,
+    "candidate": 4204691456
+  }
+}

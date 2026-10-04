@@ -1,0 +1,1270 @@
+{
+ "version": 2,
+ "alignment": 16384,
+ "pack": "weights.pack",
+ "nbytes": 1994145792,
+ "slabs": [
+  {
+   "name": "draft.fc.fc",
+   "format": "fp8_e4m3",
+   "offset": 0,
+   "nbytes": 131072000,
+   "n": 5120,
+   "k": 25600,
+   "rows": 16,
+   "unit_bytes": 800,
+   "payload_bytes": 800,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 131072000,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "fc",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0014735630247741938
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.0.self_attn.qkv.q_proj+k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 131104768,
+   "nbytes": 31457280,
+   "n": 6144,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 384,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 162562048,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.0.self_attn.q_proj",
+     "row_select": null,
+     "rows": 4096,
+     "tensor_scale": 0.0008893694030120969
+    },
+    {
+     "source": "layers.0.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0007193429046310484
+    },
+    {
+     "source": "layers.0.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.00037928990786895156
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.0.self_attn.kv_ctx.k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 162594816,
+   "nbytes": 10485760,
+   "n": 2048,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 128,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 173080576,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.0.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0007193429046310484
+    },
+    {
+     "source": "layers.0.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.00037928990786895156
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.0.self_attn.o_proj.o_proj",
+   "format": "fp8_e4m3",
+   "offset": 173096960,
+   "nbytes": 20971520,
+   "n": 5120,
+   "k": 4096,
+   "rows": 16,
+   "unit_bytes": 128,
+   "payload_bytes": 128,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 194068480,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.0.self_attn.o_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0017874581972137094
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.0.mlp.gate_up.gate_proj+up_proj",
+   "format": "fp8_e4m3",
+   "offset": 194101248,
+   "nbytes": 178257920,
+   "n": 34816,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 2176,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 372359168,
+   "row_perm": true,
+   "segments": [
+    {
+     "source": "layers.0.mlp.gate_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0006888253265060484
+    },
+    {
+     "source": "layers.0.mlp.up_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0006495884736068547
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.0.mlp.down.down_proj",
+   "format": "fp8_e4m3",
+   "offset": 372506624,
+   "nbytes": 89128960,
+   "n": 5120,
+   "k": 17408,
+   "rows": 16,
+   "unit_bytes": 544,
+   "payload_bytes": 544,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 461635584,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.0.mlp.down_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0020926338620483875
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.1.self_attn.qkv.q_proj+k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 461668352,
+   "nbytes": 31457280,
+   "n": 6144,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 384,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 493125632,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.1.self_attn.q_proj",
+     "row_select": null,
+     "rows": 4096,
+     "tensor_scale": 0.0010506765684112906
+    },
+    {
+     "source": "layers.1.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0009504045592620969
+    },
+    {
+     "source": "layers.1.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0005711146513931453
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.1.self_attn.kv_ctx.k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 493158400,
+   "nbytes": 10485760,
+   "n": 2048,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 128,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 503644160,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.1.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0009504045592620969
+    },
+    {
+     "source": "layers.1.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0005711146513931453
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.1.self_attn.o_proj.o_proj",
+   "format": "fp8_e4m3",
+   "offset": 503660544,
+   "nbytes": 20971520,
+   "n": 5120,
+   "k": 4096,
+   "rows": 16,
+   "unit_bytes": 128,
+   "payload_bytes": 128,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 524632064,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.1.self_attn.o_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.00201416015625
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.1.mlp.gate_up.gate_proj+up_proj",
+   "format": "fp8_e4m3",
+   "offset": 524664832,
+   "nbytes": 178257920,
+   "n": 34816,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 2176,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 702922752,
+   "row_perm": true,
+   "segments": [
+    {
+     "source": "layers.1.mlp.gate_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0006626673857681453
+    },
+    {
+     "source": "layers.1.mlp.up_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0008370535797439516
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.1.mlp.down.down_proj",
+   "format": "fp8_e4m3",
+   "offset": 703070208,
+   "nbytes": 89128960,
+   "n": 5120,
+   "k": 17408,
+   "rows": 16,
+   "unit_bytes": 544,
+   "payload_bytes": 544,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 792199168,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.1.mlp.down_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0019095285097137094
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.2.self_attn.qkv.q_proj+k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 792231936,
+   "nbytes": 31457280,
+   "n": 6144,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 384,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 823689216,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.2.self_attn.q_proj",
+     "row_select": null,
+     "rows": 4096,
+     "tensor_scale": 0.0011335100280120969
+    },
+    {
+     "source": "layers.2.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0009547642548568547
+    },
+    {
+     "source": "layers.2.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0007280622376129031
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.2.self_attn.kv_ctx.k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 823721984,
+   "nbytes": 10485760,
+   "n": 2048,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 128,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 834207744,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.2.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0009547642548568547
+    },
+    {
+     "source": "layers.2.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0007280622376129031
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.2.self_attn.o_proj.o_proj",
+   "format": "fp8_e4m3",
+   "offset": 834224128,
+   "nbytes": 20971520,
+   "n": 5120,
+   "k": 4096,
+   "rows": 16,
+   "unit_bytes": 128,
+   "payload_bytes": 128,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 855195648,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.2.self_attn.o_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0018572126282379031
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.2.mlp.gate_up.gate_proj+up_proj",
+   "format": "fp8_e4m3",
+   "offset": 855228416,
+   "nbytes": 178257920,
+   "n": 34816,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 2176,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1033486336,
+   "row_perm": true,
+   "segments": [
+    {
+     "source": "layers.2.mlp.gate_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0007280622376129031
+    },
+    {
+     "source": "layers.2.mlp.up_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0007890973938629031
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.2.mlp.down.down_proj",
+   "format": "fp8_e4m3",
+   "offset": 1033633792,
+   "nbytes": 89128960,
+   "n": 5120,
+   "k": 17408,
+   "rows": 16,
+   "unit_bytes": 544,
+   "payload_bytes": 544,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1122762752,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.2.mlp.down_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0022234234493225813
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.3.self_attn.qkv.q_proj+k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 1122795520,
+   "nbytes": 31457280,
+   "n": 6144,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 384,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1154252800,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.3.self_attn.q_proj",
+     "row_select": null,
+     "rows": 4096,
+     "tensor_scale": 0.0011422293027862906
+    },
+    {
+     "source": "layers.3.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0010157993528991938
+    },
+    {
+     "source": "layers.3.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.000823974609375
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.3.self_attn.kv_ctx.k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 1154285568,
+   "nbytes": 10485760,
+   "n": 2048,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 128,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1164771328,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.3.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0010157993528991938
+    },
+    {
+     "source": "layers.3.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.000823974609375
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.3.self_attn.o_proj.o_proj",
+   "format": "fp8_e4m3",
+   "offset": 1164787712,
+   "nbytes": 20971520,
+   "n": 5120,
+   "k": 4096,
+   "rows": 16,
+   "unit_bytes": 128,
+   "payload_bytes": 128,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1185759232,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.3.self_attn.o_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0016305105527862906
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.3.mlp.gate_up.gate_proj+up_proj",
+   "format": "fp8_e4m3",
+   "offset": 1185792000,
+   "nbytes": 178257920,
+   "n": 34816,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 2176,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1364049920,
+   "row_perm": true,
+   "segments": [
+    {
+     "source": "layers.3.mlp.gate_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0006365095032379031
+    },
+    {
+     "source": "layers.3.mlp.up_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0008632115204818547
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.3.mlp.down.down_proj",
+   "format": "fp8_e4m3",
+   "offset": 1364197376,
+   "nbytes": 89128960,
+   "n": 5120,
+   "k": 17408,
+   "rows": 16,
+   "unit_bytes": 544,
+   "payload_bytes": 544,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1453326336,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.3.mlp.down_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0022147041745483875
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.4.self_attn.qkv.q_proj+k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 1453359104,
+   "nbytes": 31457280,
+   "n": 6144,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 384,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1484816384,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.4.self_attn.q_proj",
+     "row_select": null,
+     "rows": 4096,
+     "tensor_scale": 0.0014474050840362906
+    },
+    {
+     "source": "layers.4.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.000701904296875
+    },
+    {
+     "source": "layers.4.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0011073520872741938
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.4.self_attn.kv_ctx.k_proj+v_proj",
+   "format": "fp8_e4m3",
+   "offset": 1484849152,
+   "nbytes": 10485760,
+   "n": 2048,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 128,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1495334912,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.4.self_attn.k_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.000701904296875
+    },
+    {
+     "source": "layers.4.self_attn.v_proj",
+     "row_select": null,
+     "rows": 1024,
+     "tensor_scale": 0.0011073520872741938
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.4.self_attn.o_proj.o_proj",
+   "format": "fp8_e4m3",
+   "offset": 1495351296,
+   "nbytes": 20971520,
+   "n": 5120,
+   "k": 4096,
+   "rows": 16,
+   "unit_bytes": 128,
+   "payload_bytes": 128,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1516322816,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.4.self_attn.o_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0018746511777862906
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.4.mlp.gate_up.gate_proj+up_proj",
+   "format": "fp8_e4m3",
+   "offset": 1516355584,
+   "nbytes": 178257920,
+   "n": 34816,
+   "k": 5120,
+   "rows": 16,
+   "unit_bytes": 160,
+   "payload_bytes": 160,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 2176,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1694613504,
+   "row_perm": true,
+   "segments": [
+    {
+     "source": "layers.4.mlp.gate_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0006844656891189516
+    },
+    {
+     "source": "layers.4.mlp.up_proj",
+     "row_select": null,
+     "rows": 17408,
+     "tensor_scale": 0.0007455008453689516
+    }
+   ]
+  },
+  {
+   "name": "draft.layers.4.mlp.down.down_proj",
+   "format": "fp8_e4m3",
+   "offset": 1694760960,
+   "nbytes": 89128960,
+   "n": 5120,
+   "k": 17408,
+   "rows": 16,
+   "unit_bytes": 544,
+   "payload_bytes": 544,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 320,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1783889920,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "layers.4.mlp.down_proj",
+     "row_select": null,
+     "rows": 5120,
+     "tensor_scale": 0.0039236885495483875
+    }
+   ]
+  },
+  {
+   "name": "draft.markov_w1.weight",
+   "format": "bf16",
+   "offset": 1783922688,
+   "nbytes": 127139840,
+   "n": 248320,
+   "k": 256,
+   "rows": 16,
+   "unit_bytes": 16,
+   "payload_bytes": 16,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 15520,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1911062528,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "markov_head.markov_w1",
+     "row_select": null,
+     "rows": 248320,
+     "tensor_scale": 1.0
+    }
+   ]
+  },
+  {
+   "name": "draft.markov_w2.w2",
+   "format": "fp8_e4m3",
+   "offset": 1912061952,
+   "nbytes": 63569920,
+   "n": 248320,
+   "k": 256,
+   "rows": 16,
+   "unit_bytes": 8,
+   "payload_bytes": 8,
+   "scale_bytes": 0,
+   "lane_order": "interleaved16",
+   "scale_group": 0,
+   "n_blocks": 15520,
+   "scale_placement": "inline",
+   "scale_unit_bytes": 0,
+   "scale_dtype": "",
+   "scale_lane_divisor": 1,
+   "scale_order": "lane",
+   "row_scales_offset": 1975631872,
+   "row_perm": false,
+   "segments": [
+    {
+     "source": "markov_head.markov_w2",
+     "row_select": null,
+     "rows": 248320,
+     "tensor_scale": 0.0038016182370483875
+    }
+   ]
+  }
+ ],
+ "aux": [
+  {
+   "name": "draft.conf_w",
+   "source": "confidence_head.proj.weight",
+   "offset": 1976631296,
+   "nbytes": 21504,
+   "dtype": "F32",
+   "shape": [
+    1,
+    5376
+   ],
+   "transform": "f32"
+  },
+  {
+   "name": "draft.conf_b",
+   "source": "confidence_head.proj.bias",
+   "offset": 1976664064,
+   "nbytes": 4,
+   "dtype": "F32",
+   "shape": [
+    1
+   ],
+   "transform": "f32"
+  },
+  {
+   "name": "draft.hidden_norm.weight",
+   "source": "hidden_norm.weight",
+   "offset": 1976680448,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.0.input_norm.weight",
+   "source": "layers.0.input_layernorm.weight",
+   "offset": 1976713216,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.0.self_attn.q_norm",
+   "source": "layers.0.self_attn.q_norm.weight",
+   "offset": 1976745984,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.0.self_attn.k_norm",
+   "source": "layers.0.self_attn.k_norm.weight",
+   "offset": 1976762368,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.0.post_norm.weight",
+   "source": "layers.0.post_attention_layernorm.weight",
+   "offset": 1976778752,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.1.input_norm.weight",
+   "source": "layers.1.input_layernorm.weight",
+   "offset": 1976811520,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.1.self_attn.q_norm",
+   "source": "layers.1.self_attn.q_norm.weight",
+   "offset": 1976844288,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.1.self_attn.k_norm",
+   "source": "layers.1.self_attn.k_norm.weight",
+   "offset": 1976860672,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.1.post_norm.weight",
+   "source": "layers.1.post_attention_layernorm.weight",
+   "offset": 1976877056,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.2.input_norm.weight",
+   "source": "layers.2.input_layernorm.weight",
+   "offset": 1976909824,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.2.self_attn.q_norm",
+   "source": "layers.2.self_attn.q_norm.weight",
+   "offset": 1976942592,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.2.self_attn.k_norm",
+   "source": "layers.2.self_attn.k_norm.weight",
+   "offset": 1976958976,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.2.post_norm.weight",
+   "source": "layers.2.post_attention_layernorm.weight",
+   "offset": 1976975360,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.3.input_norm.weight",
+   "source": "layers.3.input_layernorm.weight",
+   "offset": 1977008128,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.3.self_attn.q_norm",
+   "source": "layers.3.self_attn.q_norm.weight",
+   "offset": 1977040896,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.3.self_attn.k_norm",
+   "source": "layers.3.self_attn.k_norm.weight",
+   "offset": 1977057280,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.3.post_norm.weight",
+   "source": "layers.3.post_attention_layernorm.weight",
+   "offset": 1977073664,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.4.input_norm.weight",
+   "source": "layers.4.input_layernorm.weight",
+   "offset": 1977106432,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.4.self_attn.q_norm",
+   "source": "layers.4.self_attn.q_norm.weight",
+   "offset": 1977139200,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.4.self_attn.k_norm",
+   "source": "layers.4.self_attn.k_norm.weight",
+   "offset": 1977155584,
+   "nbytes": 512,
+   "dtype": "F32",
+   "shape": [
+    128
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.layers.4.post_norm.weight",
+   "source": "layers.4.post_attention_layernorm.weight",
+   "offset": 1977171968,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft.norm.weight",
+   "source": "norm.weight",
+   "offset": 1977204736,
+   "nbytes": 20480,
+   "dtype": "F32",
+   "shape": [
+    5120
+   ],
+   "transform": "bf16_f32"
+  },
+  {
+   "name": "draft_rope_cos",
+   "source": null,
+   "offset": 1977237504,
+   "nbytes": 8454144,
+   "dtype": "BF16",
+   "shape": [
+    33024,
+    128
+   ],
+   "transform": "table"
+  },
+  {
+   "name": "draft_rope_sin",
+   "source": null,
+   "offset": 1985691648,
+   "nbytes": 8454144,
+   "dtype": "BF16",
+   "shape": [
+    33024,
+    128
+   ],
+   "transform": "table"
+  }
+ ],
+ "drafter": "dspark",
+ "options": {
+  "max_context": 33024
+ },
+ "quantize": {
+  "format": "fp8_e4m3",
+  "keep": [
+   "markov_w1"
+  ],
+  "matrices": 37
+ }
+}

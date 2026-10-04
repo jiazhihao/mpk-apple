@@ -1,0 +1,6 @@
+{
+  "completed": 240,
+  "planned": 514,
+  "reason": "Adaptive pruning: all tested cached-input configurations slower than original at the true producer boundary; redirect to reusable post-product normalization and retune workers after choosing the algorithm.",
+  "partial_sweep": true
+}

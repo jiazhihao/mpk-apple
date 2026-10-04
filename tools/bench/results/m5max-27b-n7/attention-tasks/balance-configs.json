@@ -1,0 +1,37 @@
+[
+  {
+    "workers": 80,
+    "sgs": 8,
+    "tn": 16,
+    "split": true,
+    "compact": true,
+    "barrier": "simd",
+    "task_barrier": false,
+    "attention_groups": 160,
+    "merge_unroll": 4,
+    "schedule": "queue",
+    "task_grain": "tile",
+    "task_batch": 1,
+    "attention_task_tiles": 8,
+    "task_seed": true,
+    "task_stats": true
+  },
+  {
+    "workers": 160,
+    "sgs": 4,
+    "tn": 16,
+    "split": true,
+    "compact": true,
+    "barrier": "simd",
+    "task_barrier": false,
+    "attention_groups": 320,
+    "merge_unroll": 4,
+    "schedule": "queue",
+    "task_grain": "tile",
+    "task_batch": 1,
+    "attention_task_tiles": 3,
+    "task_seed": true,
+    "scalar_sgs": 2,
+    "task_stats": true
+  }
+]

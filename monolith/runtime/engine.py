@@ -84,6 +84,8 @@ class Engine:
         st = self.runner.run(max_steps, steps_per_cb, in_flight, reencode, max_tokens)
         if st.error:
             raise RuntimeError(st.error)
+        if st.done and int(self.state()["error"]) == 3:
+            raise RuntimeError("Megakernel: bounded worker barrier timed out")
         return StepReport(st.steps_submitted, st.command_buffers, st.gpu_ms, st.wall_ms, st.host_busy_ms, st.done, self.runner.drain())
 
     def profile(self, steps: int = 3) -> List[List[Tuple[float, float]]]:

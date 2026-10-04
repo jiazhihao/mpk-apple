@@ -1,0 +1,7 @@
+HASHED bf16
+HASHED fp8_e4m3
+HASHED int8
+HASHED int4_affine
+HASHED nvfp4
+5606 recorded trials; 200 rejected
+ARCHIVED /Users/zhihaojia/lithos/mpk-apple/tools/bench/results/m5max-27b-dspark/refinement-20261003

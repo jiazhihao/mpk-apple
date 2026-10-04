@@ -1,0 +1,4328 @@
+{
+  "128": {
+    "candidates": [
+      {
+        "config": {
+          "attention_chunk_tiles": 3,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 8,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 2,
+              "q_outer": 0,
+              "tn": 32
+            },
+            "1": {
+              "fp8_tile_block": 32
+            }
+          },
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.8915814250890509,
+          "matched_control": 0.8952971662626303
+        },
+        "paired_median_ratio": 0.8924658150730562,
+        "paired_max_ratio": 0.9642261712688025,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          561
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            627.0703123882413,
+            625.9934897534549,
+            627.6575517840683,
+            626.2760418467224
+          ],
+          "single_kernel": [
+            558.7044269777834,
+            557.7382813207805,
+            559.2864584177732,
+            559.4635419547558
+          ],
+          "matched_control": [
+            561.3476564176381,
+            558.7838543578982,
+            562.9127603024244,
+            561.4700522273779
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 3,
+          "attention_compact_partials": true,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 8,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 2,
+              "q_outer": 0,
+              "tn": 32
+            },
+            "1": {
+              "fp8_tile_block": 32
+            }
+          },
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.8927749455021228,
+          "matched_control": 0.8959819786579715
+        },
+        "paired_median_ratio": 0.8940832228084101,
+        "paired_max_ratio": 0.898066483272808,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          10,
+          622
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            625.8164062164724,
+            626.9166669808328,
+            626.5039062127471,
+            625.6809895858169
+          ],
+          "single_kernel": [
+            558.5286454297602,
+            557.7591145411134,
+            559.8854166455567,
+            560.157551895827
+          ],
+          "matched_control": [
+            561.3229172304273,
+            560.1380211301148,
+            561.8346356786788,
+            561.0664063133299
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 3,
+          "attention_compact_partials": true,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 8,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 2,
+              "q_outer": 0,
+              "tn": 32
+            },
+            "1": {
+              "fp8_tile_block": 32
+            }
+          },
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": false,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.8934885574683298,
+          "matched_control": 0.8949009177999021
+        },
+        "paired_median_ratio": 0.8927215501704553,
+        "paired_max_ratio": 0.9004216048025886,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          10,
+          623
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            625.4934892058372,
+            626.2018228881061,
+            626.0052085854113,
+            625.889322720468
+          ],
+          "single_kernel": [
+            557.9361980780959,
+            559.2812499962747,
+            560.0937497802079,
+            559.6197922714055
+          ],
+          "matched_control": [
+            559.7187499515712,
+            558.9205729775131,
+            561.8437500670552,
+            559.9856772460043
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 3,
+          "attention_compact_partials": false,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 8,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 2,
+              "q_outer": 0,
+              "tn": 32
+            },
+            "1": {
+              "fp8_tile_block": 32
+            }
+          },
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.8949260994380802,
+          "matched_control": 0.8948407955660186
+        },
+        "paired_median_ratio": 0.8955046665721937,
+        "paired_max_ratio": 0.9035677809588888,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          10,
+          623
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            625.502604059875,
+            627.3593748919666,
+            626.6341148875654,
+            625.5989586934447
+          ],
+          "single_kernel": [
+            560.389322694391,
+            561.016927473247,
+            560.4270836338401,
+            560.0403645075858
+          ],
+          "matched_control": [
+            559.1093748807907,
+            559.5729164779186,
+            562.4335939064622,
+            560.5494794435799
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 3,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 8,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.9060420302735805,
+          "matched_control": 0.8955956780625971
+        },
+        "paired_median_ratio": 0.9055973864347332,
+        "paired_max_ratio": 0.9624487833908892,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          3,
+          468
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            624.7812500223517,
+            626.6614580526948,
+            626.7747394740582,
+            626.520833466202
+          ],
+          "single_kernel": [
+            566.4609377272427,
+            567.2760414890945,
+            567.0416667126119,
+            568.619791418314
+          ],
+          "matched_control": [
+            562.0416663587093,
+            558.667968492955,
+            560.8645831234753,
+            561.6627605631948
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 3,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 8,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": false,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.9127800542936332,
+          "matched_control": 0.8931852012816165
+        },
+        "paired_median_ratio": 0.9117523052881022,
+        "paired_max_ratio": 0.9207243520055564,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          3,
+          469
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            624.8085936531425,
+            626.2239580973983,
+            626.9010421819985,
+            625.372395850718
+          ],
+          "single_kernel": [
+            570.3203123994172,
+            571.1848959326744,
+            572.1901040524244,
+            571.2721357122064
+          ],
+          "matched_control": [
+            558.2708334550261,
+            558.002604637295,
+            559.9960936233401,
+            559.6471354365349
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 3,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 8,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": false,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_unroll": 4,
+          "perm_sgs": 8,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.9172809821904861,
+          "matched_control": 0.8997202622176427
+        },
+        "paired_median_ratio": 0.9171008999951287,
+        "paired_max_ratio": 0.9226496876932914,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          3,
+          468
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            624.5429688133299,
+            625.933594070375,
+            626.9322917796671,
+            626.3645836152136
+          ],
+          "single_kernel": [
+            572.0833335071802,
+            574.5338536798954,
+            575.0807290896773,
+            574.9687501229346
+          ],
+          "matched_control": [
+            563.6315098963678,
+            561.6927081719041,
+            564.2473958432674,
+            563.1250003352761
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 80
+        },
+        "ratios": {
+          "single_kernel": 0.9205520897371119,
+          "matched_control": 0.9181146369515669
+        },
+        "paired_median_ratio": 0.9198116649107834,
+        "paired_max_ratio": 0.925750901344703,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          0,
+          415
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            625.6184899248183,
+            626.2877602130175,
+            626.2161461636424,
+            625.7812501862645
+          ],
+          "single_kernel": [
+            575.0559894368052,
+            576.3320312835276,
+            576.8476561643183,
+            576.7395836301148
+          ],
+          "matched_control": [
+            573.8033852539957,
+            574.117187410593,
+            575.5117191001773,
+            575.4401041194797
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 3,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 8,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 2,
+              "q_outer": 0,
+              "tn": 32
+            },
+            "1": {
+              "fp8_tile_block": 32
+            }
+          },
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 228
+        },
+        "ratios": {
+          "single_kernel": 13.254925091387234,
+          "matched_control": 0.8804107960171496
+        },
+        "paired_median_ratio": 16.889456873683457,
+        "paired_max_ratio": 17.49178826012716,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          true,
+          8,
+          561
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            625.8658850565553,
+            626.3645831495523,
+            626.8072915263474,
+            627.9127602465451
+          ],
+          "single_kernel": [
+            8215.036458335817,
+            8462.216145824641,
+            8340.837239753455,
+            8213.8671875
+          ],
+          "matched_control": [
+            553.0156251043081,
+            549.9440100975335,
+            553.0703123658895,
+            551.1210937984288
+          ]
+        }
+      }
+    ],
+    "selected": {
+      "config": {
+        "attention_chunk_tiles": 3,
+        "attention_compact_partials": true,
+        "attention_groups": 320,
+        "attention_prepare": false,
+        "attention_qm": 8,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "direct_norm": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 2,
+            "q_outer": 0,
+            "tn": 32
+          },
+          "1": {
+            "fp8_tile_block": 32
+          }
+        },
+        "merge_unroll": 4,
+        "perm_sgs": 32,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 4,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "task_seed_bound": true,
+        "tn": 32,
+        "workers": 160
+      },
+      "ratios": {
+        "single_kernel": 0.8927749455021228,
+        "matched_control": 0.8959819786579715
+      },
+      "paired_median_ratio": 0.8940832228084101,
+      "paired_max_ratio": 0.898066483272808,
+      "every_original_pair": true,
+      "simplicity": [
+        false,
+        false,
+        10,
+        622
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          625.8164062164724,
+          626.9166669808328,
+          626.5039062127471,
+          625.6809895858169
+        ],
+        "single_kernel": [
+          558.5286454297602,
+          557.7591145411134,
+          559.8854166455567,
+          560.157551895827
+        ],
+        "matched_control": [
+          561.3229172304273,
+          560.1380211301148,
+          561.8346356786788,
+          561.0664063133299
+        ]
+      }
+    },
+    "control": {
+      "config": {
+        "attention_chunk_tiles": 3,
+        "attention_groups": 320,
+        "attention_prepare": false,
+        "attention_qm": 8,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "direct_norm": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 2,
+            "q_outer": 0,
+            "tn": 32
+          },
+          "1": {
+            "fp8_tile_block": 32
+          }
+        },
+        "merge_unroll": 4,
+        "perm_sgs": 32,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 4,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 228
+      },
+      "ratios": {
+        "single_kernel": 13.254925091387234,
+        "matched_control": 0.8804107960171496
+      },
+      "paired_median_ratio": 16.889456873683457,
+      "paired_max_ratio": 17.49178826012716,
+      "every_original_pair": false,
+      "simplicity": [
+        false,
+        true,
+        8,
+        561
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          625.8658850565553,
+          626.3645831495523,
+          626.8072915263474,
+          627.9127602465451
+        ],
+        "single_kernel": [
+          8215.036458335817,
+          8462.216145824641,
+          8340.837239753455,
+          8213.8671875
+        ],
+        "matched_control": [
+          553.0156251043081,
+          549.9440100975335,
+          553.0703123658895,
+          551.1210937984288
+        ]
+      }
+    },
+    "noise_band": 0.03,
+    "tail_band": 0.05,
+    "eligibility": "faster than original in every paired confirmation sample"
+  },
+  "4096": {
+    "candidates": [
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 16,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.7728053460365537,
+          "matched_control": 0.7745245115581385
+        },
+        "paired_median_ratio": 0.773854036589432,
+        "paired_max_ratio": 0.7805868686769162,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          590
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            848.6744798719883,
+            847.1562499180436,
+            848.2005205005407,
+            847.3346354439855
+          ],
+          "single_kernel": [
+            653.4908856265247,
+            654.6015627682209,
+            656.0729169286788,
+            656.7044267430902
+          ],
+          "matched_control": [
+            658.7669271975756,
+            656.7760417237878,
+            655.3854164667428,
+            655.7721351273358
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 8,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.7796028698114262,
+          "matched_control": 0.793260702068378
+        },
+        "paired_median_ratio": 0.7805048970900377,
+        "paired_max_ratio": 0.7851333887218565,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          589
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            848.6289065331221,
+            846.335937269032,
+            848.2812498696148,
+            848.5013023018837
+          ],
+          "single_kernel": [
+            661.9726563803852,
+            659.009113907814,
+            661.8138020858169,
+            661.4231769926846
+          ],
+          "matched_control": [
+            673.169270157814,
+            673.0169272050261,
+            672.479166649282,
+            671.8736975453794
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 8,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.7894678295020569,
+          "matched_control": 0.7952656178427729
+        },
+        "paired_median_ratio": 0.7917590469468809,
+        "paired_max_ratio": 0.7975010258024263,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          588
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            848.4023436903954,
+            846.3541665114462,
+            849.1770830005407,
+            848.6575516872108
+          ],
+          "single_kernel": [
+            671.1419271305203,
+            666.9882815331221,
+            670.9140627644956,
+            669.3033850751817
+          ],
+          "matched_control": [
+            674.7473953291774,
+            672.8398436680436,
+            676.1289061978459,
+            674.2968750186265
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 12,
+          "attention_groups": 320,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 2,
+              "q_outer": 0,
+              "tn": 32
+            },
+            "1": {
+              "fp8_tile_block": 32
+            }
+          },
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.7976842825823113,
+          "matched_control": 0.7545853829943409
+        },
+        "paired_median_ratio": 0.7984852752672815,
+        "paired_max_ratio": 0.8099759701528094,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          563
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            848.1640624813735,
+            846.7005207203329,
+            848.088541533798,
+            848.7747390754521
+          ],
+          "single_kernel": [
+            677.6419267989695,
+            675.5885421298444,
+            676.2057286687195,
+            676.0924481786788
+          ],
+          "matched_control": [
+            641.8085936456919,
+            639.4752603955567,
+            639.3697913736105,
+            638.6979171074927
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 16,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.8173256223586038,
+          "matched_control": 0.7706124504870157
+        },
+        "paired_median_ratio": 0.8217809317207723,
+        "paired_max_ratio": 0.8355605230350934,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          2,
+          449
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            848.345051985234,
+            846.9348954968154,
+            848.4960934147239,
+            848.0143225751817
+          ],
+          "single_kernel": [
+            690.1210937649012,
+            694.4322916679084,
+            690.7330728136003,
+            696.9322916120291
+          ],
+          "matched_control": [
+            655.3515624254942,
+            652.4036452174187,
+            653.0221356078982,
+            652.9817711561918
+          ]
+        }
+      }
+    ],
+    "selected": {
+      "config": {
+        "attention_cached_prefix": true,
+        "attention_chunk_tiles": 16,
+        "attention_groups": 160,
+        "attention_prepare": false,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 8,
+            "q_outer": 1,
+            "tn": 16
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 1,
+            "tn": 32
+          }
+        },
+        "merge_sgs": 8,
+        "merge_unroll": 2,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 120
+      },
+      "ratios": {
+        "single_kernel": 0.7728053460365537,
+        "matched_control": 0.7745245115581385
+      },
+      "paired_median_ratio": 0.773854036589432,
+      "paired_max_ratio": 0.7805868686769162,
+      "every_original_pair": true,
+      "simplicity": [
+        false,
+        false,
+        8,
+        590
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          848.6744798719883,
+          847.1562499180436,
+          848.2005205005407,
+          847.3346354439855
+        ],
+        "single_kernel": [
+          653.4908856265247,
+          654.6015627682209,
+          656.0729169286788,
+          656.7044267430902
+        ],
+        "matched_control": [
+          658.7669271975756,
+          656.7760417237878,
+          655.3854164667428,
+          655.7721351273358
+        ]
+      }
+    },
+    "control": {
+      "config": {
+        "attention_chunk_tiles": 12,
+        "attention_groups": 320,
+        "attention_prepare": false,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "direct_norm": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 2,
+            "q_outer": 0,
+            "tn": 32
+          },
+          "1": {
+            "fp8_tile_block": 32
+          }
+        },
+        "merge_unroll": 4,
+        "perm_sgs": 32,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 4,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 160
+      },
+      "ratios": {
+        "single_kernel": 0.7976842825823113,
+        "matched_control": 0.7545853829943409
+      },
+      "paired_median_ratio": 0.7984852752672815,
+      "paired_max_ratio": 0.8099759701528094,
+      "every_original_pair": true,
+      "simplicity": [
+        false,
+        false,
+        8,
+        563
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          848.1640624813735,
+          846.7005207203329,
+          848.088541533798,
+          848.7747390754521
+        ],
+        "single_kernel": [
+          677.6419267989695,
+          675.5885421298444,
+          676.2057286687195,
+          676.0924481786788
+        ],
+        "matched_control": [
+          641.8085936456919,
+          639.4752603955567,
+          639.3697913736105,
+          638.6979171074927
+        ]
+      }
+    },
+    "noise_band": 0.03,
+    "tail_band": 0.05,
+    "eligibility": "faster than original in every paired confirmation sample"
+  },
+  "8192": {
+    "candidates": [
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.6995349558541538,
+          "matched_control": 0.6986071797316321
+        },
+        "paired_median_ratio": 0.7027114858514688,
+        "paired_max_ratio": 0.7129798009972685,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          590
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1066.1848955787718,
+            1061.182291712612,
+            1060.680989176035,
+            1065.973958466202
+          ],
+          "single_kernel": [
+            742.6406252197921,
+            743.061198387295,
+            743.606770876795,
+            746.526041533798
+          ],
+          "matched_control": [
+            742.721354123205,
+            740.9140621311963,
+            743.5950520448387,
+            744.656250346452
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": false,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.6998238966333838,
+          "matched_control": 0.6909347987124922
+        },
+        "paired_median_ratio": 0.7098621810422323,
+        "paired_max_ratio": 0.7280887730079174,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          10,
+          652
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1065.8984375186265,
+            1062.3190104961395,
+            1063.0598962306976,
+            1063.753906171769
+          ],
+          "single_kernel": [
+            740.9179685637355,
+            743.5976564884186,
+            747.9361980222166,
+            745.3359374776483
+          ],
+          "matched_control": [
+            731.0846354812384,
+            733.8190111331642,
+            738.682291470468,
+            736.3828127272427
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": true,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.7025096978715165,
+          "matched_control": 0.6905585888424175
+        },
+        "paired_median_ratio": 0.708398258946471,
+        "paired_max_ratio": 0.7307305724990766,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          10,
+          651
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1065.046874806285,
+            1062.46874993667,
+            1063.1783856078982,
+            1065.0664065033197
+          ],
+          "single_kernel": [
+            749.5208331383765,
+            739.0911458060145,
+            747.7278644219041,
+            753.4453123807907
+          ],
+          "matched_control": [
+            733.7747397832572,
+            732.6523438096046,
+            736.1679687164724,
+            736.2617189064622
+          ]
+        }
+      },
+      {
+        "config": {
+          "arrival": "rmw",
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "flag_stride": 8,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_unroll": 4,
+          "poll_sgs": 1,
+          "q_outer": 0,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.7093811182959684,
+          "matched_control": 0.6965278914124693
+        },
+        "paired_median_ratio": 0.7159748719092021,
+        "paired_max_ratio": 0.738080822024875,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          9,
+          608
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1065.6979167833924,
+            1062.2513014823198,
+            1060.5247397907078,
+            1065.1901038363576
+          ],
+          "single_kernel": [
+            754.5247399248183,
+            752.1914062090218,
+            755.389322526753,
+            755.3619788959622
+          ],
+          "matched_control": [
+            743.265625089407,
+            737.3880208469927,
+            741.5416669100523,
+            740.606770850718
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.7462165816855179,
+          "matched_control": 0.6943106651831319
+        },
+        "paired_median_ratio": 0.7434339421844431,
+        "paired_max_ratio": 0.8052405712377796,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          2,
+          449
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1064.8046876303852,
+            1063.3632810786366,
+            1062.8046873025596,
+            1063.947916496545
+          ],
+          "single_kernel": [
+            780.4361977614462,
+            818.8216141425073,
+            786.147135309875,
+            790.2317703701556
+          ],
+          "matched_control": [
+            736.9973957538605,
+            736.9127604179084,
+            742.2226564958692,
+            738.1158852949739
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 8,
+          "attention_groups": 320,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.7565480668519498,
+          "matched_control": 0.7238849387963701
+        },
+        "paired_median_ratio": 0.7567281733599214,
+        "paired_max_ratio": 0.7651294063238122,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          1,
+          431
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1063.6445311829448,
+            1061.877604573965,
+            1062.8763022832572,
+            1063.9830729924142
+          ],
+          "single_kernel": [
+            804.3984374962747,
+            802.7981771156192,
+            806.2604167498648,
+            803.6770834587514
+          ],
+          "matched_control": [
+            768.9427086152136,
+            768.0104169994593,
+            771.4817705564201,
+            769.8033852502704
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tk": 16,
+          "tm": 16,
+          "tn": 32,
+          "weight_prefetch": 0,
+          "workers": 100
+        },
+        "ratios": {
+          "single_kernel": 0.7618976226660465,
+          "matched_control": 0.6853686037491071
+        },
+        "paired_median_ratio": 0.7621588855908001,
+        "paired_max_ratio": 0.7679331458984434,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          4,
+          491
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1065.1809894479811,
+            1063.3151037618518,
+            1063.101562205702,
+            1064.1028643585742
+          ],
+          "single_kernel": [
+            812.5130208209157,
+            808.9726562611759,
+            811.6341144777834,
+            809.2929688282311
+          ],
+          "matched_control": [
+            723.2552086934447,
+            725.8502603508532,
+            738.9153642579913,
+            728.7981770932674
+          ]
+        }
+      }
+    ],
+    "selected": {
+      "config": {
+        "attention_cached_prefix": true,
+        "attention_chunk_tiles": 32,
+        "attention_groups": 160,
+        "attention_prepare": false,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 8,
+            "q_outer": 1,
+            "tn": 16
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 1,
+            "tn": 32
+          }
+        },
+        "merge_sgs": 8,
+        "merge_unroll": 2,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 120
+      },
+      "ratios": {
+        "single_kernel": 0.6995349558541538,
+        "matched_control": 0.6986071797316321
+      },
+      "paired_median_ratio": 0.7027114858514688,
+      "paired_max_ratio": 0.7129798009972685,
+      "every_original_pair": true,
+      "simplicity": [
+        false,
+        false,
+        8,
+        590
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          1066.1848955787718,
+          1061.182291712612,
+          1060.680989176035,
+          1065.973958466202
+        ],
+        "single_kernel": [
+          742.6406252197921,
+          743.061198387295,
+          743.606770876795,
+          746.526041533798
+        ],
+        "matched_control": [
+          742.721354123205,
+          740.9140621311963,
+          743.5950520448387,
+          744.656250346452
+        ]
+      }
+    },
+    "control": {
+      "config": {
+        "attention_alias_scratch": true,
+        "attention_chunk_tiles": 32,
+        "attention_groups": 160,
+        "attention_prepare": false,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "merge_unroll": 4,
+        "q_outer": 0,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tk": 16,
+        "tm": 16,
+        "tn": 32,
+        "weight_prefetch": 0,
+        "workers": 100
+      },
+      "ratios": {
+        "single_kernel": 0.7618976226660465,
+        "matched_control": 0.6853686037491071
+      },
+      "paired_median_ratio": 0.7621588855908001,
+      "paired_max_ratio": 0.7679331458984434,
+      "every_original_pair": true,
+      "simplicity": [
+        false,
+        false,
+        4,
+        491
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          1065.1809894479811,
+          1063.3151037618518,
+          1063.101562205702,
+          1064.1028643585742
+        ],
+        "single_kernel": [
+          812.5130208209157,
+          808.9726562611759,
+          811.6341144777834,
+          809.2929688282311
+        ],
+        "matched_control": [
+          723.2552086934447,
+          725.8502603508532,
+          738.9153642579913,
+          728.7981770932674
+        ]
+      }
+    },
+    "noise_band": 0.03,
+    "tail_band": 0.05,
+    "eligibility": "faster than original in every paired confirmation sample"
+  },
+  "16384": {
+    "candidates": [
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 12,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.6182683918711328,
+          "matched_control": 0.6465668322161535
+        },
+        "paired_median_ratio": 0.6199236541701504,
+        "paired_max_ratio": 0.6240605318528936,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          590
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1511.6601563058794,
+            1509.5638022758067,
+            1511.3072912208736,
+            1514.3411457538605
+          ],
+          "single_kernel": [
+            933.9765626937151,
+            934.0937500819564,
+            935.4856768622994,
+            935.0325516425073
+          ],
+          "matched_control": [
+            977.0664060488343,
+            980.0833333283663,
+            977.8723958879709,
+            974.6901043690741
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.6212209114193796,
+          "matched_control": 0.6158794637786645
+        },
+        "paired_median_ratio": 0.6215883751491549,
+        "paired_max_ratio": 0.6296783533233815,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          590
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1515.0052085518837,
+            1510.8242188580334,
+            1511.1015625298023,
+            1514.2539064399898
+          ],
+          "single_kernel": [
+            942.3320312052965,
+            937.4531246721745,
+            940.0755208916962,
+            939.2656250856817
+          ],
+          "matched_control": [
+            933.1770837306976,
+            928.6940102465451,
+            931.9192711263895,
+            933.0143234692514
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 16,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.621670632890672,
+          "matched_control": 0.6459357141020704
+        },
+        "paired_median_ratio": 0.6243096926427503,
+        "paired_max_ratio": 0.633750036459691,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          590
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1514.2421871423721,
+            1510.2460933849216,
+            1510.899739805609,
+            1515.1341147720814
+          ],
+          "single_kernel": [
+            940.4231770895422,
+            939.2760419286788,
+            941.5299473330379,
+            940.200521145016
+          ],
+          "matched_control": [
+            978.8684896193445,
+            976.2395829893649,
+            977.2981773130596,
+            975.8411459624767
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 12,
+          "attention_groups": 160,
+          "attention_prepare": false,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 120
+        },
+        "ratios": {
+          "single_kernel": 0.6399059090846158,
+          "matched_control": 0.644716807330661
+        },
+        "paired_median_ratio": 0.64174518486057,
+        "paired_max_ratio": 0.6513405962651256,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          2,
+          449
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1512.477864511311,
+            1510.8645833097398,
+            1509.7447913140059,
+            1514.4479162991047
+          ],
+          "single_kernel": [
+            968.6432289890945,
+            963.4283855557442,
+            969.9648437090218,
+            967.8268227726221
+          ],
+          "matched_control": [
+            974.8723963275552,
+            969.3802078254521,
+            974.9466148205101,
+            979.7734376043081
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 12,
+          "attention_groups": 320,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "direct_norm": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 2,
+              "q_outer": 0,
+              "tn": 32
+            },
+            "1": {
+              "fp8_tile_block": 32
+            }
+          },
+          "merge_unroll": 4,
+          "perm_sgs": 32,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.658839496086292,
+          "matched_control": 0.6527580202344492
+        },
+        "paired_median_ratio": 0.6585484529992676,
+        "paired_max_ratio": 0.6624261799074491,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          562
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1511.5273436531425,
+            1510.8984373509884,
+            1510.1367188617587,
+            1514.3059897236526
+          ],
+          "single_kernel": [
+            996.968749910593,
+            994.4531251676381,
+            996.2617186829448,
+            996.2317710742354
+          ],
+          "matched_control": [
+            988.6302086524665,
+            984.3867188319564,
+            988.2174483500421,
+            985.9114582650363
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_cached_prefix": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "0": {
+              "ksplit": 8,
+              "q_outer": 1,
+              "tn": 16
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 1,
+              "tn": 32
+            }
+          },
+          "merge_sgs": 8,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 80
+        },
+        "ratios": {
+          "single_kernel": 0.7331960763651122,
+          "matched_control": 0.6124397364692244
+        },
+        "paired_median_ratio": 0.7328285169189237,
+        "paired_max_ratio": 0.73560508529921,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          8,
+          588
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            1512.796875089407,
+            1511.0429683700204,
+            1509.761719033122,
+            1514.5130208693445
+          ],
+          "single_kernel": [
+            1108.9687501080334,
+            1107.3125000111759,
+            1108.8749999180436,
+            1109.2955726198852
+          ],
+          "matched_control": [
+            921.3398434221745,
+            927.0078125409782,
+            926.1770825833082,
+            929.5976562425494
+          ]
+        }
+      }
+    ],
+    "selected": {
+      "config": {
+        "attention_cached_prefix": true,
+        "attention_chunk_tiles": 12,
+        "attention_groups": 160,
+        "attention_prepare": false,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 8,
+            "q_outer": 1,
+            "tn": 16
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 1,
+            "tn": 32
+          }
+        },
+        "merge_sgs": 8,
+        "merge_unroll": 2,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 120
+      },
+      "ratios": {
+        "single_kernel": 0.6182683918711328,
+        "matched_control": 0.6465668322161535
+      },
+      "paired_median_ratio": 0.6199236541701504,
+      "paired_max_ratio": 0.6240605318528936,
+      "every_original_pair": true,
+      "simplicity": [
+        false,
+        false,
+        8,
+        590
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          1511.6601563058794,
+          1509.5638022758067,
+          1511.3072912208736,
+          1514.3411457538605
+        ],
+        "single_kernel": [
+          933.9765626937151,
+          934.0937500819564,
+          935.4856768622994,
+          935.0325516425073
+        ],
+        "matched_control": [
+          977.0664060488343,
+          980.0833333283663,
+          977.8723958879709,
+          974.6901043690741
+        ]
+      }
+    },
+    "control": {
+      "config": {
+        "attention_cached_prefix": true,
+        "attention_chunk_tiles": 32,
+        "attention_groups": 160,
+        "attention_prepare": true,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 8,
+            "q_outer": 1,
+            "tn": 16
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 1,
+            "tn": 32
+          }
+        },
+        "merge_sgs": 8,
+        "merge_unroll": 2,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 80
+      },
+      "ratios": {
+        "single_kernel": 0.7331960763651122,
+        "matched_control": 0.6124397364692244
+      },
+      "paired_median_ratio": 0.7328285169189237,
+      "paired_max_ratio": 0.73560508529921,
+      "every_original_pair": true,
+      "simplicity": [
+        false,
+        false,
+        8,
+        588
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          1512.796875089407,
+          1511.0429683700204,
+          1509.761719033122,
+          1514.5130208693445
+        ],
+        "single_kernel": [
+          1108.9687501080334,
+          1107.3125000111759,
+          1108.8749999180436,
+          1109.2955726198852
+        ],
+        "matched_control": [
+          921.3398434221745,
+          927.0078125409782,
+          926.1770825833082,
+          929.5976562425494
+        ]
+      }
+    },
+    "noise_band": 0.03,
+    "tail_band": 0.05,
+    "eligibility": "faster than original in every paired confirmation sample"
+  },
+  "32768": {
+    "candidates": [
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 4,
+          "merge_unroll": 2,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.5133718033328477,
+          "matched_control": 0.545232253021152
+        },
+        "paired_median_ratio": 0.5146321130214904,
+        "paired_max_ratio": 0.9670854282465161,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          9,
+          602
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2439.601562451571,
+            2444.5065101608634,
+            2438.7421873398125,
+            2442.677083890885
+          ],
+          "single_kernel": [
+            1251.3046874664724,
+            1253.9023435674608,
+            1253.8632811047137,
+            1254.276041407138
+          ],
+          "matched_control": [
+            1339.2591145820916,
+            1329.5494792982936,
+            1320.214843377471,
+            1335.5325516313314
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 2,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 1,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.5179852462166452,
+          "matched_control": 0.541485664131256
+        },
+        "paired_median_ratio": 0.520210544124191,
+        "paired_max_ratio": 2.264690130064778,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          false,
+          9,
+          602
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2440.8294265158474,
+            2444.135416764766,
+            2438.195312395692,
+            2443.9062499441206
+          ],
+          "single_kernel": [
+            1255.3059891797602,
+            1294.8880209587514,
+            1254.0807286277413,
+            1255.3880205377936
+          ],
+          "matched_control": [
+            1326.4192705973983,
+            1320.3541664406657,
+            1319.076822604984,
+            1322.8854164481163
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 4,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 1,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.5182928855312745,
+          "matched_control": 0.5418284597699972
+        },
+        "paired_median_ratio": 0.5203313432537326,
+        "paired_max_ratio": 0.9156235619258752,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          9,
+          602
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2438.2565105333924,
+            2441.733072977513,
+            2436.5104166790843,
+            2441.3658855482936
+          ],
+          "single_kernel": [
+            1253.1210938468575,
+            1297.230468597263,
+            1252.3203128948808,
+            1255.3190109319985
+          ],
+          "matched_control": [
+            1313.2187500596046,
+            1322.1158855594695,
+            1324.1953123360872,
+            1327.6002607308328
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_unroll": 4,
+          "noinline": false,
+          "poll_sgs": 1,
+          "q_outer": 0,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.518336862777197,
+          "matched_control": 0.5421006586837709
+        },
+        "paired_median_ratio": 0.5216982503330341,
+        "paired_max_ratio": 1.3191333795549274,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          false,
+          9,
+          603
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2438.0390625447035,
+            2445.70703106001,
+            2438.6796872131526,
+            2444.269531406462
+          ],
+          "single_kernel": [
+            1250.3072922118008,
+            1304.1640622541308,
+            1255.054687615484,
+            1253.677083645016
+          ],
+          "matched_control": [
+            1320.2096354216337,
+            1328.9010422304273,
+            1323.5273440368474,
+            1321.9049484468997
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 320,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.5196676175969619,
+          "matched_control": 0.5307445973725731
+        },
+        "paired_median_ratio": 0.6474289158315953,
+        "paired_max_ratio": 1.3234924709413098,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          false,
+          7,
+          569
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2441.8919272720814,
+            2445.928385015577,
+            2437.278646044433,
+            2442.1171876601875
+          ],
+          "single_kernel": [
+            1297.5976560264826,
+            1259.4401044771075,
+            1267.7630209363997,
+            1251.3789059594274
+          ],
+          "matched_control": [
+            1294.3216147832572,
+            1297.0781247131526,
+            1295.033854432404,
+            1297.4622398614883
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": false,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": false,
+          "tn": 32,
+          "workers": 157
+        },
+        "ratios": {
+          "single_kernel": 0.5222074129898368,
+          "matched_control": 0.5450038782806951
+        },
+        "paired_median_ratio": 0.5252163911107237,
+        "paired_max_ratio": 0.5411150656655136,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          true,
+          11,
+          665
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2498.2174481265247,
+            2440.898437052965,
+            2437.938801944256,
+            2440.026041585952
+          ],
+          "single_kernel": [
+            1286.231770645827,
+            1277.6835937984288,
+            1278.3554689958692,
+            1284.0299480594695
+          ],
+          "matched_control": [
+            1340.4244789853692,
+            1333.565104752779,
+            1339.731770567596,
+            1336.3528647460043
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": false,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": false,
+          "tn": 32,
+          "workers": 155
+        },
+        "ratios": {
+          "single_kernel": 0.5251588967957428,
+          "matched_control": 0.5491171846312981
+        },
+        "paired_median_ratio": 0.5268467857439069,
+        "paired_max_ratio": 0.539820205514077,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          true,
+          11,
+          665
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2450.0950523652136,
+            2442.259114701301,
+            2438.494791276753,
+            2440.337238833308
+          ],
+          "single_kernel": [
+            1283.6861978285015,
+            1281.6028641536832,
+            1281.210937537253,
+            1284.9205727688968
+          ],
+          "matched_control": [
+            1345.1497401110828,
+            1335.821614600718,
+            1345.8281247876585,
+            1338.7447916902602
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": true,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": false,
+          "tn": 32,
+          "workers": 157
+        },
+        "ratios": {
+          "single_kernel": 0.5254457907110202,
+          "matched_control": 0.5502745875334544
+        },
+        "paired_median_ratio": 0.5258683883403539,
+        "paired_max_ratio": 0.5393730813986378,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          true,
+          11,
+          664
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2442.9687499068677,
+            2439.6393233910203,
+            2435.3098957799375,
+            2438.3346349932253
+          ],
+          "single_kernel": [
+            1284.6979163587093,
+            1280.6158852763474,
+            1278.1614577397704,
+            1282.9127605073154
+          ],
+          "matched_control": [
+            1348.7317711114883,
+            1336.555989459157,
+            1342.7239581942558,
+            1340.631510131061
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": true,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": false,
+          "tn": 32,
+          "workers": 155
+        },
+        "ratios": {
+          "single_kernel": 0.5260744783852579,
+          "matched_control": 0.5482373609551429
+        },
+        "paired_median_ratio": 0.5269671786846688,
+        "paired_max_ratio": 0.5371512293632958,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          true,
+          11,
+          664
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2438.5624998249114,
+            2439.872395247221,
+            2436.1809897236526,
+            2441.6914065368474
+          ],
+          "single_kernel": [
+            1284.9583332426846,
+            1281.3932285644114,
+            1281.5507813356817,
+            1284.6445310860872
+          ],
+          "matched_control": [
+            1338.3138021454215,
+            1333.6666664108634,
+            1337.3763021081686,
+            1339.4205728545785
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": true,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": true,
+          "tn": 32,
+          "workers": 155
+        },
+        "ratios": {
+          "single_kernel": 0.5263457396766645,
+          "matched_control": 0.5483925545705883
+        },
+        "paired_median_ratio": 0.5282348434597777,
+        "paired_max_ratio": 0.5408758604567014,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          true,
+          11,
+          663
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2445.8385412581265,
+            2439.5976564846933,
+            2438.192707952112,
+            2441.153645515442
+          ],
+          "single_kernel": [
+            1281.8489582277834,
+            1285.174478776753,
+            1282.8385420143604,
+            1289.8007812909782
+          ],
+          "matched_control": [
+            1342.7460938692093,
+            1335.5104164220393,
+            1339.5416662096977,
+            1337.1432293206453
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": false,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": true,
+          "tn": 32,
+          "workers": 155
+        },
+        "ratios": {
+          "single_kernel": 0.5266617293182818,
+          "matched_control": 0.5470314622827297
+        },
+        "paired_median_ratio": 0.5280123635402008,
+        "paired_max_ratio": 0.5431831266484245,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          true,
+          11,
+          664
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2442.0937499962747,
+            2441.977865062654,
+            2435.639322735369,
+            2439.60416642949
+          ],
+          "single_kernel": [
+            1287.4309890903533,
+            1280.3033851087093,
+            1286.9361978955567,
+            1285.1966149173677
+          ],
+          "matched_control": [
+            1337.0820311829448,
+            1334.9544266238809,
+            1332.3398442007601,
+            1334.2773439362645
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": true,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": true,
+          "tn": 32,
+          "workers": 157
+        },
+        "ratios": {
+          "single_kernel": 0.5271716003568472,
+          "matched_control": 0.5497503462960148
+        },
+        "paired_median_ratio": 0.5277638438742521,
+        "paired_max_ratio": 0.5326364924431413,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          true,
+          11,
+          663
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2438.8815108686686,
+            2436.4023436792195,
+            2436.330729164183,
+            2441.449218429625
+          ],
+          "single_kernel": [
+            1284.0104163624346,
+            1283.894531428814,
+            1284.7161456011236,
+            1288.921874947846
+          ],
+          "matched_control": [
+            1344.2434892058372,
+            1335.8164066448808,
+            1340.73177119717,
+            1340.9700524061918
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_compact_partials": false,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "task_seed_bound": true,
+          "tn": 32,
+          "workers": 157
+        },
+        "ratios": {
+          "single_kernel": 0.5272622581990836,
+          "matched_control": 0.5481093168687301
+        },
+        "paired_median_ratio": 0.5282279614534879,
+        "paired_max_ratio": 0.5391181916946334,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          true,
+          11,
+          664
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2440.03255199641,
+            2438.561197835952,
+            2437.678385525942,
+            2441.716145724058
+          ],
+          "single_kernel": [
+            1286.0078127123415,
+            1284.1848954558372,
+            1286.0351563431323,
+            1288.7942702509463
+          ],
+          "matched_control": [
+            1338.4114583022892,
+            1332.4257815256715,
+            1338.31901056692,
+            1339.2981770448387
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 0,
+              "tn": 32
+            }
+          },
+          "ksplit": 2,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.5358242784789391,
+          "matched_control": 0.5463249338067683
+        },
+        "paired_median_ratio": 0.6832025714024653,
+        "paired_max_ratio": 1.8464684577061885,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          false,
+          5,
+          525
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2439.200520981103,
+            2443.9049479551613,
+            2441.8203122913837,
+            2443.481771275401
+          ],
+          "single_kernel": [
+            1300.1940110698342,
+            1276.9505209289491,
+            1263.5638020001352,
+            1397.5416664034128
+          ],
+          "matched_control": [
+            1339.6953125484288,
+            1328.5052087157965,
+            1337.92187506333,
+            1330.6341147981584
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.5599607145796193,
+          "matched_control": 0.5405914445220232
+        },
+        "paired_median_ratio": 0.5182250340596293,
+        "paired_max_ratio": 1.6562547833737657,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          false,
+          9,
+          602
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2438.1835935637355,
+            2449.596354737878,
+            2439.342448487878,
+            2445.197916124016
+          ],
+          "single_kernel": [
+            1248.7265621311963,
+            1251.3567707501352,
+            1792.726562358439,
+            1250.3033857792616
+          ],
+          "matched_control": [
+            1320.4296873882413,
+            1314.0403646975756,
+            1325.2291665412486,
+            1323.15104175359
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 16,
+          "attention_groups": 320,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 2,
+          "schedule": "queue",
+          "sgs": 4,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.5603673608633549,
+          "matched_control": 0.544060403704819
+        },
+        "paired_median_ratio": 0.561059315134385,
+        "paired_max_ratio": 0.5720844403666187,
+        "every_original_pair": true,
+        "simplicity": [
+          false,
+          false,
+          1,
+          432
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2443.7447916716337,
+            2444.996093865484,
+            2437.3815106227994,
+            2441.6067712008953
+          ],
+          "single_kernel": [
+            1369.7825516574085,
+            1366.083333734423,
+            1369.1145833581686,
+            1368.5351558960974
+          ],
+          "matched_control": [
+            1326.6328126192093,
+            1329.8802082426846,
+            1330.1809900440276,
+            1327.5403650477529
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_sgs": 4,
+          "merge_unroll": 1,
+          "q_outer": 0,
+          "scalar_sgs": 1,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.5867846134910731,
+          "matched_control": 0.5427651497874308
+        },
+        "paired_median_ratio": 0.8100999907724196,
+        "paired_max_ratio": 1.197281086923366,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          false,
+          9,
+          602
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2436.6445313207805,
+            2457.61067699641,
+            2439.38802042976,
+            2442.532552406192
+          ],
+          "single_kernel": [
+            1361.4166672341526,
+            1265.8203123137355,
+            1542.1028649434447,
+            1591.7135416530073
+          ],
+          "matched_control": [
+            1321.3841151446104,
+            1325.1510416157544,
+            1337.6471353694797,
+            1322.0208333805203
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_alias_scratch": true,
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "gemm_overrides": {
+            "1": {
+              "ksplit": 1,
+              "q_outer": 1,
+              "tn": 32
+            },
+            "2": {
+              "ksplit": 4,
+              "q_outer": 0,
+              "tn": 16
+            }
+          },
+          "ksplit": 2,
+          "merge_unroll": 4,
+          "noinline": false,
+          "poll_sgs": 1,
+          "q_outer": 0,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": true,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.6635027510424869,
+          "matched_control": 0.5404393694643853
+        },
+        "paired_median_ratio": 1.1805728090775873,
+        "paired_max_ratio": 1.9852855550409798,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          false,
+          9,
+          602
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2438.9309897087514,
+            2443.257812410593,
+            2438.555989880115,
+            2442.4856770783663
+          ],
+          "single_kernel": [
+            2229.007812216878,
+            1294.1315099596977,
+            1903.1770834699273,
+            1252.954427152872
+          ],
+          "matched_control": [
+            1317.9192706011236,
+            1316.9244788587093,
+            1318.3046872727573,
+            1323.2929687947035
+          ]
+        }
+      },
+      {
+        "config": {
+          "attention_chunk_tiles": 32,
+          "attention_groups": 160,
+          "attention_prepare": true,
+          "attention_qm": 16,
+          "attention_task_tiles": 1,
+          "barrier": "simd",
+          "compact": true,
+          "fp8_decode": "half",
+          "fp8_layout": "tile",
+          "fp8_tile_block": 8,
+          "ksplit": 2,
+          "merge_sgs": 8,
+          "merge_unroll": 4,
+          "q_outer": 0,
+          "scalar_sgs": 8,
+          "schedule": "queue",
+          "sgs": 8,
+          "split": true,
+          "task_barrier": false,
+          "task_batch": 1,
+          "task_grain": "tile",
+          "task_seed": true,
+          "tn": 32,
+          "workers": 160
+        },
+        "ratios": {
+          "single_kernel": 0.6660675101427815,
+          "matched_control": 0.5569510949320875
+        },
+        "paired_median_ratio": 0.674706098894845,
+        "paired_max_ratio": 2.5811733130908334,
+        "every_original_pair": false,
+        "simplicity": [
+          false,
+          false,
+          3,
+          461
+        ],
+        "layers": [
+          3,
+          15,
+          31,
+          63
+        ],
+        "min_wall_us": {
+          "production": [
+            2439.604166895151,
+            2442.3072915524244,
+            2439.498697873205,
+            2439.979166723788
+          ],
+          "single_kernel": [
+            1372.1028650179505,
+            2946.425781119615,
+            1315.8411453478038,
+            1312.180989421904
+          ],
+          "matched_control": [
+            1359.778645914048,
+            1357.0820312015712,
+            1358.3111981861293,
+            1361.4479168318212
+          ]
+        }
+      }
+    ],
+    "selected": {
+      "config": {
+        "attention_alias_scratch": true,
+        "attention_chunk_tiles": 32,
+        "attention_compact_partials": false,
+        "attention_groups": 160,
+        "attention_prepare": true,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "1": {
+            "ksplit": 1,
+            "q_outer": 1,
+            "tn": 32
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 0,
+            "tn": 16
+          }
+        },
+        "ksplit": 2,
+        "merge_sgs": 8,
+        "merge_unroll": 4,
+        "q_outer": 0,
+        "scalar_sgs": 8,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "task_seed_bound": false,
+        "tn": 32,
+        "workers": 157
+      },
+      "ratios": {
+        "single_kernel": 0.5222074129898368,
+        "matched_control": 0.5450038782806951
+      },
+      "paired_median_ratio": 0.5252163911107237,
+      "paired_max_ratio": 0.5411150656655136,
+      "every_original_pair": true,
+      "simplicity": [
+        false,
+        true,
+        11,
+        665
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          2498.2174481265247,
+          2440.898437052965,
+          2437.938801944256,
+          2440.026041585952
+        ],
+        "single_kernel": [
+          1286.231770645827,
+          1277.6835937984288,
+          1278.3554689958692,
+          1284.0299480594695
+        ],
+        "matched_control": [
+          1340.4244789853692,
+          1333.565104752779,
+          1339.731770567596,
+          1336.3528647460043
+        ]
+      }
+    },
+    "control": {
+      "config": {
+        "attention_alias_scratch": true,
+        "attention_chunk_tiles": 32,
+        "attention_groups": 320,
+        "attention_prepare": true,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "1": {
+            "ksplit": 1,
+            "q_outer": 1,
+            "tn": 32
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 0,
+            "tn": 16
+          }
+        },
+        "ksplit": 2,
+        "merge_unroll": 4,
+        "q_outer": 0,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 160
+      },
+      "ratios": {
+        "single_kernel": 0.5196676175969619,
+        "matched_control": 0.5307445973725731
+      },
+      "paired_median_ratio": 0.6474289158315953,
+      "paired_max_ratio": 1.3234924709413098,
+      "every_original_pair": false,
+      "simplicity": [
+        false,
+        false,
+        7,
+        569
+      ],
+      "layers": [
+        3,
+        15,
+        31,
+        63
+      ],
+      "min_wall_us": {
+        "production": [
+          2441.8919272720814,
+          2445.928385015577,
+          2437.278646044433,
+          2442.1171876601875
+        ],
+        "single_kernel": [
+          1297.5976560264826,
+          1259.4401044771075,
+          1267.7630209363997,
+          1251.3789059594274
+        ],
+        "matched_control": [
+          1294.3216147832572,
+          1297.0781247131526,
+          1295.033854432404,
+          1297.4622398614883
+        ]
+      }
+    },
+    "noise_band": 0.03,
+    "tail_band": 0.05,
+    "eligibility": "faster than original in every paired confirmation sample"
+  }
+}

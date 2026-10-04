@@ -1,0 +1,22 @@
+{
+  "source_sha256": {
+    "monolith/compiler/static_fusion.py": "c4428c62c486289363dd1f882d602586fb122e46c5e113e6d76008e3c5e3c287",
+    "monolith/compiler/mlp_fusion.py": "a14cbb8cd643d059ceee21a6d2c7d6c63aa74631301a7a6f985191aa255af599",
+    "monolith/compiler/nvfp4_tiles.py": "14814faf4bc0b1d55589469ea51aee537ccdf49b4be2202e1c1e1bf8f4d61a6c",
+    "monolith/compiler/fp8_tiles.py": "cc1c6a445ba9d7a328b64ad382144df4c006e8be1cdd568a45c330fd3bc5d005",
+    "kernels/gemm_tile.metal": "8b953a9de4a7d8e1b5f64d6dc62afe9d17793ea56233197067dfdc72bd492577",
+    "tools/bench/modelopt_layer_bench.py": "8d2faf56b436df21f49e5cab2fbe3af1cdc75c4521b2e31a7ea85f52e2d35c8c",
+    "tools/bench/modelopt_mega_tune.py": "4959b14eb271f62211698d2fbf285db04c310cdcc97ad14cd86c0b7ca0eda4a3",
+    "tools/bench/modelopt_mlp_suffix_tune.py": "25e25df86ee1e929ccfaecf842793e7f0fdb4c0e46f02818f3e89a75ea825bc4",
+    "tools/bench/modelopt_mlx.py": "bb500ad3a6f4aef5a375fefa38155c518bd7e426fbbab6bc1be08f9db7440819",
+    "tests/contract/test_nvfp4_tiles.py": "ca246ff3e417388467649138f4852a5bc3ee14334f728d2764cfe4bb5fd9f716",
+    "tests/contract/test_mlp_fusion.py": "5fd73efab1ae755eac486cf9c45df1a3bef19a4cee1105b9ddd1d96e071a8bc6",
+    "tests/kernels/test_mlp_block_static.py": "c2f97189ef8dfe62519089a006314a65592869ae3b558128bd52ee67412b5879",
+    "tests/kernels/test_gdn_default.py": "4a8e40e8ad7d921089db0d5e6697635de489474fbf7cb32b64d7041cac7ff9e2",
+    "profiles/apple-m5-max-40c.json": "d0f2eef90dd01a60137fad281ee119ab342f013ec321bae6d65afb53554c11e6"
+  },
+  "branch": "codex/gdn-megakernel-n7",
+  "head": "61d302ebee2c35851992cd42c815d006327a7eed",
+  "dirty_tree": true,
+  "model_revision": "482ca0f3832238542f8f5295dde86b5f22711d80"
+}

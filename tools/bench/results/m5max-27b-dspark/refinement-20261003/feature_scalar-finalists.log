@@ -1,0 +1,10 @@
+feature_scalar 128 {'feature_scalar': {'workers': 80, 'sgs': 4, 'rg': 1, 'rsplit': 8, 'x_hoist': False, 'x_preconvert': False}} {'baseline': 0.449470832827501, 'candidate': 0.4470791667699814}
+feature_scalar 128 {'feature_scalar': {'workers': 40, 'sgs': 16, 'rg': 2, 'rsplit': 1, 'x_hoist': False, 'x_preconvert': True}} {'baseline': 0.4503574996488169, 'candidate': 0.4446216666838154}
+feature_scalar 128 {'feature_scalar': {'workers': 160, 'sgs': 16, 'rg': 2, 'rsplit': 1, 'x_hoist': False, 'x_preconvert': False}} {'baseline': 0.4497550002997741, 'candidate': 0.44482333352789283}
+feature_scalar 128 {'feature_scalar': {'workers': 80, 'sgs': 4, 'rg': 1, 'rsplit': 16, 'x_hoist': False, 'x_preconvert': False}} {'baseline': 0.44939749990589917, 'candidate': 0.4479424998862669}
+feature_scalar 128 {'feature_scalar': {'workers': 40, 'sgs': 12, 'rg': 1, 'rsplit': 16, 'x_hoist': False, 'x_preconvert': True}} {'baseline': 0.44980250007938594, 'candidate': 0.4468475002795458}
+feature_scalar 128 {'feature_scalar': {'workers': 160, 'sgs': 16, 'rg': 2, 'rsplit': 1, 'x_hoist': False, 'x_preconvert': True}} {'baseline': 0.4505600000265986, 'candidate': 0.4449075000593439}
+feature_scalar 128 {'feature_scalar': {'workers': 80, 'sgs': 16, 'rg': 2, 'rsplit': 1, 'x_hoist': False, 'x_preconvert': True}} {'baseline': 0.4496050003217533, 'candidate': 0.44473999994806945}
+feature_scalar 128 {'feature_scalar': {'workers': 80, 'sgs': 4, 'rg': 2, 'rsplit': 8, 'x_hoist': False, 'x_preconvert': True}} {'baseline': 0.45035833318252116, 'candidate': 0.44950000010430813}
+feature_scalar 128 {'feature_scalar': {'workers': 80, 'sgs': 4, 'rg': 1, 'rsplit': 16, 'x_hoist': False, 'x_preconvert': True}} {'baseline': 0.4495383333414793, 'candidate': 0.44792250031605363}
+feature_scalar 128 {'feature_scalar': {'workers': 320, 'sgs': 16, 'rg': 2, 'rsplit': 1, 'x_hoist': False, 'x_preconvert': True}} {'baseline': 0.4502458334900439, 'candidate': 0.4445508331991732}

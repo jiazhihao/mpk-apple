@@ -1,0 +1,2 @@
+2026-10-03 14:09:13.919 python[12676:4329982] Metal GPU Validation Enabled
+markov 128 {'markov': {'workers': 80, 'sgs': 4, 'rg': 4, 'rsplit': 1, 'x_hoist': True}} {'baseline': 0.31497915915679187, 'candidate': 0.7249583286466077}

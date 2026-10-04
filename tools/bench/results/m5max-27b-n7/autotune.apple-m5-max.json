@@ -1,0 +1,117 @@
+{
+  "chip": "Apple M5 Max",
+  "cores": 40,
+  "written": "2026-10-01 13:43",
+  "choices": {
+    "gemm3|fp8_e4m3|16384x5120|R16|interleaved16|inline|TM8|plain|tile16ux256u": {
+      "macros": {},
+      "grid_mode": "ksplit4",
+      "ms": 0.16130555559357163,
+      "default_ms": 0.2807638888953079
+    },
+    "gemv|bf16|96x5120|R16|interleaved16|inline|T8|plain|norm|P1": {
+      "macros": {
+        "RG": "2",
+        "RSPLIT": "8u"
+      },
+      "grid_mode": "crew",
+      "fuse_norm": false,
+      "ms": 0.06129578754479929,
+      "default_ms": 0.27020467032943396
+    },
+    "gemm3|bf16|96x5120|R16|interleaved16|inline|TM8|plain|tile16ux256u|compact-partials|perm|norm|P1": {
+      "macros": {},
+      "grid_mode": "ksplit4",
+      "ms": 0.01569551282029065,
+      "default_ms": 0.04675854700844832
+    },
+    "gemm3|bf16|96x5120|R16|interleaved16|inline|TM8|plain|tile16ux256u|compact-partials": {
+      "macros": {},
+      "grid_mode": "ksplit4",
+      "ms": 0.012592032965588862,
+      "default_ms": 0.04564056776678213
+    },
+    "gdn|16x48|128x128|cw4|T8": {
+      "macros": {
+        "SL": "4u",
+        "SPB": "4u"
+      },
+      "grid_mode": "crew",
+      "ms": 0.0669999999445281,
+      "default_ms": 0.0921249998100393
+    },
+    "gemv|fp8_e4m3|5120x6144|R16|interleaved16|inline|T8|residual|raw": {
+      "macros": {
+        "RG": "4",
+        "RSPLIT": "4u"
+      },
+      "grid_mode": "crew",
+      "fuse_norm": false,
+      "ms": 0.21936979163683645,
+      "default_ms": 0.28836458335490533
+    },
+    "gemm3|fp8_e4m3|5120x6144|R16|interleaved16|inline|TM8|residual|tile16ux256u": {
+      "macros": {},
+      "grid_mode": "ksplit2",
+      "ms": 0.06581249999726424,
+      "default_ms": 0.08532812501016451
+    },
+    "gemv|nvfp4|34816x5120|R16|interleaved16|inline|T8|silu_mul|norm|P320": {
+      "macros": {
+        "RG": "8"
+      },
+      "grid_mode": "crew",
+      "fuse_norm": false,
+      "ms": 1.5312083332901238,
+      "default_ms": 1.5312083332901238
+    },
+    "gemm3|nvfp4|34816x5120|R16|interleaved16|inline|TM8|silu_mul|tile16ux128u|perm|norm|P320": {
+      "macros": {},
+      "grid_mode": "ksplit8",
+      "ms": 0.20383333344398125,
+      "default_ms": 0.2674375000424334
+    },
+    "gemm3|nvfp4|34816x5120|R16|interleaved16|inline|TM8|silu_mul|tile16ux128u": {
+      "macros": {},
+      "grid_mode": "ksplit8",
+      "ms": 0.20079166665709636,
+      "default_ms": 0.2615000000787404
+    },
+    "gemv|nvfp4|5120x17408|R16|interleaved16|inline|T8|residual|raw": {
+      "macros": {
+        "RG": "8"
+      },
+      "grid_mode": "block",
+      "fuse_norm": false,
+      "ms": 0.5960583333944669,
+      "default_ms": 0.9574333333148388
+    },
+    "gemm3|nvfp4|5120x17408|R16|interleaved16|inline|TM8|residual|tile16ux128u": {
+      "macros": {},
+      "grid_mode": "ksplit8",
+      "ms": 0.10702499994295067,
+      "default_ms": 0.15054999994390528
+    },
+    "gemm3|fp8_e4m3|14336x5120|R16|interleaved16|inline|TM8|plain|tile16ux256u": {
+      "macros": {},
+      "grid_mode": "crew",
+      "ms": 0.14845833341799639,
+      "default_ms": 0.14845833341799639
+    },
+    "gemv|nvfp4|34816x5120|R16|interleaved16|inline|T8|silu_mul|norm|P1": {
+      "macros": {
+        "RG": "8"
+      },
+      "grid_mode": "crew",
+      "fuse_norm": false,
+      "ms": 1.5189999999165593,
+      "default_ms": 1.5189999999165593
+    },
+    "gemm3|nvfp4|34816x5120|R16|interleaved16|inline|TM8|silu_mul|tile16ux128u|perm|norm|P1": {
+      "macros": {},
+      "grid_mode": "ksplit8",
+      "ms": 0.20499999982348527,
+      "default_ms": 0.2696458332138718
+    }
+  }
+}

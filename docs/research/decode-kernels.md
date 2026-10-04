@@ -1187,7 +1187,7 @@ Five paired AB/BA repetitions of 32 steps use two evaluations in flight in both
 engines. The table uses each engine's minimum wall time; the raw file retains all
 pairs, GPU times, paths, versions and `faster_in_every_pair`.
 
-Source: [`apple-m5-pro-20c_fixed_layers_20260927.jsonl`](../../tools/bench/results/apple-m5-pro-20c_fixed_layers_20260927.jsonl).
+Source: [`apple-m5-pro-20c_fixed_layers_20260927.jsonl`](https://github.com/jiazhihao/mpk-apple/blob/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results/apple-m5-pro-20c_fixed_layers_20260927.jsonl).
 Desktop load varied during the session; compare each paired MPK/MLX result rather
 than absolute times across models or against earlier sections. Shader validation
 was disabled for timings and enabled separately for correctness.

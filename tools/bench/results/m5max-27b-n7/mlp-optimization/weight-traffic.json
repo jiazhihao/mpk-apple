@@ -1,0 +1,30 @@
+{
+  "slabs": [
+    {
+      "name": "layers.0.mlp.gate_up.gate_proj+up_proj",
+      "format": "nvfp4",
+      "n": 34816,
+      "k": 5120,
+      "nbytes": 106954752,
+      "rows": 16,
+      "unit_bytes": 96,
+      "scale_placement": "inline",
+      "scale_order": "lane"
+    },
+    {
+      "name": "layers.0.mlp.down.down_proj",
+      "format": "nvfp4",
+      "n": 5120,
+      "k": 17408,
+      "nbytes": 52428800,
+      "rows": 16,
+      "unit_bytes": 320,
+      "scale_placement": "inline",
+      "scale_order": "lane"
+    }
+  ],
+  "original_weight_bytes": 159383552,
+  "packed_code_and_scale_bytes": 150405120,
+  "stream_bandwidth_GBs": 599,
+  "streaming_floor_us": 251.09368948247078
+}

@@ -1,0 +1,201 @@
+{
+  "contexts": [
+    {
+      "ctx": 128,
+      "points": 16,
+      "capacity": 384,
+      "median_us": {
+        "original_us": 629.5423176488839,
+        "previous_us": 645.8522135508247,
+        "control_us": 633.3242187392898,
+        "queue_us": 650.117187469732,
+        "mlx_best_us": 1222.9225311557457
+      },
+      "queue_original_ratio": {
+        "min": 1.0270471202083902,
+        "median": 1.033248456114503,
+        "max": 1.0392979841988546
+      },
+      "queue_previous_ratio": {
+        "min": 1.0025945541784962,
+        "median": 1.0060006031415216,
+        "max": 1.012455896233406
+      },
+      "wins_over_original": 0,
+      "wins_over_original_by_3pct": 0,
+      "wins_over_previous": 0,
+      "wins_over_previous_by_3pct": 0,
+      "pairs": 144,
+      "pairs_faster_than_original": 16,
+      "pairs_faster_than_previous": 36,
+      "queue_original_paired_ratio": {
+        "min": 0.9769754382717661,
+        "median": 1.032627137162117,
+        "max": 1.1109770660871419
+      },
+      "pairs_faster_than_mlx": 144,
+      "original_pairs_faster_than_mlx": 144,
+      "minimum_checked_cosine": 0.9998200633870423
+    },
+    {
+      "ctx": 4096,
+      "points": 16,
+      "capacity": 33024,
+      "median_us": {
+        "original_us": 849.2434895597398,
+        "previous_us": 877.4557291180827,
+        "control_us": 883.316406281665,
+        "queue_us": 862.778645765502,
+        "mlx_best_us": 1442.8841249696234
+      },
+      "queue_original_ratio": {
+        "min": 1.0135064173245867,
+        "median": 1.0160067871128216,
+        "max": 1.02109713711533
+      },
+      "queue_previous_ratio": {
+        "min": 0.9784301560161983,
+        "median": 0.9845915759429886,
+        "max": 0.9866914251969549
+      },
+      "wins_over_original": 0,
+      "wins_over_original_by_3pct": 0,
+      "wins_over_previous": 16,
+      "wins_over_previous_by_3pct": 0,
+      "pairs": 144,
+      "pairs_faster_than_original": 1,
+      "pairs_faster_than_previous": 144,
+      "queue_original_paired_ratio": {
+        "min": 0.9906104474008166,
+        "median": 1.0163228619246458,
+        "max": 1.0239635058123584
+      },
+      "pairs_faster_than_mlx": 144,
+      "original_pairs_faster_than_mlx": 144,
+      "minimum_checked_cosine": 0.9996907324374029
+    },
+    {
+      "ctx": 8192,
+      "points": 16,
+      "capacity": 33024,
+      "median_us": {
+        "original_us": 1064.0683593810536,
+        "previous_us": 1093.1204426451586,
+        "control_us": 1094.700520799961,
+        "queue_us": 1073.5846354509704,
+        "mlx_best_us": 1714.4309843502015
+      },
+      "queue_original_ratio": {
+        "min": 1.0024950839802718,
+        "median": 1.0092705954860195,
+        "max": 1.0147924099401266
+      },
+      "queue_previous_ratio": {
+        "min": 0.9776042662303098,
+        "median": 0.9814999793387542,
+        "max": 0.9857253398425508
+      },
+      "wins_over_original": 0,
+      "wins_over_original_by_3pct": 0,
+      "wins_over_previous": 16,
+      "wins_over_previous_by_3pct": 0,
+      "pairs": 144,
+      "pairs_faster_than_original": 2,
+      "pairs_faster_than_previous": 144,
+      "queue_original_paired_ratio": {
+        "min": 0.9796044049485452,
+        "median": 1.0092771404028227,
+        "max": 1.0186628216772347
+      },
+      "pairs_faster_than_mlx": 144,
+      "original_pairs_faster_than_mlx": 144,
+      "minimum_checked_cosine": 0.9996271689553311
+    },
+    {
+      "ctx": 16384,
+      "points": 16,
+      "capacity": 33024,
+      "median_us": {
+        "original_us": 1513.403645833023,
+        "previous_us": 1527.7167968451977,
+        "control_us": 1514.5839842734858,
+        "queue_us": 1493.376302125398,
+        "mlx_best_us": 2184.67968755931
+      },
+      "queue_original_ratio": {
+        "min": 0.9822887136020432,
+        "median": 0.9874649281846114,
+        "max": 1.0274161034303777
+      },
+      "queue_previous_ratio": {
+        "min": 0.921235462655196,
+        "median": 0.9788270271885424,
+        "max": 1.0521147818616126
+      },
+      "wins_over_original": 14,
+      "wins_over_original_by_3pct": 0,
+      "wins_over_previous": 15,
+      "wins_over_previous_by_3pct": 2,
+      "pairs": 144,
+      "pairs_faster_than_original": 140,
+      "pairs_faster_than_previous": 142,
+      "queue_original_paired_ratio": {
+        "min": 0.9781496624995144,
+        "median": 0.9868637983140744,
+        "max": 1.0274161034303777
+      },
+      "pairs_faster_than_mlx": 144,
+      "original_pairs_faster_than_mlx": 144,
+      "minimum_checked_cosine": 0.9997343995563455
+    },
+    {
+      "ctx": 32768,
+      "points": 16,
+      "capacity": 33024,
+      "median_us": {
+        "original_us": 2462.5423175748438,
+        "previous_us": 2455.1139323739335,
+        "control_us": 2386.44466153346,
+        "queue_us": 2377.8808593633585,
+        "mlx_best_us": 3302.8489687580986
+      },
+      "queue_original_ratio": {
+        "min": 0.9467717944295173,
+        "median": 0.9505324224559352,
+        "max": 0.9812569609882515
+      },
+      "queue_previous_ratio": {
+        "min": 0.9647933333014919,
+        "median": 0.970505312288966,
+        "max": 0.9771506642089458
+      },
+      "wins_over_original": 16,
+      "wins_over_original_by_3pct": 15,
+      "wins_over_previous": 16,
+      "wins_over_previous_by_3pct": 5,
+      "pairs": 144,
+      "pairs_faster_than_original": 141,
+      "pairs_faster_than_previous": 141,
+      "queue_original_paired_ratio": {
+        "min": 0.9027560591193566,
+        "median": 0.9499804845816064,
+        "max": 1.095733320217187
+      },
+      "pairs_faster_than_mlx": 144,
+      "original_pairs_faster_than_mlx": 144,
+      "minimum_checked_cosine": 0.99980016063278
+    }
+  ],
+  "points": 80,
+  "tier_points": 64,
+  "paired_repetitions": 720,
+  "tier_paired_repetitions": 576,
+  "tuning_trials": 100,
+  "tuning_points": 327,
+  "shader_audit_points": 64,
+  "shader_audit_passes": 64,
+  "balance_audit_points": 10,
+  "min_queue_mlx_ratio": 0.5261760128870274,
+  "max_queue_mlx_ratio": 0.7387083085940813,
+  "decision": "Keep native attention default; task queue configurations are opt-in. Existing GDN default unchanged."
+}

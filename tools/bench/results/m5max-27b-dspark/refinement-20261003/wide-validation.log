@@ -1,0 +1,394 @@
+............................FFFF........................................ [ 55%]
+.........................................................                [100%]
+=================================== FAILURES ===================================
+_ test_draft_program_matches_oracle[128-markov-attention_tile7-True-False-0.0] _
+
+tmp_path = PosixPath('/private/var/folders/gj/_dvy31d12vx9vvgqxjvnpzzh0000gn/T/pytest-of-zhihaojia/pytest-80/test_draft_program_matches_ora28')
+threshold = 0.0, yarn = False, head_dim = 128, fused = 'markov'
+attention_tile = (32, 16), prepared = True
+
+    @pytest.mark.parametrize("threshold", [0.0, 0.5])
+    @pytest.mark.parametrize("yarn", [False, True])
+    @pytest.mark.parametrize("head_dim,fused,attention_tile,prepared", [(64, False, None, False), (128, False, None, False),
+        (128, True, None, False), (128, True, (32,16), False), (128, True, (24,32), False),
+        (128, True, (32,16), True), (128, True, (16,32), True),
+        (128, 'markov', (32,16), True), (128, 'native', (16,32), True),
+        (128, True, (32,32), True)])
+    def test_draft_program_matches_oracle(tmp_path, threshold, yarn, head_dim, fused, attention_tile, prepared):
+        torch = pytest.importorskip("torch")
+        from monolith.bench import profile_for_device
+    
+        dev = nt.Device()
+        info = dev.info()
+        prof = profile_for_device(info.gpu_cores, info.apple_family)
+        if prof is None:
+            pytest.skip("no chip profile for this device")
+        if fused:
+            import copy
+            prof = copy.deepcopy(prof)
+            prof.accelerator_min_t['bf16'] = 2
+        rope = {"rope_parameters": {"rope_type": "yarn", "rope_theta": 10000000.0, "factor": 32.0,
+                                   "original_max_position_embeddings": 8192, "beta_fast": 32, "beta_slow": 1}} if yarn else {}
+        shape = dict(num_attention_heads=256//head_dim,num_key_value_heads=128//head_dim)
+        if attention_tile:
+            shape.update(num_attention_heads=4,num_key_value_heads=1,block_size=7)
+        write_checkpoint(tmp_path, head_dim=head_dim, **shape, **rope)
+        drafter, head, cfg, pair = build(tmp_path, confidence_threshold=threshold,
+                                        **({'max_context':320} if prepared else {}))
+        pack_model(pair, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16, lane_order=prof.lane_order))
+        pf = PackFile(tmp_path / "pack")
+        load_oracle(drafter, str(tmp_path))
+        load_oracle_weights(head, str(tmp_path))
+        gamma, ht, hid = cfg.block_size, cfg.target_hidden, cfg.hidden_size
+        g = Graph("draft")
+        taps = [g.input(f"tap.{i}", (T, ht), DType.BF16) for i in range(cfg.n_taps)]
+        anchor = g.input("anchor", (1,), DType.I32)
+        block = drafter.lower_draft(g, DraftContext(taps, anchor))
+        drafter.lower_select(g, block, prof)
+        g.check()
+        for p in DEFAULT_PASSES:
+            p(g)
+        prog = emit_program(g, pack=pf, profile=prof, dynamic_t=True, tail=None)
+        if fused:
+            from monolith.spec.dspark.optimization import optimize
+            recipe = dict(workers=8, sgs=4, tn=16, compact=True, split=True,
+                       barrier='simd', task_barrier=False, schedule='queue', task_grain='tile',
+                       task_seed=True, task_seed_bound=True)
+            if attention_tile:
+                qm, kn = attention_tile
+                recipe.update(attention_qm=qm, attention_key_tile=kn, attention_chunk_tiles=8,
+                              attention_alias_scratch=True, attention_cached_prefix=True,
+                              attention_compact_partials=True, attention_prepare=prepared)
+            config = {'mixer': recipe}
+            if prepared:
+                config['markov'] = dict(workers=8, sgs=4, rg=1, rsplit=1, x_hoist=True, x_preconvert=True)
+                config['feature_scalar'] = dict(workers=8,sgs=4,rg=4,rsplit=2,x_hoist=False,x_preconvert=False)
+                config['context_kv_scalar'] = dict(workers=8,sgs=4,rg=4,rsplit=2,x_hoist=False,x_preconvert=False)
+            if fused == 'markov':
+                recipe['attention_task_order']='chunk'
+                config['markov_fusion'] = dict(workers=8,sgs=4,barrier='simd',task_barrier=False)
+            if fused == 'native':
+                recipe.update(mode='native',staged_tk=64,ksplit=2)
+>           prog = optimize(prog, config)[1]
+                   ^^^^^^^^^^^^^^^^^^^^^^
+
+tests/kernels/test_draft_program.py:99: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+monolith/spec/dspark/optimization.py:47: in optimize
+    result = fuse_regions(p, regions)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/region_fusion.py:49: in fuse_regions
+    normal = normalize(part, config['sgs'], groups=config['workers'], **cfg)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/static_fusion.py:562: in normalize
+    p=specialize_attention(p,sgs,attention_prepare,attention_chunk_tiles,attention_style,attention_key_tile,attention_cached_prefix,attention_alias_scratch,attention_task_order)
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/attention_fusion.py:184: in specialize_attention
+    k.source=_replace(k.source,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+source = '#include <metal_stdlib>\nusing namespace metal;\nstruct StepState {\n  uint step;                             // @0  ... h) * D + lane * DL,\n            qkvg + t * p.in_stride + p.v_off + h * D + lane * DL);\n  }\n}\n\n#endif\n\n#endif\n'
+old = 'const uint j = block / (chunks * groups), c = (block / groups) % chunks, r0 = (block % groups) * QM;'
+new = 'const uint j = (block / groups) % p.kv_heads, c = block / (p.kv_heads * groups), r0 = (block % groups) * QM;'
+
+    def _replace(source, old, new):
+        if source.count(old) != 1:
+>           raise ValueError('attention specialization source shape changed: '+old[:60])
+E           ValueError: attention specialization source shape changed: const uint j = block / (chunks * groups), c = (block / group
+
+monolith/compiler/attention_fusion.py:91: ValueError
+_ test_draft_program_matches_oracle[128-markov-attention_tile7-True-False-0.5] _
+
+tmp_path = PosixPath('/private/var/folders/gj/_dvy31d12vx9vvgqxjvnpzzh0000gn/T/pytest-of-zhihaojia/pytest-80/test_draft_program_matches_ora29')
+threshold = 0.5, yarn = False, head_dim = 128, fused = 'markov'
+attention_tile = (32, 16), prepared = True
+
+    @pytest.mark.parametrize("threshold", [0.0, 0.5])
+    @pytest.mark.parametrize("yarn", [False, True])
+    @pytest.mark.parametrize("head_dim,fused,attention_tile,prepared", [(64, False, None, False), (128, False, None, False),
+        (128, True, None, False), (128, True, (32,16), False), (128, True, (24,32), False),
+        (128, True, (32,16), True), (128, True, (16,32), True),
+        (128, 'markov', (32,16), True), (128, 'native', (16,32), True),
+        (128, True, (32,32), True)])
+    def test_draft_program_matches_oracle(tmp_path, threshold, yarn, head_dim, fused, attention_tile, prepared):
+        torch = pytest.importorskip("torch")
+        from monolith.bench import profile_for_device
+    
+        dev = nt.Device()
+        info = dev.info()
+        prof = profile_for_device(info.gpu_cores, info.apple_family)
+        if prof is None:
+            pytest.skip("no chip profile for this device")
+        if fused:
+            import copy
+            prof = copy.deepcopy(prof)
+            prof.accelerator_min_t['bf16'] = 2
+        rope = {"rope_parameters": {"rope_type": "yarn", "rope_theta": 10000000.0, "factor": 32.0,
+                                   "original_max_position_embeddings": 8192, "beta_fast": 32, "beta_slow": 1}} if yarn else {}
+        shape = dict(num_attention_heads=256//head_dim,num_key_value_heads=128//head_dim)
+        if attention_tile:
+            shape.update(num_attention_heads=4,num_key_value_heads=1,block_size=7)
+        write_checkpoint(tmp_path, head_dim=head_dim, **shape, **rope)
+        drafter, head, cfg, pair = build(tmp_path, confidence_threshold=threshold,
+                                        **({'max_context':320} if prepared else {}))
+        pack_model(pair, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16, lane_order=prof.lane_order))
+        pf = PackFile(tmp_path / "pack")
+        load_oracle(drafter, str(tmp_path))
+        load_oracle_weights(head, str(tmp_path))
+        gamma, ht, hid = cfg.block_size, cfg.target_hidden, cfg.hidden_size
+        g = Graph("draft")
+        taps = [g.input(f"tap.{i}", (T, ht), DType.BF16) for i in range(cfg.n_taps)]
+        anchor = g.input("anchor", (1,), DType.I32)
+        block = drafter.lower_draft(g, DraftContext(taps, anchor))
+        drafter.lower_select(g, block, prof)
+        g.check()
+        for p in DEFAULT_PASSES:
+            p(g)
+        prog = emit_program(g, pack=pf, profile=prof, dynamic_t=True, tail=None)
+        if fused:
+            from monolith.spec.dspark.optimization import optimize
+            recipe = dict(workers=8, sgs=4, tn=16, compact=True, split=True,
+                       barrier='simd', task_barrier=False, schedule='queue', task_grain='tile',
+                       task_seed=True, task_seed_bound=True)
+            if attention_tile:
+                qm, kn = attention_tile
+                recipe.update(attention_qm=qm, attention_key_tile=kn, attention_chunk_tiles=8,
+                              attention_alias_scratch=True, attention_cached_prefix=True,
+                              attention_compact_partials=True, attention_prepare=prepared)
+            config = {'mixer': recipe}
+            if prepared:
+                config['markov'] = dict(workers=8, sgs=4, rg=1, rsplit=1, x_hoist=True, x_preconvert=True)
+                config['feature_scalar'] = dict(workers=8,sgs=4,rg=4,rsplit=2,x_hoist=False,x_preconvert=False)
+                config['context_kv_scalar'] = dict(workers=8,sgs=4,rg=4,rsplit=2,x_hoist=False,x_preconvert=False)
+            if fused == 'markov':
+                recipe['attention_task_order']='chunk'
+                config['markov_fusion'] = dict(workers=8,sgs=4,barrier='simd',task_barrier=False)
+            if fused == 'native':
+                recipe.update(mode='native',staged_tk=64,ksplit=2)
+>           prog = optimize(prog, config)[1]
+                   ^^^^^^^^^^^^^^^^^^^^^^
+
+tests/kernels/test_draft_program.py:99: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+monolith/spec/dspark/optimization.py:47: in optimize
+    result = fuse_regions(p, regions)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/region_fusion.py:49: in fuse_regions
+    normal = normalize(part, config['sgs'], groups=config['workers'], **cfg)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/static_fusion.py:562: in normalize
+    p=specialize_attention(p,sgs,attention_prepare,attention_chunk_tiles,attention_style,attention_key_tile,attention_cached_prefix,attention_alias_scratch,attention_task_order)
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/attention_fusion.py:184: in specialize_attention
+    k.source=_replace(k.source,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+source = '#include <metal_stdlib>\nusing namespace metal;\nstruct StepState {\n  uint step;                             // @0  ... h) * D + lane * DL,\n            qkvg + t * p.in_stride + p.v_off + h * D + lane * DL);\n  }\n}\n\n#endif\n\n#endif\n'
+old = 'const uint j = block / (chunks * groups), c = (block / groups) % chunks, r0 = (block % groups) * QM;'
+new = 'const uint j = (block / groups) % p.kv_heads, c = block / (p.kv_heads * groups), r0 = (block % groups) * QM;'
+
+    def _replace(source, old, new):
+        if source.count(old) != 1:
+>           raise ValueError('attention specialization source shape changed: '+old[:60])
+E           ValueError: attention specialization source shape changed: const uint j = block / (chunks * groups), c = (block / group
+
+monolith/compiler/attention_fusion.py:91: ValueError
+_ test_draft_program_matches_oracle[128-markov-attention_tile7-True-True-0.0] __
+
+tmp_path = PosixPath('/private/var/folders/gj/_dvy31d12vx9vvgqxjvnpzzh0000gn/T/pytest-of-zhihaojia/pytest-80/test_draft_program_matches_ora30')
+threshold = 0.0, yarn = True, head_dim = 128, fused = 'markov'
+attention_tile = (32, 16), prepared = True
+
+    @pytest.mark.parametrize("threshold", [0.0, 0.5])
+    @pytest.mark.parametrize("yarn", [False, True])
+    @pytest.mark.parametrize("head_dim,fused,attention_tile,prepared", [(64, False, None, False), (128, False, None, False),
+        (128, True, None, False), (128, True, (32,16), False), (128, True, (24,32), False),
+        (128, True, (32,16), True), (128, True, (16,32), True),
+        (128, 'markov', (32,16), True), (128, 'native', (16,32), True),
+        (128, True, (32,32), True)])
+    def test_draft_program_matches_oracle(tmp_path, threshold, yarn, head_dim, fused, attention_tile, prepared):
+        torch = pytest.importorskip("torch")
+        from monolith.bench import profile_for_device
+    
+        dev = nt.Device()
+        info = dev.info()
+        prof = profile_for_device(info.gpu_cores, info.apple_family)
+        if prof is None:
+            pytest.skip("no chip profile for this device")
+        if fused:
+            import copy
+            prof = copy.deepcopy(prof)
+            prof.accelerator_min_t['bf16'] = 2
+        rope = {"rope_parameters": {"rope_type": "yarn", "rope_theta": 10000000.0, "factor": 32.0,
+                                   "original_max_position_embeddings": 8192, "beta_fast": 32, "beta_slow": 1}} if yarn else {}
+        shape = dict(num_attention_heads=256//head_dim,num_key_value_heads=128//head_dim)
+        if attention_tile:
+            shape.update(num_attention_heads=4,num_key_value_heads=1,block_size=7)
+        write_checkpoint(tmp_path, head_dim=head_dim, **shape, **rope)
+        drafter, head, cfg, pair = build(tmp_path, confidence_threshold=threshold,
+                                        **({'max_context':320} if prepared else {}))
+        pack_model(pair, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16, lane_order=prof.lane_order))
+        pf = PackFile(tmp_path / "pack")
+        load_oracle(drafter, str(tmp_path))
+        load_oracle_weights(head, str(tmp_path))
+        gamma, ht, hid = cfg.block_size, cfg.target_hidden, cfg.hidden_size
+        g = Graph("draft")
+        taps = [g.input(f"tap.{i}", (T, ht), DType.BF16) for i in range(cfg.n_taps)]
+        anchor = g.input("anchor", (1,), DType.I32)
+        block = drafter.lower_draft(g, DraftContext(taps, anchor))
+        drafter.lower_select(g, block, prof)
+        g.check()
+        for p in DEFAULT_PASSES:
+            p(g)
+        prog = emit_program(g, pack=pf, profile=prof, dynamic_t=True, tail=None)
+        if fused:
+            from monolith.spec.dspark.optimization import optimize
+            recipe = dict(workers=8, sgs=4, tn=16, compact=True, split=True,
+                       barrier='simd', task_barrier=False, schedule='queue', task_grain='tile',
+                       task_seed=True, task_seed_bound=True)
+            if attention_tile:
+                qm, kn = attention_tile
+                recipe.update(attention_qm=qm, attention_key_tile=kn, attention_chunk_tiles=8,
+                              attention_alias_scratch=True, attention_cached_prefix=True,
+                              attention_compact_partials=True, attention_prepare=prepared)
+            config = {'mixer': recipe}
+            if prepared:
+                config['markov'] = dict(workers=8, sgs=4, rg=1, rsplit=1, x_hoist=True, x_preconvert=True)
+                config['feature_scalar'] = dict(workers=8,sgs=4,rg=4,rsplit=2,x_hoist=False,x_preconvert=False)
+                config['context_kv_scalar'] = dict(workers=8,sgs=4,rg=4,rsplit=2,x_hoist=False,x_preconvert=False)
+            if fused == 'markov':
+                recipe['attention_task_order']='chunk'
+                config['markov_fusion'] = dict(workers=8,sgs=4,barrier='simd',task_barrier=False)
+            if fused == 'native':
+                recipe.update(mode='native',staged_tk=64,ksplit=2)
+>           prog = optimize(prog, config)[1]
+                   ^^^^^^^^^^^^^^^^^^^^^^
+
+tests/kernels/test_draft_program.py:99: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+monolith/spec/dspark/optimization.py:47: in optimize
+    result = fuse_regions(p, regions)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/region_fusion.py:49: in fuse_regions
+    normal = normalize(part, config['sgs'], groups=config['workers'], **cfg)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/static_fusion.py:562: in normalize
+    p=specialize_attention(p,sgs,attention_prepare,attention_chunk_tiles,attention_style,attention_key_tile,attention_cached_prefix,attention_alias_scratch,attention_task_order)
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/attention_fusion.py:184: in specialize_attention
+    k.source=_replace(k.source,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+source = '#include <metal_stdlib>\nusing namespace metal;\nstruct StepState {\n  uint step;                             // @0  ... h) * D + lane * DL,\n            qkvg + t * p.in_stride + p.v_off + h * D + lane * DL);\n  }\n}\n\n#endif\n\n#endif\n'
+old = 'const uint j = block / (chunks * groups), c = (block / groups) % chunks, r0 = (block % groups) * QM;'
+new = 'const uint j = (block / groups) % p.kv_heads, c = block / (p.kv_heads * groups), r0 = (block % groups) * QM;'
+
+    def _replace(source, old, new):
+        if source.count(old) != 1:
+>           raise ValueError('attention specialization source shape changed: '+old[:60])
+E           ValueError: attention specialization source shape changed: const uint j = block / (chunks * groups), c = (block / group
+
+monolith/compiler/attention_fusion.py:91: ValueError
+_ test_draft_program_matches_oracle[128-markov-attention_tile7-True-True-0.5] __
+
+tmp_path = PosixPath('/private/var/folders/gj/_dvy31d12vx9vvgqxjvnpzzh0000gn/T/pytest-of-zhihaojia/pytest-80/test_draft_program_matches_ora31')
+threshold = 0.5, yarn = True, head_dim = 128, fused = 'markov'
+attention_tile = (32, 16), prepared = True
+
+    @pytest.mark.parametrize("threshold", [0.0, 0.5])
+    @pytest.mark.parametrize("yarn", [False, True])
+    @pytest.mark.parametrize("head_dim,fused,attention_tile,prepared", [(64, False, None, False), (128, False, None, False),
+        (128, True, None, False), (128, True, (32,16), False), (128, True, (24,32), False),
+        (128, True, (32,16), True), (128, True, (16,32), True),
+        (128, 'markov', (32,16), True), (128, 'native', (16,32), True),
+        (128, True, (32,32), True)])
+    def test_draft_program_matches_oracle(tmp_path, threshold, yarn, head_dim, fused, attention_tile, prepared):
+        torch = pytest.importorskip("torch")
+        from monolith.bench import profile_for_device
+    
+        dev = nt.Device()
+        info = dev.info()
+        prof = profile_for_device(info.gpu_cores, info.apple_family)
+        if prof is None:
+            pytest.skip("no chip profile for this device")
+        if fused:
+            import copy
+            prof = copy.deepcopy(prof)
+            prof.accelerator_min_t['bf16'] = 2
+        rope = {"rope_parameters": {"rope_type": "yarn", "rope_theta": 10000000.0, "factor": 32.0,
+                                   "original_max_position_embeddings": 8192, "beta_fast": 32, "beta_slow": 1}} if yarn else {}
+        shape = dict(num_attention_heads=256//head_dim,num_key_value_heads=128//head_dim)
+        if attention_tile:
+            shape.update(num_attention_heads=4,num_key_value_heads=1,block_size=7)
+        write_checkpoint(tmp_path, head_dim=head_dim, **shape, **rope)
+        drafter, head, cfg, pair = build(tmp_path, confidence_threshold=threshold,
+                                        **({'max_context':320} if prepared else {}))
+        pack_model(pair, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16, lane_order=prof.lane_order))
+        pf = PackFile(tmp_path / "pack")
+        load_oracle(drafter, str(tmp_path))
+        load_oracle_weights(head, str(tmp_path))
+        gamma, ht, hid = cfg.block_size, cfg.target_hidden, cfg.hidden_size
+        g = Graph("draft")
+        taps = [g.input(f"tap.{i}", (T, ht), DType.BF16) for i in range(cfg.n_taps)]
+        anchor = g.input("anchor", (1,), DType.I32)
+        block = drafter.lower_draft(g, DraftContext(taps, anchor))
+        drafter.lower_select(g, block, prof)
+        g.check()
+        for p in DEFAULT_PASSES:
+            p(g)
+        prog = emit_program(g, pack=pf, profile=prof, dynamic_t=True, tail=None)
+        if fused:
+            from monolith.spec.dspark.optimization import optimize
+            recipe = dict(workers=8, sgs=4, tn=16, compact=True, split=True,
+                       barrier='simd', task_barrier=False, schedule='queue', task_grain='tile',
+                       task_seed=True, task_seed_bound=True)
+            if attention_tile:
+                qm, kn = attention_tile
+                recipe.update(attention_qm=qm, attention_key_tile=kn, attention_chunk_tiles=8,
+                              attention_alias_scratch=True, attention_cached_prefix=True,
+                              attention_compact_partials=True, attention_prepare=prepared)
+            config = {'mixer': recipe}
+            if prepared:
+                config['markov'] = dict(workers=8, sgs=4, rg=1, rsplit=1, x_hoist=True, x_preconvert=True)
+                config['feature_scalar'] = dict(workers=8,sgs=4,rg=4,rsplit=2,x_hoist=False,x_preconvert=False)
+                config['context_kv_scalar'] = dict(workers=8,sgs=4,rg=4,rsplit=2,x_hoist=False,x_preconvert=False)
+            if fused == 'markov':
+                recipe['attention_task_order']='chunk'
+                config['markov_fusion'] = dict(workers=8,sgs=4,barrier='simd',task_barrier=False)
+            if fused == 'native':
+                recipe.update(mode='native',staged_tk=64,ksplit=2)
+>           prog = optimize(prog, config)[1]
+                   ^^^^^^^^^^^^^^^^^^^^^^
+
+tests/kernels/test_draft_program.py:99: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+monolith/spec/dspark/optimization.py:47: in optimize
+    result = fuse_regions(p, regions)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/region_fusion.py:49: in fuse_regions
+    normal = normalize(part, config['sgs'], groups=config['workers'], **cfg)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/static_fusion.py:562: in normalize
+    p=specialize_attention(p,sgs,attention_prepare,attention_chunk_tiles,attention_style,attention_key_tile,attention_cached_prefix,attention_alias_scratch,attention_task_order)
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+monolith/compiler/attention_fusion.py:184: in specialize_attention
+    k.source=_replace(k.source,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+source = '#include <metal_stdlib>\nusing namespace metal;\nstruct StepState {\n  uint step;                             // @0  ... h) * D + lane * DL,\n            qkvg + t * p.in_stride + p.v_off + h * D + lane * DL);\n  }\n}\n\n#endif\n\n#endif\n'
+old = 'const uint j = block / (chunks * groups), c = (block / groups) % chunks, r0 = (block % groups) * QM;'
+new = 'const uint j = (block / groups) % p.kv_heads, c = block / (p.kv_heads * groups), r0 = (block % groups) * QM;'
+
+    def _replace(source, old, new):
+        if source.count(old) != 1:
+>           raise ValueError('attention specialization source shape changed: '+old[:60])
+E           ValueError: attention specialization source shape changed: const uint j = block / (chunks * groups), c = (block / group
+
+monolith/compiler/attention_fusion.py:91: ValueError
+=========================== short test summary info ============================
+FAILED tests/kernels/test_draft_program.py::test_draft_program_matches_oracle[128-markov-attention_tile7-True-False-0.0]
+FAILED tests/kernels/test_draft_program.py::test_draft_program_matches_oracle[128-markov-attention_tile7-True-False-0.5]
+FAILED tests/kernels/test_draft_program.py::test_draft_program_matches_oracle[128-markov-attention_tile7-True-True-0.0]
+FAILED tests/kernels/test_draft_program.py::test_draft_program_matches_oracle[128-markov-attention_tile7-True-True-0.5]
+........................................................................ [ 55%]
+.........................................................                [100%]

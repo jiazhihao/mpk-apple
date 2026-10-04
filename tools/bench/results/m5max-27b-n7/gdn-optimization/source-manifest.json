@@ -1,0 +1,42 @@
+{
+  "created_utc": "2026-10-02T09:55:15.726063+00:00",
+  "git_head": "61d302ebee2c35851992cd42c815d006327a7eed",
+  "branch": "codex/gdn-megakernel-n7",
+  "checkpoint": "nvidia/Qwen3.8-27B-NVFP4",
+  "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+  "source_sha256": {
+    "monolith/compiler/static_fusion.py": "c470eb3601f759368c71994405e392a9fef568dd253d76ff0d5d414ebb004fb3",
+    "monolith/compiler/fp8_tiles.py": "cc1c6a445ba9d7a328b64ad382144df4c006e8be1cdd568a45c330fd3bc5d005",
+    "monolith/compiler/gdn_fusion.py": "0ddedba23cb5b5e3b7d09fde67aa802d9b9cba183f1bcfd0f4fad645f4beb4d5",
+    "monolith/compiler/emit.py": "559d54cf43085419abef58ac5156edaa09c35bb1df21b07f63deebe71308f4bd",
+    "monolith/core/profile.py": "062cc4b27469e64aae70a36eefeb1ea5b3bffdee24c540b0612587f577ce4633",
+    "monolith/core/step_state.py": "f86b26dd68e8b26bb3b2fbe916213b637e039aa11b32cdb01d9b84ee553ac34a",
+    "monolith/generate.py": "3c05e422363154562bc4fc5231ad249284c1e78837a35c784800f5e94509eb7b",
+    "monolith/runtime/engine.py": "6ceac8883575c41babad0428345ad6502feccd7985292b01229eeff3522f937b",
+    "profiles/apple-m5-max-40c.json": "d0f2eef90dd01a60137fad281ee119ab342f013ec321bae6d65afb53554c11e6",
+    "kernels/static_barrier_simd.metal": "f55f6e5978f1c67e394cd8600665afaa4a26bf601346c7958d33d942630fff74",
+    "kernels/static_barrier_serial.metal": "b56f6acfde98a97ffa2cc5d64ee7d1c0b2080c17d7a9e387e9a58f3650cec5aa",
+    "kernels/static_barrier_leader.metal": "5477ca3637a22097d9b9c6441262ddf27363c846055a7754fbd64c0bbea36733",
+    "kernels/static_barrier_wide.metal": "c2e06bc11df5741d107668e1b821971455545d9b6b54803be924120193551126",
+    "kernels/gemm_tile.metal": "8b953a9de4a7d8e1b5f64d6dc62afe9d17793ea56233197067dfdc72bd492577",
+    "kernels/gdn_mixer.metal": "06df020eb015b2b08640f538d03ec6441f3ce957609c7e5b8cf35b9d23491c4d",
+    "tests/contract/test_static_geometry.py": "5da157292c0df9eab19ff11c2324e92be1cbbacb50fd6a36f257496a7ff32962",
+    "tests/contract/test_fp8_tiles.py": "c9588e9204da9814390a2926f67bb5002f557ca9af61c6dd4ced002d64f314a6",
+    "tests/contract/test_profiles.py": "0eae46fc28110713d9f3e4ae67107a389bc7bb1634ed186fd37ecb902cb216c0",
+    "tests/kernels/test_gdn_block_static.py": "44881d8a9b8c5a555ad4dbcf5f28577e6495ea3f28d4eb256b481897fcab0be8",
+    "tests/kernels/test_gdn_default.py": "648c56d95c21fb923a475ce47631110e13ba2614f3295d23f392a5ae4889611c",
+    "tests/kernels/test_attention_static.py": "12ad996ed4ad1dd2765a2e8d17a9db38605da2f96075e998f493abdd5e9d8867",
+    "tests/kernels/test_mlp_block_static.py": "e5ae63f0302744b2ca4dd01e6cf6d49a3eb430e1c863af157a34248e22c6dcbc",
+    "tools/bench/modelopt_mega_tune.py": "d48bedffa9bdfff63d2b90f69075846eadaa4d40d2e492b6791b1b5d73d6aa1d",
+    "tools/bench/modelopt_layer_bench.py": "afbe00b20c5ba96552c774f840f79bd518301bd0356c09cce543cef0ddf473cf",
+    "tools/bench/modelopt_mlx.py": "bb500ad3a6f4aef5a375fefa38155c518bd7e426fbbab6bc1be08f9db7440819",
+    "tools/bench/gdn_block_static.py": "851f1d8d125b505a43f6673e57cfd0f2388313dd42dc8426db0c51b5c714d98a",
+    "docs/research/m5max-gdn-mixer-optimization.md": "69ade75324217f4e615cfdb4fdf32e4feab4650b5b6e8af95267a60ae6ce109f",
+    "profiles/README.md": "8752e6f329f92fe12f92297cfa150ae3aa37468c13e248244bedfeaa53e0ec35",
+    "tools/bench/README.md": "40488b7ea23c6bc011803f40d97f9382b2a36753af7e602965fe630448245e45"
+  },
+  "pack_metadata_sha256": {
+    "manifest.json": "f4193f6996b55ad1abde9ecd0ab2292cd4e48c4ddf86f85b72fa2450366e07c6",
+    "autotune.apple-m5-max.json": "8042c10377b2390ad0f2386d793ecf992fd855a689140d8b42754b548244f509"
+  }
+}

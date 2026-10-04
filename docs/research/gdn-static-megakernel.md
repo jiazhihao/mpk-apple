@@ -1,7 +1,19 @@
 # Static Gated DeltaNet fusion at N=7
 
+**2026-10-01 follow-up:** the [40-core M5 Max / real 27B checkpoint study](m5max-27b-megakernel.md)
+extends the prototype to full attention and NVFP4 MLP, evaluates two kernels per
+decoder layer, and compares every layer with native MLX-LM. The M5 Pro experiments
+below are historical measurements with their original scope.
+The [additional M5 Max tuning study](m5max-27b-megakernel-tuning.md) expands the
+configuration knobs and tests the complete-layer effect of narrower fusion.
+The [2026-10-02 GDN optimization study](m5max-gdn-mixer-optimization.md)
+adds lossless FP8 operand packing and a broader configuration search on M5 Max.
+
 The tested single-kernel schedules do **not** improve latency on the 20-core M5 Pro.
-The production compiler remains unchanged. This experiment covers the **GDN core**:
+At the time of this experiment the production compiler was unchanged. The later
+[M5 Max follow-up](m5max-27b-megakernel-tuning.md#default-selection-after-the-study)
+selects mixer-only fusion for its measured fixed-eight-row configuration.
+This original experiment covers the **GDN core**:
 causal convolution/SiLU, q/k L2 normalization, scalar gates, the eight-token
 recurrence, convolution/recurrent state writes, and gated RMSNorm. It excludes
 input/output matrix projections, the MLP, drafting, and accept/rollback. N=7
@@ -178,10 +190,12 @@ and install the oracle dependencies (torch/safetensors) for fixture creation.
 The two new full-block checks cover alternating state slots, changing inputs,
 continuation, fixture reuse, and 64 replays without counter reset.
 
-Before running on M5 Max, register a profile for its **actual GPU core count**:
-`profile_for_device` currently has no Max entry. Re-measure the crew geometry and
-bandwidth rather than silently using the M5 Pro profile. The current prototype
-uses fixed-T=8 emission, supports FP8/BF16 cooperative matrix inputs, and rejects
+Before running on another chip, register a profile for its **actual GPU core count**.
+The follow-up adds `apple-m5-max-40c`; re-measure the crew geometry and
+bandwidth rather than silently using the M5 Pro profile. That M5 Pro prototype
+used fixed-T=8 emission, supported FP8/BF16 cooperative matrix inputs, and rejected
 packed 4-bit inputs in that mode. Dynamic speculative row counts, NVFP4 MLP,
 full attention/KV state, full-model generations, and direct MLX comparisons are
-follow-ups, not validated by this experiment.
+not validated by the historical experiment above. The linked M5 Max follow-up
+validates the fixed-row attention/MLP and MLX comparisons; generation and dynamic
+speculative decoding remain outside its scope.

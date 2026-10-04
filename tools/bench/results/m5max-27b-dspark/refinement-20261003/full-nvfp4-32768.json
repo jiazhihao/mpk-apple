@@ -1,0 +1,511 @@
+{
+  "mode": "optimized",
+  "config": {
+    "bf16_min_t": 2,
+    "draft_attention": "mma",
+    "draft": {
+      "mixer": {
+        "workers": 240,
+        "sgs": 4,
+        "tn": 32,
+        "compact": true,
+        "split": true,
+        "barrier": "simd",
+        "task_barrier": false,
+        "schedule": "queue",
+        "task_grain": "tile",
+        "task_seed": true,
+        "task_seed_bound": true,
+        "attention_chunk_tiles": 16,
+        "attention_qm": 16,
+        "attention_cached_prefix": true,
+        "attention_compact_partials": true,
+        "attention_key_tile": 32,
+        "attention_alias_scratch": true,
+        "attention_prepare": false,
+        "attention_task_order": "chunk",
+        "attention_task_tiles": 1,
+        "task_batch": 1,
+        "gemm_overrides": {
+          "0": {
+            "tn": 16,
+            "ksplit": 4,
+            "q_outer": 1,
+            "ragged_teams": true
+          }
+        }
+      },
+      "mlp": {
+        "workers": 160,
+        "sgs": 4,
+        "tn": 32,
+        "compact": true,
+        "mode": "native",
+        "staged_tk": 64,
+        "ksplit": 4,
+        "ragged_teams": true,
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 32,
+        "q_outer": 1
+      },
+      "feature": {
+        "workers": 80,
+        "sgs": 8,
+        "tn": 16,
+        "compact": true,
+        "mode": "native",
+        "staged_tk": 128,
+        "ksplit": 4,
+        "ragged_teams": true,
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 32,
+        "q_outer": 1
+      },
+      "context_kv": {
+        "workers": 160,
+        "sgs": 4,
+        "tn": 16,
+        "compact": true,
+        "mode": "native",
+        "staged_tk": 64,
+        "ksplit": 4,
+        "ragged_teams": true,
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 32,
+        "q_outer": 1
+      },
+      "lm_head": {
+        "workers": 160,
+        "sgs": 4,
+        "tn": 32,
+        "compact": true,
+        "ksplit": 4,
+        "mode": "native",
+        "staged_tk": 64,
+        "ragged_teams": true,
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 16,
+        "q_outer": 0
+      },
+      "feature_scalar": {
+        "workers": 80,
+        "sgs": 16,
+        "rg": 2,
+        "rsplit": 1,
+        "x_hoist": false,
+        "x_preconvert": true
+      },
+      "context_kv_scalar": {
+        "workers": 320,
+        "sgs": 16,
+        "rg": 2,
+        "rsplit": 8,
+        "x_hoist": false,
+        "x_preconvert": true
+      },
+      "markov": {
+        "workers": 320,
+        "sgs": 16,
+        "rg": 1,
+        "rsplit": 1,
+        "x_preconvert": true,
+        "x_hoist": true
+      }
+    },
+    "target": {
+      "gdn": {
+        "shape": [
+          5120,
+          16,
+          48,
+          128,
+          128,
+          4
+        ],
+        "workers": 80,
+        "sgs": 8,
+        "tn": 32,
+        "split": true,
+        "compact": true,
+        "gdn_sl": 8,
+        "barrier": "simd",
+        "task_barrier": false,
+        "scalar_sgs": 8,
+        "fp8_layout": "tile",
+        "q_outer": 0,
+        "fp8_decode": "subtract",
+        "fp8_tile_block": 8,
+        "restrict_weights": false,
+        "gemm_overrides": {
+          "3": {
+            "tn": 32,
+            "ksplit": 4,
+            "groups": 120,
+            "ragged_teams": true
+          },
+          "0": {
+            "tn": 32,
+            "ksplit": 2,
+            "groups": 240,
+            "ragged_teams": true
+          },
+          "1": {
+            "tn": 16,
+            "ksplit": 8,
+            "groups": 240,
+            "ragged_teams": true
+          },
+          "2": {
+            "tn": 32,
+            "ksplit": 8,
+            "groups": 120,
+            "ragged_teams": true
+          }
+        },
+        "perm_sgs": 64,
+        "direct_norm": true,
+        "dual_permute": true
+      },
+      "attention": {
+        "attention_alias_scratch": true,
+        "attention_chunk_tiles": 32,
+        "attention_groups": 160,
+        "attention_prepare": true,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "1": {
+            "ksplit": 1,
+            "q_outer": 1,
+            "tn": 32
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 0,
+            "tn": 16
+          }
+        },
+        "ksplit": 2,
+        "merge_sgs": 8,
+        "merge_unroll": 4,
+        "q_outer": 0,
+        "scalar_sgs": 8,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 157
+      },
+      "mlp": {
+        "cache_external_inputs": false,
+        "compact": true,
+        "gemm_overrides": {
+          "1": {
+            "groups": 640
+          }
+        },
+        "ksplit": 4,
+        "mode": "native",
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 32,
+        "post_norm_loads": 16,
+        "post_norm_once": true,
+        "post_norm_prefold": false,
+        "sgs": 4,
+        "staged_tk": 64,
+        "tn": 32,
+        "workers": 160
+      }
+    },
+    "accelerator_min_t": {
+      "nvfp4": 2
+    }
+  },
+  "chip": "Apple M5 Max",
+  "cores": 40,
+  "weights": "target NVFP4/FP8; draft formats recorded per slab; shared target embedding and LM head",
+  "draft_formats": {
+    "draft.fc.fc": "nvfp4",
+    "draft.layers.0.self_attn.qkv.q_proj+k_proj+v_proj": "nvfp4",
+    "draft.layers.0.self_attn.kv_ctx.k_proj+v_proj": "nvfp4",
+    "draft.layers.0.self_attn.o_proj.o_proj": "nvfp4",
+    "draft.layers.0.mlp.gate_up.gate_proj+up_proj": "nvfp4",
+    "draft.layers.0.mlp.down.down_proj": "nvfp4",
+    "draft.layers.1.self_attn.qkv.q_proj+k_proj+v_proj": "nvfp4",
+    "draft.layers.1.self_attn.kv_ctx.k_proj+v_proj": "nvfp4",
+    "draft.layers.1.self_attn.o_proj.o_proj": "nvfp4",
+    "draft.layers.1.mlp.gate_up.gate_proj+up_proj": "nvfp4",
+    "draft.layers.1.mlp.down.down_proj": "nvfp4",
+    "draft.layers.2.self_attn.qkv.q_proj+k_proj+v_proj": "nvfp4",
+    "draft.layers.2.self_attn.kv_ctx.k_proj+v_proj": "nvfp4",
+    "draft.layers.2.self_attn.o_proj.o_proj": "nvfp4",
+    "draft.layers.2.mlp.gate_up.gate_proj+up_proj": "nvfp4",
+    "draft.layers.2.mlp.down.down_proj": "nvfp4",
+    "draft.layers.3.self_attn.qkv.q_proj+k_proj+v_proj": "nvfp4",
+    "draft.layers.3.self_attn.kv_ctx.k_proj+v_proj": "nvfp4",
+    "draft.layers.3.self_attn.o_proj.o_proj": "nvfp4",
+    "draft.layers.3.mlp.gate_up.gate_proj+up_proj": "nvfp4",
+    "draft.layers.3.mlp.down.down_proj": "nvfp4",
+    "draft.layers.4.self_attn.qkv.q_proj+k_proj+v_proj": "nvfp4",
+    "draft.layers.4.self_attn.kv_ctx.k_proj+v_proj": "nvfp4",
+    "draft.layers.4.self_attn.o_proj.o_proj": "nvfp4",
+    "draft.layers.4.mlp.gate_up.gate_proj+up_proj": "nvfp4",
+    "draft.layers.4.mlp.down.down_proj": "nvfp4",
+    "draft.markov_w1.weight": "bf16",
+    "draft.markov_w2.w2": "nvfp4"
+  },
+  "draft_pack": "/tmp/monolith-m5max/dspark/pack-nvfp4-keep-w1-33k",
+  "semantics": "seven drafts plus anchor verified; acceptance/commit and next drafting included; nonterminal replay",
+  "prompt_sha256": "c913ab9975beb8c592556d4e9a63305edfdbb1b89ead4fc24126ad492a753628",
+  "contexts": [
+    {
+      "context": 32768,
+      "prefill_ms": 171110.63224976533,
+      "initial_drafts": [
+        7905,
+        48889,
+        13,
+        2302,
+        9150,
+        279,
+        1788
+      ],
+      "samples": [
+        {
+          "gpu_ms": 57.57262499537319,
+          "wall_ms": 58.99791666865349,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 57.79495832393877,
+          "wall_ms": 59.34475001692772,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 57.5128750060685,
+          "wall_ms": 58.82191666960716,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 57.70024997764267,
+          "wall_ms": 59.124541670084,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 57.63387499609962,
+          "wall_ms": 58.991166681051254,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 57.7029166452121,
+          "wall_ms": 59.00774997472763,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 57.670166657771915,
+          "wall_ms": 59.081083327531815,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        }
+      ],
+      "generated_source_sha256": "152acdaff671fae387311b79938f8ef072bda3f594969c69733920352f947197",
+      "dispatches": 313,
+      "gpu_ms_min": 57.5128750060685,
+      "gpu_ms_median": 57.670166657771915,
+      "gpu_ms_max": 57.79495832393877,
+      "wall_ms_median": 59.00774997472763,
+      "stage_medians": {
+        "verification": 48.78449998795986,
+        "accept_commit": 1.2949999945703894,
+        "draft": 7.651124993572012
+      },
+      "stages": [
+        {
+          "verification": 48.572083323961124,
+          "accept_commit": 1.3095833419356495,
+          "draft": 7.659666647668928
+        },
+        {
+          "verification": 48.78449998795986,
+          "accept_commit": 1.291124994168058,
+          "draft": 7.651124993572012
+        },
+        {
+          "verification": 48.728666675742716,
+          "accept_commit": 1.2637916661333293,
+          "draft": 7.649250008398667
+        },
+        {
+          "verification": 48.86824998538941,
+          "accept_commit": 1.2839999981224537,
+          "draft": 7.650374987861142
+        },
+        {
+          "verification": 48.603083327179775,
+          "accept_commit": 1.2949999945703894,
+          "draft": 7.642916665645316
+        },
+        {
+          "verification": 48.92224998911843,
+          "accept_commit": 1.3586249842774123,
+          "draft": 7.833208335796371
+        },
+        {
+          "verification": 49.87575000268407,
+          "accept_commit": 1.37479166733101,
+          "draft": 7.965625001816079
+        }
+      ],
+      "split_bit_exact": true,
+      "replay_bit_exact": true
+    }
+  ]
+}

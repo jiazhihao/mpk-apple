@@ -1,0 +1,10 @@
+feature 128 {'feature': {'workers': 80, 'sgs': 4, 'tn': 16, 'compact': True, 'ksplit': 2, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.6041149998782203, 'candidate': 0.4551200004061684}
+feature 128 {'feature': {'workers': 40, 'sgs': 8, 'tn': 16, 'compact': True, 'ksplit': 1, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.6036424997728318, 'candidate': 0.4524775000754744}
+feature 128 {'feature': {'workers': 40, 'sgs': 8, 'tn': 16, 'compact': True, 'ksplit': 2, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.6038300000363961, 'candidate': 0.4549766663694754}
+feature 128 {'feature': {'workers': 160, 'sgs': 8, 'tn': 16, 'compact': True, 'ksplit': 1, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.604427499929443, 'candidate': 0.45278083358425647}
+feature 128 {'feature': {'workers': 320, 'sgs': 8, 'tn': 16, 'compact': True, 'ksplit': 1, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.604239166714251, 'candidate': 0.45305500039830804}
+feature 128 {'feature': {'workers': 80, 'sgs': 8, 'tn': 16, 'compact': True, 'ksplit': 1, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.6041008332977071, 'candidate': 0.4528199997730553}
+feature 128 {'feature': {'workers': 320, 'sgs': 4, 'tn': 16, 'compact': True, 'ksplit': 1, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.6047674996079877, 'candidate': 0.4534908337518573}
+feature 128 {'feature': {'workers': 80, 'sgs': 4, 'tn': 16, 'compact': True, 'ksplit': 1, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.6044349999865517, 'candidate': 0.4530449997400865}
+feature 128 {'feature': {'workers': 160, 'sgs': 4, 'tn': 16, 'compact': True, 'ksplit': 1, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.6046349997632205, 'candidate': 0.45335416682064533}
+feature 128 {'feature': {'workers': 40, 'sgs': 8, 'tn': 16, 'compact': True, 'ksplit': 4, 'mode': 'native', 'staged_tk': 64, 'ragged_teams': True}} {'baseline': 0.6038816669024527, 'candidate': 0.4559824999887496}

@@ -3,7 +3,7 @@
 Status: measured 2026-09-24 on the M5 Pro (20-core GPU, 24 GB, macOS 26.5.1, AC power) with
 [`tools/bench/gemv_bench.py`](../../tools/bench/gemv_bench.py) (plan M1, issues #9 and #10). Every point is min-of-3
 over ≥ 2 GB streamed, checked against the exact format oracle (≤ 2 BF16 ULP at the output's magnitude, accumulation
-noise < 1e-4); the raw JSON lines are in [`tools/bench/results/`](../../tools/bench/results). Nominal = 307 GB/s.
+noise < 1e-4); the raw JSON lines are in [the archived results](https://github.com/jiazhihao/mpk-apple/tree/ade38fb5f81ebdf852a2b65a616703b03f4ec424/tools/bench/results). Nominal = 307 GB/s.
 
 ## 1. The kernel
 

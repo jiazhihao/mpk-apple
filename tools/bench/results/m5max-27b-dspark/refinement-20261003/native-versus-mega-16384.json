@@ -1,0 +1,1342 @@
+{
+  "mode": "optimized",
+  "config": {
+    "bf16_min_t": 2,
+    "draft_attention": "mma",
+    "draft": {
+      "mixer": {
+        "workers": 80,
+        "sgs": 8,
+        "tn": 16,
+        "compact": true,
+        "split": true,
+        "barrier": "simd",
+        "task_barrier": false,
+        "schedule": "queue",
+        "task_grain": "tile",
+        "task_seed": true,
+        "task_seed_bound": true,
+        "attention_chunk_tiles": 8,
+        "attention_qm": 16,
+        "attention_cached_prefix": true,
+        "attention_compact_partials": true,
+        "mode": "native",
+        "staged_tk": 64,
+        "ksplit": 4,
+        "ragged_teams": true,
+        "attention_prepare": true,
+        "attention_task_order": "chunk"
+      },
+      "mlp": {
+        "workers": 40,
+        "sgs": 8,
+        "tn": 16,
+        "compact": true,
+        "ksplit": 1,
+        "mode": "native",
+        "staged_tk": 64,
+        "ragged_teams": true
+      },
+      "feature": {
+        "workers": 40,
+        "sgs": 8,
+        "tn": 16,
+        "compact": true,
+        "ksplit": 1,
+        "mode": "native",
+        "staged_tk": 64,
+        "ragged_teams": true
+      },
+      "context_kv": {
+        "workers": 80,
+        "sgs": 8,
+        "tn": 16,
+        "compact": true,
+        "ksplit": 4,
+        "mode": "native",
+        "staged_tk": 64,
+        "ragged_teams": true
+      },
+      "lm_head": {
+        "workers": 160,
+        "sgs": 4,
+        "tn": 32,
+        "compact": true,
+        "ksplit": 4,
+        "mode": "native",
+        "staged_tk": 64,
+        "ragged_teams": true,
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 16,
+        "q_outer": 0
+      },
+      "feature_scalar": {
+        "workers": 80,
+        "sgs": 16,
+        "rg": 2,
+        "rsplit": 1,
+        "x_hoist": false,
+        "x_preconvert": true
+      },
+      "context_kv_scalar": {
+        "workers": 320,
+        "sgs": 16,
+        "rg": 2,
+        "rsplit": 8,
+        "x_hoist": false,
+        "x_preconvert": true
+      },
+      "markov": {
+        "workers": 320,
+        "sgs": 16,
+        "rg": 4,
+        "rsplit": 4,
+        "x_preconvert": true,
+        "x_hoist": true
+      }
+    },
+    "target": {
+      "gdn": {
+        "shape": [
+          5120,
+          16,
+          48,
+          128,
+          128,
+          4
+        ],
+        "workers": 80,
+        "sgs": 8,
+        "tn": 32,
+        "split": true,
+        "compact": true,
+        "gdn_sl": 8,
+        "barrier": "simd",
+        "task_barrier": false,
+        "scalar_sgs": 8,
+        "fp8_layout": "tile",
+        "q_outer": 0,
+        "fp8_decode": "subtract",
+        "fp8_tile_block": 8,
+        "restrict_weights": false,
+        "gemm_overrides": {
+          "3": {
+            "tn": 32,
+            "ksplit": 4,
+            "groups": 120,
+            "ragged_teams": true
+          },
+          "0": {
+            "tn": 32,
+            "ksplit": 2,
+            "groups": 240,
+            "ragged_teams": true
+          },
+          "1": {
+            "tn": 16,
+            "ksplit": 8,
+            "groups": 240,
+            "ragged_teams": true
+          },
+          "2": {
+            "tn": 32,
+            "ksplit": 8,
+            "groups": 120,
+            "ragged_teams": true
+          }
+        },
+        "perm_sgs": 64,
+        "direct_norm": true,
+        "dual_permute": true
+      },
+      "attention": {
+        "attention_cached_prefix": true,
+        "attention_chunk_tiles": 12,
+        "attention_groups": 160,
+        "attention_prepare": false,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 8,
+            "q_outer": 1,
+            "tn": 16
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 1,
+            "tn": 32
+          }
+        },
+        "merge_sgs": 8,
+        "merge_unroll": 2,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 120
+      },
+      "mlp": {
+        "cache_external_inputs": false,
+        "compact": true,
+        "gemm_overrides": {
+          "1": {
+            "groups": 640
+          }
+        },
+        "ksplit": 4,
+        "mode": "native",
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 32,
+        "post_norm_loads": 16,
+        "post_norm_once": true,
+        "post_norm_prefold": false,
+        "sgs": 4,
+        "staged_tk": 64,
+        "tn": 32,
+        "workers": 160
+      }
+    }
+  },
+  "chip": "Apple M5 Max",
+  "cores": 40,
+  "weights": "target NVFP4/FP8; draft formats recorded per slab; shared target embedding and LM head",
+  "draft_formats": {
+    "draft.fc.fc": "bf16",
+    "draft.layers.0.self_attn.qkv.q_proj+k_proj+v_proj": "bf16",
+    "draft.layers.0.self_attn.kv_ctx.k_proj+v_proj": "bf16",
+    "draft.layers.0.self_attn.o_proj.o_proj": "bf16",
+    "draft.layers.0.mlp.gate_up.gate_proj+up_proj": "bf16",
+    "draft.layers.0.mlp.down.down_proj": "bf16",
+    "draft.layers.1.self_attn.qkv.q_proj+k_proj+v_proj": "bf16",
+    "draft.layers.1.self_attn.kv_ctx.k_proj+v_proj": "bf16",
+    "draft.layers.1.self_attn.o_proj.o_proj": "bf16",
+    "draft.layers.1.mlp.gate_up.gate_proj+up_proj": "bf16",
+    "draft.layers.1.mlp.down.down_proj": "bf16",
+    "draft.layers.2.self_attn.qkv.q_proj+k_proj+v_proj": "bf16",
+    "draft.layers.2.self_attn.kv_ctx.k_proj+v_proj": "bf16",
+    "draft.layers.2.self_attn.o_proj.o_proj": "bf16",
+    "draft.layers.2.mlp.gate_up.gate_proj+up_proj": "bf16",
+    "draft.layers.2.mlp.down.down_proj": "bf16",
+    "draft.layers.3.self_attn.qkv.q_proj+k_proj+v_proj": "bf16",
+    "draft.layers.3.self_attn.kv_ctx.k_proj+v_proj": "bf16",
+    "draft.layers.3.self_attn.o_proj.o_proj": "bf16",
+    "draft.layers.3.mlp.gate_up.gate_proj+up_proj": "bf16",
+    "draft.layers.3.mlp.down.down_proj": "bf16",
+    "draft.layers.4.self_attn.qkv.q_proj+k_proj+v_proj": "bf16",
+    "draft.layers.4.self_attn.kv_ctx.k_proj+v_proj": "bf16",
+    "draft.layers.4.self_attn.o_proj.o_proj": "bf16",
+    "draft.layers.4.mlp.gate_up.gate_proj+up_proj": "bf16",
+    "draft.layers.4.mlp.down.down_proj": "bf16",
+    "draft.markov_w1.weight": "bf16",
+    "draft.markov_w2.w2": "bf16"
+  },
+  "draft_pack": "/tmp/monolith-m5max/dspark/pack-bf16-33k",
+  "semantics": "seven drafts plus anchor verified; acceptance/commit and next drafting included; nonterminal replay",
+  "prompt_sha256": "c913ab9975beb8c592556d4e9a63305edfdbb1b89ead4fc24126ad492a753628",
+  "contexts": [
+    {
+      "context": 16384,
+      "prefill_ms": 63560.48362492584,
+      "initial_drafts": [
+        1238,
+        7948,
+        446,
+        321,
+        6473,
+        1141,
+        16384
+      ],
+      "samples": [
+        {
+          "gpu_ms": 59.777833317639306,
+          "wall_ms": 60.12754166126251,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        },
+        {
+          "gpu_ms": 60.188333358382806,
+          "wall_ms": 60.58541667461395,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        },
+        {
+          "gpu_ms": 60.54987499373965,
+          "wall_ms": 61.61016669869423,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        },
+        {
+          "gpu_ms": 60.5290416860953,
+          "wall_ms": 61.61158335208893,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        },
+        {
+          "gpu_ms": 60.53120832075365,
+          "wall_ms": 60.97133332490921,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        },
+        {
+          "gpu_ms": 59.754749992862344,
+          "wall_ms": 60.976000010967255,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        },
+        {
+          "gpu_ms": 60.01841666875407,
+          "wall_ms": 60.37924998998642,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        },
+        {
+          "gpu_ms": 60.27033334248699,
+          "wall_ms": 61.41754165291786,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        },
+        {
+          "gpu_ms": 59.930000017629936,
+          "wall_ms": 60.37974998354912,
+          "tokens": [
+            1238,
+            7948,
+            446,
+            321,
+            6473,
+            1141,
+            16384,
+            37972
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            13,
+            561,
+            35935,
+            7189,
+            1396,
+            1067,
+            321
+          ]
+        }
+      ],
+      "generated_source_sha256": "057dbab011a46d7c2a254ca38a79896f3ad483588ff1919c4be4507f8bcac526",
+      "dispatches": 333,
+      "gpu_ms_min": 59.754749992862344,
+      "gpu_ms_median": 60.188333358382806,
+      "gpu_ms_max": 60.54987499373965,
+      "wall_ms_median": 60.97133332490921,
+      "stage_medians": {
+        "verification": 46.5085833275225,
+        "accept_commit": 1.3086249819025397,
+        "draft": 12.521541677415371
+      },
+      "stages": [
+        {
+          "verification": 46.2498749839142,
+          "accept_commit": 1.3169999874662608,
+          "draft": 12.024875002680346
+        },
+        {
+          "verification": 46.071624994510785,
+          "accept_commit": 1.3086249819025397,
+          "draft": 12.51262502046302
+        },
+        {
+          "verification": 46.595499996328726,
+          "accept_commit": 1.3531250006053597,
+          "draft": 12.701416650088504
+        },
+        {
+          "verification": 46.51179167558439,
+          "accept_commit": 1.256999996257946,
+          "draft": 12.335708335740492
+        },
+        {
+          "verification": 47.23224998451769,
+          "accept_commit": 1.3473750150296837,
+          "draft": 12.755791656672955
+        },
+        {
+          "verification": 46.18924998794682,
+          "accept_commit": 1.28599998424761,
+          "draft": 12.521541677415371
+        },
+        {
+          "verification": 46.63137497846037,
+          "accept_commit": 1.2496666458901018,
+          "draft": 12.587750010425225
+        },
+        {
+          "verification": 46.5085833275225,
+          "accept_commit": 1.2983333435840905,
+          "draft": 12.685749999945983
+        },
+        {
+          "verification": 46.5051666542422,
+          "accept_commit": 1.3267916801851243,
+          "draft": 12.27874998585321
+        }
+      ],
+      "split_bit_exact": true,
+      "replay_bit_exact": true,
+      "recipe_comparison": {
+        "baseline_config": {
+          "bf16_min_t": 2,
+          "draft_attention": "mma",
+          "draft": {
+            "mixer": {
+              "workers": 240,
+              "sgs": 4,
+              "tn": 32,
+              "compact": true,
+              "split": true,
+              "barrier": "simd",
+              "task_barrier": false,
+              "schedule": "queue",
+              "task_grain": "tile",
+              "task_seed": true,
+              "task_seed_bound": true,
+              "attention_chunk_tiles": 16,
+              "attention_qm": 16,
+              "attention_cached_prefix": true,
+              "attention_compact_partials": true,
+              "attention_key_tile": 32,
+              "attention_alias_scratch": true,
+              "attention_prepare": false,
+              "attention_task_order": "chunk",
+              "attention_task_tiles": 1,
+              "task_batch": 1,
+              "gemm_overrides": {
+                "0": {
+                  "tn": 16,
+                  "ksplit": 4,
+                  "q_outer": 1,
+                  "ragged_teams": true
+                }
+              }
+            },
+            "mlp": {
+              "workers": 40,
+              "sgs": 8,
+              "tn": 16,
+              "compact": true,
+              "ksplit": 1,
+              "mode": "native",
+              "staged_tk": 64,
+              "ragged_teams": true
+            },
+            "feature": {
+              "workers": 40,
+              "sgs": 8,
+              "tn": 16,
+              "compact": true,
+              "ksplit": 1,
+              "mode": "native",
+              "staged_tk": 64,
+              "ragged_teams": true
+            },
+            "context_kv": {
+              "workers": 80,
+              "sgs": 8,
+              "tn": 16,
+              "compact": true,
+              "ksplit": 4,
+              "mode": "native",
+              "staged_tk": 64,
+              "ragged_teams": true
+            },
+            "lm_head": {
+              "workers": 160,
+              "sgs": 4,
+              "tn": 32,
+              "compact": true,
+              "ksplit": 4,
+              "mode": "native",
+              "staged_tk": 64,
+              "ragged_teams": true,
+              "nvfp4_layout": "tile",
+              "nvfp4_tile_block": 16,
+              "q_outer": 0
+            },
+            "feature_scalar": {
+              "workers": 80,
+              "sgs": 16,
+              "rg": 2,
+              "rsplit": 1,
+              "x_hoist": false,
+              "x_preconvert": true
+            },
+            "context_kv_scalar": {
+              "workers": 320,
+              "sgs": 16,
+              "rg": 2,
+              "rsplit": 8,
+              "x_hoist": false,
+              "x_preconvert": true
+            },
+            "markov": {
+              "workers": 320,
+              "sgs": 16,
+              "rg": 4,
+              "rsplit": 4,
+              "x_preconvert": true,
+              "x_hoist": true
+            }
+          },
+          "target": {
+            "gdn": {
+              "shape": [
+                5120,
+                16,
+                48,
+                128,
+                128,
+                4
+              ],
+              "workers": 80,
+              "sgs": 8,
+              "tn": 32,
+              "split": true,
+              "compact": true,
+              "gdn_sl": 8,
+              "barrier": "simd",
+              "task_barrier": false,
+              "scalar_sgs": 8,
+              "fp8_layout": "tile",
+              "q_outer": 0,
+              "fp8_decode": "subtract",
+              "fp8_tile_block": 8,
+              "restrict_weights": false,
+              "gemm_overrides": {
+                "3": {
+                  "tn": 32,
+                  "ksplit": 4,
+                  "groups": 120,
+                  "ragged_teams": true
+                },
+                "0": {
+                  "tn": 32,
+                  "ksplit": 2,
+                  "groups": 240,
+                  "ragged_teams": true
+                },
+                "1": {
+                  "tn": 16,
+                  "ksplit": 8,
+                  "groups": 240,
+                  "ragged_teams": true
+                },
+                "2": {
+                  "tn": 32,
+                  "ksplit": 8,
+                  "groups": 120,
+                  "ragged_teams": true
+                }
+              },
+              "perm_sgs": 64,
+              "direct_norm": true,
+              "dual_permute": true
+            },
+            "attention": {
+              "attention_cached_prefix": true,
+              "attention_chunk_tiles": 12,
+              "attention_groups": 160,
+              "attention_prepare": false,
+              "attention_qm": 16,
+              "attention_task_tiles": 1,
+              "barrier": "simd",
+              "compact": true,
+              "fp8_decode": "half",
+              "fp8_layout": "tile",
+              "fp8_tile_block": 8,
+              "gemm_overrides": {
+                "0": {
+                  "ksplit": 8,
+                  "q_outer": 1,
+                  "tn": 16
+                },
+                "2": {
+                  "ksplit": 4,
+                  "q_outer": 1,
+                  "tn": 32
+                }
+              },
+              "merge_sgs": 8,
+              "merge_unroll": 2,
+              "q_outer": 0,
+              "scalar_sgs": 2,
+              "schedule": "queue",
+              "sgs": 8,
+              "split": true,
+              "task_barrier": false,
+              "task_batch": 1,
+              "task_grain": "tile",
+              "task_seed": true,
+              "tn": 32,
+              "workers": 120
+            },
+            "mlp": {
+              "cache_external_inputs": false,
+              "compact": true,
+              "gemm_overrides": {
+                "1": {
+                  "groups": 640
+                }
+              },
+              "ksplit": 4,
+              "mode": "native",
+              "nvfp4_layout": "tile",
+              "nvfp4_tile_block": 32,
+              "post_norm_loads": 16,
+              "post_norm_once": true,
+              "post_norm_prefold": false,
+              "sgs": 4,
+              "staged_tk": 64,
+              "tn": 32,
+              "workers": 160
+            }
+          }
+        },
+        "pairs": [
+          {
+            "baseline": {
+              "gpu_ms": 60.187791677890345,
+              "wall_ms": 60.65270835161209,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "gpu_ms": 59.97637499240227,
+              "wall_ms": 60.47754165530205,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "candidate": {
+              "gpu_ms": 60.26175001170486,
+              "wall_ms": 61.52362501621246,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "baseline": {
+              "gpu_ms": 60.66866667242721,
+              "wall_ms": 61.81745836138725,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "baseline": {
+              "gpu_ms": 60.696000000461936,
+              "wall_ms": 61.75949999690056,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "gpu_ms": 59.956916666124016,
+              "wall_ms": 60.46141666173935,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "candidate": {
+              "gpu_ms": 60.00975001370534,
+              "wall_ms": 61.05445834994316,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "baseline": {
+              "gpu_ms": 59.88095834618434,
+              "wall_ms": 60.268124997615814,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "baseline": {
+              "gpu_ms": 60.12325000483543,
+              "wall_ms": 60.513125002384186,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "gpu_ms": 60.08349999319762,
+              "wall_ms": 60.48845833539963,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "candidate": {
+              "gpu_ms": 60.18150001182221,
+              "wall_ms": 61.30258330702782,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "baseline": {
+              "gpu_ms": 60.242374980589375,
+              "wall_ms": 61.50829163193703,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "baseline": {
+              "gpu_ms": 60.38249999983236,
+              "wall_ms": 61.542291700839996,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "gpu_ms": 59.1876249818597,
+              "wall_ms": 59.66429165005684,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "candidate": {
+              "gpu_ms": 60.31537498347461,
+              "wall_ms": 61.552416652441025,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "baseline": {
+              "gpu_ms": 60.2565000008326,
+              "wall_ms": 61.346000015735626,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "baseline": {
+              "gpu_ms": 60.09237500256859,
+              "wall_ms": 60.48808333277702,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "gpu_ms": 59.616000013193116,
+              "wall_ms": 60.00308334827423,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          }
+        ],
+        "stages": [
+          {
+            "baseline": {
+              "verification": 46.20854166569188,
+              "accept_commit": 1.2938749860040843,
+              "draft": 12.477750016842037,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "verification": 46.06066667474806,
+              "accept_commit": 1.2978749873582274,
+              "draft": 12.353416648693383,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "candidate": {
+              "verification": 46.479249984258786,
+              "accept_commit": 1.2904583127237856,
+              "draft": 12.457125005312264,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "baseline": {
+              "verification": 46.381874999497086,
+              "accept_commit": 1.4259583258535713,
+              "draft": 12.611875019501895,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "baseline": {
+              "verification": 46.805333346128464,
+              "accept_commit": 1.3006666558794677,
+              "draft": 12.492541660321876,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "verification": 47.071083332411945,
+              "accept_commit": 1.2822500139009207,
+              "draft": 12.508624990005046,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "candidate": {
+              "verification": 46.88799998257309,
+              "accept_commit": 1.3028333487454802,
+              "draft": 12.595125008374453,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "baseline": {
+              "verification": 46.35074999532662,
+              "accept_commit": 1.299499999731779,
+              "draft": 12.508625019108877,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "baseline": {
+              "verification": 46.72849999042228,
+              "accept_commit": 1.2998750025872141,
+              "draft": 12.492500012740493,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "verification": 46.88612499739975,
+              "accept_commit": 1.2521249882411212,
+              "draft": 12.56174998707138,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "candidate": {
+              "verification": 46.02608332061209,
+              "accept_commit": 1.291874999878928,
+              "draft": 12.647875002585351,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "baseline": {
+              "verification": 47.36120832967572,
+              "accept_commit": 1.3309166533872485,
+              "draft": 12.738416669890285,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "baseline": {
+              "verification": 46.919124986743554,
+              "accept_commit": 1.3448749959934503,
+              "draft": 12.657916639000177,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "verification": 46.611458325060084,
+              "accept_commit": 1.326875004451722,
+              "draft": 12.74812498013489,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "candidate": {
+              "verification": 46.61712501547299,
+              "accept_commit": 1.3287916663102806,
+              "draft": 12.21912499750033,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "baseline": {
+              "verification": 46.538124996004626,
+              "accept_commit": 1.321875024586916,
+              "draft": 12.526000005891547,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          },
+          {
+            "baseline": {
+              "verification": 46.525791665771976,
+              "accept_commit": 1.4566666795872152,
+              "draft": 12.444374995538965,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            },
+            "candidate": {
+              "verification": 46.45699998945929,
+              "accept_commit": 1.308124978095293,
+              "draft": 12.492249981733039,
+              "next_drafts": [
+                13,
+                561,
+                35935,
+                7189,
+                1396,
+                1067,
+                321
+              ],
+              "accepted": 7
+            }
+          }
+        ],
+        "baseline_source_sha256": "b8583909635139055a16e570a8ae70ba1272c804e748fa66d8842b9dae14f157",
+        "baseline_dispatches": 313,
+        "next_drafts_equal": true,
+        "full_medians": {
+          "baseline": 60.242374980589375,
+          "candidate": 60.00975001370534
+        },
+        "draft_medians": {
+          "baseline": 12.508625019108877,
+          "candidate": 12.508624990005046
+        }
+      }
+    }
+  ]
+}

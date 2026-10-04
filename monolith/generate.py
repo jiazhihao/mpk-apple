@@ -73,7 +73,8 @@ class Session:
                  min_p: float = 0.0, seed: int = 0, autotune: bool = True, drafter: Any = None, drafter_pack: Optional[str] = None,
                  verify: str = "cost", verify_threshold: Optional[float] = None, verify_length: Optional[int] = None,
                  barriers: str = "minimal", attention: Optional[str] = None, fast_math: bool = False, accelerator: Optional[str] = None,
-                 prefill_chunk_size: int = 128, commute_norm: bool = True) -> None:
+                 prefill_chunk_size: int = 128, commute_norm: bool = True, gdn_mixer_fusion: bool = True,
+                 prefill_attention: Optional[str] = None, decoder_kernel_config: Optional[Dict[str, Any]] = None) -> None:
         """``drafter`` (a ``Drafter`` built with the model's head) and its pack turn the session speculative: one
         small dynamic-T decode program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
         from .bench import profile_for_device
@@ -93,6 +94,7 @@ class Session:
         if drafter is not None and drafter_pack is None:
             raise ValueError("Session: a drafter needs its pack (drafter_pack)")
         if drafter is not None:
+            drafter.bind_target(model)
             bind_pack_formats(drafter, self.drafter_pack)
         if layout is None and drafter is not None:
             layout = StepStateLayout(t_max=max(8, drafter.gamma + 1), gamma_max=max(7, drafter.gamma))
@@ -101,12 +103,17 @@ class Session:
             raise ValueError("prefill_chunk_size must be a positive integer")
         self.prefill_chunk_size = prefill_chunk_size
         self.commute_norm = commute_norm
+        self.gdn_mixer_fusion = gdn_mixer_fusion
         self.decode_t_max = decode_layout.t_max
         # Both programs share one ABI and persistent state; their graph row bounds
         # are independent. A large pending-token array does not enlarge decode ops.
         self.layout = StepStateLayout(max(prefill_chunk_size, decode_layout.t_max), decode_layout.gamma_max)
         self.verify, self.verify_threshold, self.verify_length = verify, verify_threshold, verify_length
         self.barriers, self.attention, self.fast_math, self.accelerator = barriers, attention, fast_math, accelerator
+        # Prompt chunks can need much larger matrix-attention partials than the
+        # verification block. Allow a lower-memory prefill path independently.
+        self.prefill_attention = prefill_attention
+        self.decoder_kernel_config = decoder_kernel_config
         if accelerator is None and os.environ.get("MONOLITH_ACCELERATOR") in ("on", "off"):
             self.accelerator = os.environ["MONOLITH_ACCELERATOR"]                    # an A/B knob for the test tiers
         self.eos, self.ring_capacity = eos, ring_capacity
@@ -114,6 +121,7 @@ class Session:
         # temperature 0 = greedy (the argmax path); otherwise the Gumbel-max sampler with the thresholds
         model.sampler = GreedySampler(prefix="sampler.") if temperature <= 0 else StochasticSampler(temperature, top_k, top_p, min_p, seed, prefix="sampler.")
         self.engines: Dict[Any, Any] = {}
+        self._programs: Dict[Any, Any] = {}
         self._last_engine = None
         self.buffers: Optional[Dict[str, Any]] = None
         self.tuner = None
@@ -142,13 +150,10 @@ class Session:
         from .runtime import Engine
 
         if key not in self.engines:
-            prog = compile_program(self.model, self.pack, self.profile, t=bound, dynamic_t=dynamic, eos=self.eos,
-                                   ring_capacity=self.ring_capacity, layout=self.layout, tuner=None if prefill else self.tuner, drafter=self.drafter,
-                                   drafter_pack=self.drafter_pack, verify=self.verify, verify_threshold=self.verify_threshold,
-                                   verify_length=self.verify_length, barriers=self.barriers, attention=self.attention, accelerator=self.accelerator, commute_norm=self.commute_norm,
-                                   prefill=prefill)
-            if self.tuner is not None:
-                self.tuner.save(self.dev.info().name)
+            prog = self._programs.get(key)
+            if prog is None:
+                prog = self._compile(bound, dynamic=dynamic, prefill=prefill)
+                self._programs[key] = prog
             eng = Engine(prog, self.dev, buffers=self.buffers, fast_math=self.fast_math)
             if self.buffers is None:
                 self.buffers = dict(eng.buffers)
@@ -156,6 +161,25 @@ class Session:
                 self.buffers.update(eng.buffers)
             self.engines[key] = eng
         return self.engines[key]
+
+    def _compile(self, bound, *, dynamic, prefill):
+        prog = compile_program(self.model, self.pack, self.profile, t=bound, dynamic_t=dynamic, eos=self.eos,
+                               ring_capacity=self.ring_capacity, layout=self.layout, tuner=None if prefill else self.tuner, drafter=self.drafter,
+                               drafter_pack=self.drafter_pack, verify=self.verify, verify_threshold=self.verify_threshold,
+                               verify_length=self.verify_length, barriers=self.barriers,
+                               attention=self.prefill_attention if prefill and self.prefill_attention is not None else self.attention,
+                               accelerator=self.accelerator, commute_norm=self.commute_norm,
+                               prefill=prefill, gdn_mixer_fusion=self.gdn_mixer_fusion)
+        if self.tuner is not None:
+            self.tuner.save(self.dev.info().name)
+        if self.decoder_kernel_config is not None and not prefill:
+            if not dynamic or bound != 8:
+                raise ValueError('explicit decoder recipes require a dynamic eight-row verification program')
+            from .compiler.decoder_fusion import optimize
+            from .compiler.barriers import place_barriers
+            prog = optimize(prog, self.decoder_kernel_config)[1]
+            place_barriers(prog, self.barriers)
+        return prog
 
     def reset(self) -> None:
         """Zero the states, StepState and ring for a new sequence (the weights stay mapped)."""
@@ -168,6 +192,13 @@ class Session:
         p = len(prompt_ids)
         if p < 1:
             raise ValueError("the prompt must have at least one token")
+        if self.decoder_kernel_config is not None:
+            # Derived matrix layouts and the original prefill pack can each
+            # fit while their union cannot. Retain CPU programs across requests,
+            # but release decoder allocations before loading the prefill pack.
+            self.engines.clear()
+            self.buffers = None
+            self._last_engine = None
         self.reset()
         t_max = self.prefill_chunk_size
         chunks = [list(prompt_ids[i: i + t_max]) for i in range(0, p, t_max)]
@@ -194,6 +225,13 @@ class Session:
         steps = 0
         n_pre = len(tokens)
         if max_new_tokens > 1 and not r1.done:
+            if self.decoder_kernel_config is not None:
+                self.buffers = {n: b for n, b in pre.buffers.items()
+                                if pre.program.buffers[n].role in ('state', 'step_state', 'ring')
+                                or n in ('accept_log', 'conf_log')}
+                self.engines.clear()
+                self._last_engine = None
+                del pre
             if self.drafter is None:
                 dec = self.engine(1)
                 self._last_engine = dec
@@ -203,18 +241,13 @@ class Session:
             else:
                 dec = self.engine(0)
                 self._last_engine = dec
-                done = False                               # every step commits ≥ 1 token: the remaining count bounds the steps
-                while len(tokens) < max_new_tokens and not done:
-                    need = max_new_tokens - len(tokens)
-                    # the program sets `done` itself when the ring reaches stop_at (accept_scan), so the steps still
-                    # queued behind it return at their first instruction — but each such step still walks the ICB
-                    # (~0.8 ms for the 8B's 387 dispatches), so a round's command buffers hold one step with two in
-                    # flight: measured 1 % faster per token than 8 × 3 on the 8B (decode-kernels.md §9), the host
-                    # busy for 4 ms of a 128-token generation
-                    r2 = dec.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
-                    tokens += r2.tokens
-                    dec_ms += r2.gpu_ms; dec_wall += r2.wall_ms; host += r2.host_busy_ms; steps += r2.steps
-                    done = r2.done or r2.steps == 0
+                need = max_new_tokens - len(tokens)
+                # Each productive round commits at least one token, so need bounds the round count.
+                # The native runner pumps the entire decode; accept_scan stops it at stop_at or EOS.
+                # Keep one round per command buffer and two in flight to limit queued no-op work after done.
+                r2 = dec.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
+                tokens += r2.tokens
+                dec_ms, dec_wall, host, steps = r2.gpu_ms, r2.wall_ms, r2.host_busy_ms, r2.steps
         if len(tokens) < max_new_tokens:
             err = int(self._last_engine.state()["error"])        # 1: the ring overflowed; 2: the context filled (the pump's over-run
             if err:                                               # past a request that fits sets 2 harmlessly, so only a short result is one)
@@ -331,6 +364,8 @@ def main(argv=None) -> int:
     ap.add_argument("--drafter", default=None, help="a drafter checkpoint directory: speculative decoding (design §5.8)")
     ap.add_argument("--drafter-pack", default=None, help="the drafter's pack (tools/pack_weights.py --drafter-kind …)")
     ap.add_argument("--drafter-kind", default="dspark", help="the Drafter plugin the drafter checkpoint belongs to")
+    ap.add_argument("--drafter-kernel-config", type=Path, help="explicit drafter task-compiler recipe JSON")
+    ap.add_argument("--decoder-kernel-config", type=Path, help="explicit eight-row target decoder recipe JSON")
     ap.add_argument("--draft-gamma", type=int, default=None, help="an LM drafter's drafts per round (--drafter-kind lm; default 5)")
     ap.add_argument("--verify", default="cost", choices=["cost", "threshold", "fixed"], help="the verify-length rule (cost needs the chip's cost table)")
     ap.add_argument("--verify-threshold", type=float, default=None, help="the confident-prefix threshold (<= 0: verify the whole block)")
@@ -339,9 +374,13 @@ def main(argv=None) -> int:
     ap.add_argument("--barriers", default="minimal", choices=["minimal", "all"], help="ICB barriers: only where a dependency needs one, or on every op")
     ap.add_argument("--attention", default=None, choices=["v1", "v2", "v3", "mma", "auto"],
                     help="the attention kernel (default: the chip profile's; auto = M5 matrix attention for verification blocks, v3 for short blocks)")
+    ap.add_argument("--prefill-attention", default=None, choices=["v1", "v2", "v3", "mma", "auto"],
+                    help="independent prefill attention selection (v3 avoids large matrix partial workspaces)")
     ap.add_argument("--accelerator", default=None, choices=["on", "off"], help="T > 1 GEMVs on the tensor-ops tile (default: the chip profile's)")
     ap.add_argument("--commute-norm", action=argparse.BooleanOptionalAction, default=True,
                     help="fuse input normalization across eligible projections (default: enabled; changes BF16 rounding)")
+    ap.add_argument("--gdn-mixer-fusion", action=argparse.BooleanOptionalAction, default=True,
+                    help="use the chip profile's fixed-eight-row GDN mixer fusion when supported")
     ap.add_argument("--math", default="safe", choices=["safe", "fast"], help="Metal math mode for the kernels")
     a = ap.parse_args(argv)
     from tokenizers import Tokenizer
@@ -349,12 +388,17 @@ def main(argv=None) -> int:
     tok = Tokenizer.from_file(str(Path(a.model) / "tokenizer.json"))
     ids = tok.encode(a.prompt, add_special_tokens=False).ids
     t0 = time.time()
+    draft_options = {"gamma": a.draft_gamma} if a.draft_gamma is not None else {}
+    if a.drafter_kernel_config:
+        draft_options["kernel_config"] = json.loads(a.drafter_kernel_config.read_text())
     sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1 if a.no_eos else None,
                         temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed, autotune=not a.no_autotune,
                         drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind, verify=a.verify,
                         verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts, barriers=a.barriers,
-                        drafter_options={"gamma": a.draft_gamma} if a.draft_gamma is not None else None,
-                        prefill_chunk_size=a.prefill_chunk_size, attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator, commute_norm=a.commute_norm)
+                        drafter_options=draft_options,
+                        prefill_chunk_size=a.prefill_chunk_size, attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator, commute_norm=a.commute_norm,
+                        gdn_mixer_fusion=a.gdn_mixer_fusion, prefill_attention=a.prefill_attention,
+                        decoder_kernel_config=json.loads(a.decoder_kernel_config.read_text()) if a.decoder_kernel_config else None)
     gen = sess.generate(ids, a.max_new_tokens)
     wall = time.time() - t0
     print(tok.decode(gen.tokens))

@@ -1,0 +1,89 @@
+START compile-fp8_e4m3
+END compile-fp8_e4m3 0
+START fp8_e4m3-mlp
+END fp8_e4m3-mlp 0
+START fp8_e4m3-feature
+END fp8_e4m3-feature 0
+START fp8_e4m3-context_kv
+END fp8_e4m3-context_kv 0
+START fp8_e4m3-markov
+END fp8_e4m3-markov 0
+START shader-fp8_e4m3
+END shader-fp8_e4m3 0
+START shader-fp8_e4m3
+END shader-fp8_e4m3 0
+START shader-fp8_e4m3
+END shader-fp8_e4m3 0
+START shader-fp8_e4m3
+END shader-fp8_e4m3 0
+START full-fp8_e4m3-128
+END full-fp8_e4m3-128 0
+START full-fp8_e4m3-32768
+END full-fp8_e4m3-32768 0
+START compile-int8
+END compile-int8 0
+START int8-mlp
+END int8-mlp 0
+START int8-feature
+END int8-feature 0
+START int8-context_kv
+END int8-context_kv 0
+START int8-markov
+END int8-markov 0
+START shader-int8
+END shader-int8 0
+START shader-int8
+END shader-int8 0
+START shader-int8
+END shader-int8 0
+START shader-int8
+END shader-int8 0
+START full-int8-128
+END full-int8-128 0
+START full-int8-32768
+END full-int8-32768 0
+START compile-int4_affine
+END compile-int4_affine 0
+START int4_affine-mlp
+END int4_affine-mlp 0
+START int4_affine-feature
+END int4_affine-feature 0
+START int4_affine-context_kv
+END int4_affine-context_kv 0
+START int4_affine-markov
+END int4_affine-markov 0
+START shader-int4_affine
+END shader-int4_affine 0
+START shader-int4_affine
+END shader-int4_affine 0
+START shader-int4_affine
+END shader-int4_affine 0
+START shader-int4_affine
+END shader-int4_affine 0
+START full-int4_affine-128
+END full-int4_affine-128 0
+START full-int4_affine-32768
+END full-int4_affine-32768 0
+START compile-nvfp4
+END compile-nvfp4 0
+START nvfp4-mlp
+END nvfp4-mlp 0
+START nvfp4-feature
+END nvfp4-feature 0
+START nvfp4-context_kv
+END nvfp4-context_kv 0
+START nvfp4-markov
+END nvfp4-markov 0
+START shader-nvfp4
+END shader-nvfp4 0
+START shader-nvfp4
+END shader-nvfp4 0
+START shader-nvfp4
+END shader-nvfp4 0
+START shader-nvfp4
+END shader-nvfp4 0
+START full-nvfp4-128
+END full-nvfp4-128 0
+START full-nvfp4-32768
+END full-nvfp4-32768 0
+DONE precision experiments

@@ -1,0 +1,20 @@
+{
+  "gdn": {
+    "workers": 80,
+    "sgs": 16,
+    "tn": 16,
+    "split": true
+  },
+  "mlp": {
+    "workers": 40,
+    "sgs": 16,
+    "tn": 32,
+    "split": true
+  },
+  "attention": {
+    "workers": 80,
+    "sgs": 8,
+    "tn": 16,
+    "split": true
+  }
+}

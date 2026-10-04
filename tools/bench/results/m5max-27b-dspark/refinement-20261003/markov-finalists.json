@@ -1,0 +1,102 @@
+[
+  {
+    "markov": {
+      "workers": 320,
+      "sgs": 16,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": true
+    }
+  },
+  {
+    "markov": {
+      "workers": 160,
+      "sgs": 16,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": false
+    }
+  },
+  {
+    "markov": {
+      "workers": 320,
+      "sgs": 16,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": false
+    }
+  },
+  {
+    "markov": {
+      "workers": 160,
+      "sgs": 16,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": true
+    }
+  },
+  {
+    "markov": {
+      "workers": 320,
+      "sgs": 8,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": true
+    }
+  },
+  {
+    "markov": {
+      "workers": 320,
+      "sgs": 8,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": false
+    }
+  },
+  {
+    "markov": {
+      "workers": 640,
+      "sgs": 4,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": true
+    }
+  },
+  {
+    "markov": {
+      "workers": 640,
+      "sgs": 16,
+      "rg": 2,
+      "rsplit": 1,
+      "x_preconvert": true,
+      "x_hoist": false
+    }
+  },
+  {
+    "markov": {
+      "workers": 640,
+      "sgs": 16,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": false
+    }
+  },
+  {
+    "markov": {
+      "workers": 80,
+      "sgs": 16,
+      "rg": 4,
+      "rsplit": 4,
+      "x_preconvert": true,
+      "x_hoist": false
+    }
+  }
+]

@@ -88,7 +88,7 @@ def program(dev, module, pack):
         ps(g)
     info = dev.info()
     return emit_program(g, pack=pack, profile=profile_for_device(info.gpu_cores, info.apple_family),
-                        t=8, tail=None, commute_norm=True)
+                        t=8, tail=None, commute_norm=True, gdn_mixer_fusion=False)
 
 
 def initialize(engine, module, seed=9, step=0):
@@ -123,6 +123,8 @@ def main():
     ap.add_argument('--sgs', type=int, default=16)
     ap.add_argument('--operand-mode', choices=('coop', 'staged'), default='coop')
     ap.add_argument('--workers', type=int)
+    ap.add_argument('--tn', type=int, choices=(16, 32), default=16)
+    ap.add_argument('--split', action='store_true', help='split each projection across the worker SIMD groups')
     ap.add_argument('--reps', type=int, default=40)
     ap.add_argument('--steps', type=int, default=8)
     ap.add_argument('--hidden', type=int, default=5120)
@@ -131,11 +133,11 @@ def main():
     a = ap.parse_args()
     dev = nt.Device()
     workers = a.workers or dev.info().gpu_cores
-    if not 1 <= workers <= dev.info().gpu_cores or min(a.steps, a.reps) < 1:
-        ap.error('workers must be within the core count; steps/reps must be positive')
+    if not 1 <= workers <= 2*dev.info().gpu_cores or min(a.steps, a.reps) < 1:
+        ap.error('workers must be within twice the core count; steps/reps must be positive')
     module, pack = fixture(a.fixture, a.hidden, a.hk, a.hv)
     p = program(dev, module, pack)
-    control = normalize(p, a.sgs, mode=a.operand_mode, groups=workers)
+    control = normalize(p, a.sgs, mode=a.operand_mode, groups=workers, tn=a.tn, split=a.split)
     fused = merge(control, workers, a.sgs)
     # Share only immutable weights; outputs and state are independent.
     base = Engine(p, dev)
@@ -167,7 +169,7 @@ def main():
         rows.append(row)
         print({k: v for k, v in row.items() if k != 'samples_us'}, flush=True)
     result = dict(chip=dev.info().name, cores=dev.info().gpu_cores, n=7, rows=8, hidden=a.hidden,
-                  hk=a.hk, hv=a.hv, workers=workers, sgs=a.sgs, operand_mode=a.operand_mode, fixture='synthetic FP8 projections/BF16 scalar gates',
+                  hk=a.hk, hv=a.hv, workers=workers, sgs=a.sgs, tn=a.tn, split=a.split, operand_mode=a.operand_mode, fixture='synthetic FP8 projections/BF16 scalar gates',
                   steps=a.steps, reps=a.reps, cosine=cosine, relative_l2=relative_l2,
                   control_bit_exact=True, results=rows)
     a.out.write_text(json.dumps(result, indent=2) + '\n')

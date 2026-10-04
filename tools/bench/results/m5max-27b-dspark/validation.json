@@ -1,0 +1,25 @@
+{
+  "cpu_contract_cases_passed": 132,
+  "gpu_shader_validation": {
+    "draft_oracle_cases": 12,
+    "dynamic_target_gdn_cases": 4,
+    "target_attention_regressions": 14,
+    "command": "MTL_SHADER_VALIDATION=1 MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1 .venv/bin/python -m pytest tests/kernels/test_draft_program.py tests/kernels/test_gdn_default.py tests/kernels/test_attention_static.py -k 'draft_program or explicit_dynamic_decoder or attention_readonly_prefix or prepared_and_partitioned_attention' -o addopts='' -q",
+    "note": "Initial run: 26 passed and four fused-draft fixture failures. After renaming the shadowed config, all 12 draft cases passed with expanded injection coverage; 30 distinct GPU cases passed across the two runs."
+  },
+  "real_generation": {
+    "prompts": 4,
+    "tokens": 256,
+    "steps": 72,
+    "original_and_tuned_tokens_equal": true,
+    "original_and_tuned_acceptance_histories_equal": true,
+    "details": "generation-validation.json"
+  },
+  "full_round_replay": "all five contexts: split/full and repeated complete rounds have equal tokens and next drafts",
+  "fusion_ab": "11 alternating pairs each at 128 and 32768; committed tokens and next drafts equal",
+  "tuning_gate": {
+    "cosine_min": 0.9999,
+    "relative_l2_max": 0.005,
+    "control_fusion_outputs_and_caches_byte_equal": true
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "scope": "Fixed N7/T8 NVFP4 MLP on M5 Max 40 cores; no speculative decoding performance",
+  "model": "nvidia/Qwen3.8-27B-NVFP4",
+  "phases": [
+    "Original BLM geometry and scheduling screen",
+    "Lossless operand packing and decoder alternatives",
+    "Per-projection geometry, reduction splitting, task and synchronization interactions",
+    "Dense worker sweep and local refinement",
+    "Paired finalists on early/middle/late layers",
+    "All64 MLP versus original and MLX-LM, complete-layer integration",
+    "Shader validation and shared regressions"
+  ],
+  "screen": {
+    "reps": 3,
+    "steps": 8
+  },
+  "final": {
+    "reps": 9,
+    "steps": 32
+  },
+  "selection": "Carry minimum, median and worst paired-ratio leaders. Reject errors and unstable configurations. Report finite search domains and remaining algorithmic limits."
+}

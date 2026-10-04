@@ -1,0 +1,244 @@
+........FFFF..................                                           [100%]
+=================================== FAILURES ===================================
+____________ test_draft_program_matches_oracle[128-True-False-0.0] _____________
+
+tmp_path = PosixPath('/private/var/folders/gj/_dvy31d12vx9vvgqxjvnpzzh0000gn/T/pytest-of-zhihaojia/pytest-76/test_draft_program_matches_ora8')
+threshold = 0.0, yarn = False, head_dim = 128, fused = True
+
+    @pytest.mark.parametrize("threshold", [0.0, 0.5])
+    @pytest.mark.parametrize("yarn", [False, True])
+    @pytest.mark.parametrize("head_dim,fused", [(64, False), (128, False), (128, True)])
+    def test_draft_program_matches_oracle(tmp_path, threshold, yarn, head_dim, fused):
+        torch = pytest.importorskip("torch")
+        from monolith.bench import profile_for_device
+    
+        dev = nt.Device()
+        info = dev.info()
+        prof = profile_for_device(info.gpu_cores, info.apple_family)
+        if prof is None:
+            pytest.skip("no chip profile for this device")
+        if fused:
+            import copy
+            prof = copy.deepcopy(prof)
+            prof.accelerator_min_t['bf16'] = 2
+        rope = {"rope_parameters": {"rope_type": "yarn", "rope_theta": 10000000.0, "factor": 32.0,
+                                   "original_max_position_embeddings": 8192, "beta_fast": 32, "beta_slow": 1}} if yarn else {}
+        write_checkpoint(tmp_path, head_dim=head_dim, num_attention_heads=256 // head_dim,
+                         num_key_value_heads=128 // head_dim, **rope)
+        drafter, head, cfg, pair = build(tmp_path, confidence_threshold=threshold)
+        pack_model(pair, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16, lane_order=prof.lane_order))
+        pf = PackFile(tmp_path / "pack")
+        load_oracle(drafter, str(tmp_path))
+        load_oracle_weights(head, str(tmp_path))
+        gamma, ht, hid = cfg.block_size, cfg.target_hidden, cfg.hidden_size
+        g = Graph("draft")
+        taps = [g.input(f"tap.{i}", (T, ht), DType.BF16) for i in range(cfg.n_taps)]
+        anchor = g.input("anchor", (1,), DType.I32)
+        block = drafter.lower_draft(g, DraftContext(taps, anchor))
+        drafter.lower_select(g, block, prof)
+        g.check()
+        for p in DEFAULT_PASSES:
+            p(g)
+        prog = emit_program(g, pack=pf, profile=prof, dynamic_t=True, tail=None)
+        if fused:
+            from monolith.spec.dspark.optimization import optimize
+            cfg = dict(workers=8, sgs=4, tn=16, compact=True, split=True,
+                       barrier='simd', task_barrier=False, schedule='queue', task_grain='tile',
+                       task_seed=True, task_seed_bound=True)
+            prog = optimize(prog, {'mixer': cfg})[1]
+        eng = Engine(prog, dev)
+        lay = prog.layout
+        st = eng.buffers[prog.step_state]
+        rng = np.random.default_rng(5)
+        torch.manual_seed(5)
+        state = {e.name: torch.zeros(e.shape, dtype=torch.bfloat16) for e in drafter.state_entries()}
+        ctx_len = 0
+        for step, (n_new, a0) in enumerate(((3, 17), (2, 42))):
+>           tap_np = [f32_to_bf16((rng.standard_normal((lay.t_max, ht)) * 2).astype(np.float32)) for _ in range(cfg.n_taps)]
+                                                                                                                ^^^^^^^^^^
+E           AttributeError: 'dict' object has no attribute 'n_taps'
+
+tests/kernels/test_draft_program.py:86: AttributeError
+____________ test_draft_program_matches_oracle[128-True-False-0.5] _____________
+
+tmp_path = PosixPath('/private/var/folders/gj/_dvy31d12vx9vvgqxjvnpzzh0000gn/T/pytest-of-zhihaojia/pytest-76/test_draft_program_matches_ora9')
+threshold = 0.5, yarn = False, head_dim = 128, fused = True
+
+    @pytest.mark.parametrize("threshold", [0.0, 0.5])
+    @pytest.mark.parametrize("yarn", [False, True])
+    @pytest.mark.parametrize("head_dim,fused", [(64, False), (128, False), (128, True)])
+    def test_draft_program_matches_oracle(tmp_path, threshold, yarn, head_dim, fused):
+        torch = pytest.importorskip("torch")
+        from monolith.bench import profile_for_device
+    
+        dev = nt.Device()
+        info = dev.info()
+        prof = profile_for_device(info.gpu_cores, info.apple_family)
+        if prof is None:
+            pytest.skip("no chip profile for this device")
+        if fused:
+            import copy
+            prof = copy.deepcopy(prof)
+            prof.accelerator_min_t['bf16'] = 2
+        rope = {"rope_parameters": {"rope_type": "yarn", "rope_theta": 10000000.0, "factor": 32.0,
+                                   "original_max_position_embeddings": 8192, "beta_fast": 32, "beta_slow": 1}} if yarn else {}
+        write_checkpoint(tmp_path, head_dim=head_dim, num_attention_heads=256 // head_dim,
+                         num_key_value_heads=128 // head_dim, **rope)
+        drafter, head, cfg, pair = build(tmp_path, confidence_threshold=threshold)
+        pack_model(pair, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16, lane_order=prof.lane_order))
+        pf = PackFile(tmp_path / "pack")
+        load_oracle(drafter, str(tmp_path))
+        load_oracle_weights(head, str(tmp_path))
+        gamma, ht, hid = cfg.block_size, cfg.target_hidden, cfg.hidden_size
+        g = Graph("draft")
+        taps = [g.input(f"tap.{i}", (T, ht), DType.BF16) for i in range(cfg.n_taps)]
+        anchor = g.input("anchor", (1,), DType.I32)
+        block = drafter.lower_draft(g, DraftContext(taps, anchor))
+        drafter.lower_select(g, block, prof)
+        g.check()
+        for p in DEFAULT_PASSES:
+            p(g)
+        prog = emit_program(g, pack=pf, profile=prof, dynamic_t=True, tail=None)
+        if fused:
+            from monolith.spec.dspark.optimization import optimize
+            cfg = dict(workers=8, sgs=4, tn=16, compact=True, split=True,
+                       barrier='simd', task_barrier=False, schedule='queue', task_grain='tile',
+                       task_seed=True, task_seed_bound=True)
+            prog = optimize(prog, {'mixer': cfg})[1]
+        eng = Engine(prog, dev)
+        lay = prog.layout
+        st = eng.buffers[prog.step_state]
+        rng = np.random.default_rng(5)
+        torch.manual_seed(5)
+        state = {e.name: torch.zeros(e.shape, dtype=torch.bfloat16) for e in drafter.state_entries()}
+        ctx_len = 0
+        for step, (n_new, a0) in enumerate(((3, 17), (2, 42))):
+>           tap_np = [f32_to_bf16((rng.standard_normal((lay.t_max, ht)) * 2).astype(np.float32)) for _ in range(cfg.n_taps)]
+                                                                                                                ^^^^^^^^^^
+E           AttributeError: 'dict' object has no attribute 'n_taps'
+
+tests/kernels/test_draft_program.py:86: AttributeError
+_____________ test_draft_program_matches_oracle[128-True-True-0.0] _____________
+
+tmp_path = PosixPath('/private/var/folders/gj/_dvy31d12vx9vvgqxjvnpzzh0000gn/T/pytest-of-zhihaojia/pytest-76/test_draft_program_matches_ora10')
+threshold = 0.0, yarn = True, head_dim = 128, fused = True
+
+    @pytest.mark.parametrize("threshold", [0.0, 0.5])
+    @pytest.mark.parametrize("yarn", [False, True])
+    @pytest.mark.parametrize("head_dim,fused", [(64, False), (128, False), (128, True)])
+    def test_draft_program_matches_oracle(tmp_path, threshold, yarn, head_dim, fused):
+        torch = pytest.importorskip("torch")
+        from monolith.bench import profile_for_device
+    
+        dev = nt.Device()
+        info = dev.info()
+        prof = profile_for_device(info.gpu_cores, info.apple_family)
+        if prof is None:
+            pytest.skip("no chip profile for this device")
+        if fused:
+            import copy
+            prof = copy.deepcopy(prof)
+            prof.accelerator_min_t['bf16'] = 2
+        rope = {"rope_parameters": {"rope_type": "yarn", "rope_theta": 10000000.0, "factor": 32.0,
+                                   "original_max_position_embeddings": 8192, "beta_fast": 32, "beta_slow": 1}} if yarn else {}
+        write_checkpoint(tmp_path, head_dim=head_dim, num_attention_heads=256 // head_dim,
+                         num_key_value_heads=128 // head_dim, **rope)
+        drafter, head, cfg, pair = build(tmp_path, confidence_threshold=threshold)
+        pack_model(pair, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16, lane_order=prof.lane_order))
+        pf = PackFile(tmp_path / "pack")
+        load_oracle(drafter, str(tmp_path))
+        load_oracle_weights(head, str(tmp_path))
+        gamma, ht, hid = cfg.block_size, cfg.target_hidden, cfg.hidden_size
+        g = Graph("draft")
+        taps = [g.input(f"tap.{i}", (T, ht), DType.BF16) for i in range(cfg.n_taps)]
+        anchor = g.input("anchor", (1,), DType.I32)
+        block = drafter.lower_draft(g, DraftContext(taps, anchor))
+        drafter.lower_select(g, block, prof)
+        g.check()
+        for p in DEFAULT_PASSES:
+            p(g)
+        prog = emit_program(g, pack=pf, profile=prof, dynamic_t=True, tail=None)
+        if fused:
+            from monolith.spec.dspark.optimization import optimize
+            cfg = dict(workers=8, sgs=4, tn=16, compact=True, split=True,
+                       barrier='simd', task_barrier=False, schedule='queue', task_grain='tile',
+                       task_seed=True, task_seed_bound=True)
+            prog = optimize(prog, {'mixer': cfg})[1]
+        eng = Engine(prog, dev)
+        lay = prog.layout
+        st = eng.buffers[prog.step_state]
+        rng = np.random.default_rng(5)
+        torch.manual_seed(5)
+        state = {e.name: torch.zeros(e.shape, dtype=torch.bfloat16) for e in drafter.state_entries()}
+        ctx_len = 0
+        for step, (n_new, a0) in enumerate(((3, 17), (2, 42))):
+>           tap_np = [f32_to_bf16((rng.standard_normal((lay.t_max, ht)) * 2).astype(np.float32)) for _ in range(cfg.n_taps)]
+                                                                                                                ^^^^^^^^^^
+E           AttributeError: 'dict' object has no attribute 'n_taps'
+
+tests/kernels/test_draft_program.py:86: AttributeError
+_____________ test_draft_program_matches_oracle[128-True-True-0.5] _____________
+
+tmp_path = PosixPath('/private/var/folders/gj/_dvy31d12vx9vvgqxjvnpzzh0000gn/T/pytest-of-zhihaojia/pytest-76/test_draft_program_matches_ora11')
+threshold = 0.5, yarn = True, head_dim = 128, fused = True
+
+    @pytest.mark.parametrize("threshold", [0.0, 0.5])
+    @pytest.mark.parametrize("yarn", [False, True])
+    @pytest.mark.parametrize("head_dim,fused", [(64, False), (128, False), (128, True)])
+    def test_draft_program_matches_oracle(tmp_path, threshold, yarn, head_dim, fused):
+        torch = pytest.importorskip("torch")
+        from monolith.bench import profile_for_device
+    
+        dev = nt.Device()
+        info = dev.info()
+        prof = profile_for_device(info.gpu_cores, info.apple_family)
+        if prof is None:
+            pytest.skip("no chip profile for this device")
+        if fused:
+            import copy
+            prof = copy.deepcopy(prof)
+            prof.accelerator_min_t['bf16'] = 2
+        rope = {"rope_parameters": {"rope_type": "yarn", "rope_theta": 10000000.0, "factor": 32.0,
+                                   "original_max_position_embeddings": 8192, "beta_fast": 32, "beta_slow": 1}} if yarn else {}
+        write_checkpoint(tmp_path, head_dim=head_dim, num_attention_heads=256 // head_dim,
+                         num_key_value_heads=128 // head_dim, **rope)
+        drafter, head, cfg, pair = build(tmp_path, confidence_threshold=threshold)
+        pack_model(pair, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16, lane_order=prof.lane_order))
+        pf = PackFile(tmp_path / "pack")
+        load_oracle(drafter, str(tmp_path))
+        load_oracle_weights(head, str(tmp_path))
+        gamma, ht, hid = cfg.block_size, cfg.target_hidden, cfg.hidden_size
+        g = Graph("draft")
+        taps = [g.input(f"tap.{i}", (T, ht), DType.BF16) for i in range(cfg.n_taps)]
+        anchor = g.input("anchor", (1,), DType.I32)
+        block = drafter.lower_draft(g, DraftContext(taps, anchor))
+        drafter.lower_select(g, block, prof)
+        g.check()
+        for p in DEFAULT_PASSES:
+            p(g)
+        prog = emit_program(g, pack=pf, profile=prof, dynamic_t=True, tail=None)
+        if fused:
+            from monolith.spec.dspark.optimization import optimize
+            cfg = dict(workers=8, sgs=4, tn=16, compact=True, split=True,
+                       barrier='simd', task_barrier=False, schedule='queue', task_grain='tile',
+                       task_seed=True, task_seed_bound=True)
+            prog = optimize(prog, {'mixer': cfg})[1]
+        eng = Engine(prog, dev)
+        lay = prog.layout
+        st = eng.buffers[prog.step_state]
+        rng = np.random.default_rng(5)
+        torch.manual_seed(5)
+        state = {e.name: torch.zeros(e.shape, dtype=torch.bfloat16) for e in drafter.state_entries()}
+        ctx_len = 0
+        for step, (n_new, a0) in enumerate(((3, 17), (2, 42))):
+>           tap_np = [f32_to_bf16((rng.standard_normal((lay.t_max, ht)) * 2).astype(np.float32)) for _ in range(cfg.n_taps)]
+                                                                                                                ^^^^^^^^^^
+E           AttributeError: 'dict' object has no attribute 'n_taps'
+
+tests/kernels/test_draft_program.py:86: AttributeError
+=========================== short test summary info ============================
+FAILED tests/kernels/test_draft_program.py::test_draft_program_matches_oracle[128-True-False-0.0]
+FAILED tests/kernels/test_draft_program.py::test_draft_program_matches_oracle[128-True-False-0.5]
+FAILED tests/kernels/test_draft_program.py::test_draft_program_matches_oracle[128-True-True-0.0]
+FAILED tests/kernels/test_draft_program.py::test_draft_program_matches_oracle[128-True-True-0.5]
+4 failed, 26 passed, 134 deselected in 38.33s

@@ -1,0 +1,8 @@
+2026-10-03 17:09:49.079 python[27386:5526741] Metal GPU Validation Enabled
+all 128 {} {'baseline': 21.80587500333786, 'candidate': 21.804833348141983}
+2026-10-03 17:09:56.471 python[27552:5527343] Metal GPU Validation Enabled
+all 128 {} {'baseline': 21.748541679698974, 'candidate': 21.71204166370444}
+2026-10-03 17:09:59.876 python[27715:5527923] Metal GPU Validation Enabled
+all 32768 {} {'baseline': 133.58250001328997, 'candidate': 133.64495831774548}
+2026-10-03 17:10:07.322 python[27879:5528537] Metal GPU Validation Enabled
+all 32768 {} {'baseline': 133.42162501066923, 'candidate': 133.47833332954906}

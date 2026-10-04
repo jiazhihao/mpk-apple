@@ -1,0 +1,77 @@
+{
+  "128": {
+    "layers": [
+      3,
+      31,
+      63
+    ],
+    "median_min_wall_us": {
+      "production": 306.3815110363066,
+      "previous_geometry": 331.3593748025596,
+      "matched_control": 243.5742188245058,
+      "single_kernel": 243.36067726835608
+    },
+    "median_ratio_original": 0.7942125189785715,
+    "median_ratio_matched": 0.9990056945391489
+  },
+  "4096": {
+    "layers": [
+      3,
+      31,
+      63
+    ],
+    "median_min_wall_us": {
+      "production": 534.3190105631948,
+      "previous_geometry": 548.1627602130175,
+      "matched_control": 339.4609377719462,
+      "single_kernel": 337.5625000335276
+    },
+    "median_ratio_original": 0.6329992310164724,
+    "median_ratio_matched": 0.9981826577783702
+  },
+  "8192": {
+    "layers": [
+      3,
+      31,
+      63
+    ],
+    "median_min_wall_us": {
+      "production": 750.7226560264826,
+      "previous_geometry": 756.5442710183561,
+      "matched_control": 425.23437505587935,
+      "single_kernel": 437.6041665673256
+    },
+    "median_ratio_original": 0.583880115995201,
+    "median_ratio_matched": 1.0290893498669311
+  },
+  "16384": {
+    "layers": [
+      3,
+      31,
+      63
+    ],
+    "median_min_wall_us": {
+      "production": 1202.4882808327675,
+      "previous_geometry": 1179.397135041654,
+      "matched_control": 660.3658851236105,
+      "single_kernel": 624.2187498137355
+    },
+    "median_ratio_original": 0.5199712789415271,
+    "median_ratio_matched": 0.9459072831113181
+  },
+  "32768": {
+    "layers": [
+      3,
+      31,
+      63
+    ],
+    "median_min_wall_us": {
+      "production": 2130.79947931692,
+      "previous_geometry": 2007.123698014766,
+      "matched_control": 1026.0976562276483,
+      "single_kernel": 962.4401037581265
+    },
+    "median_ratio_original": 0.45159656177798696,
+    "median_ratio_matched": 0.9379615067989213
+  }
+}

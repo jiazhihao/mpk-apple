@@ -40,3 +40,23 @@ relative to T = 1 (the shader rows, and `accelerator_<format>` rows at the tile'
 (design §5.8) optimizes against. Costs are exact at measured T and linear between them; the loader refuses to
 extrapolate. The writer (`tools/profile_writer.py`) measures the lane order, the scale placement (at K = 4096),
 the threadgroups, the cost tables, the accelerator decision and the attention kernel; the rest carries over.
+
+## GDN mixer fusion
+
+The 40-core M5 Max profile's `engine.gdn_mixer_fusion` selects the measured
+fixed-eight-row GDN mixer recipe. Its six `shape` entries are hidden width,
+key heads, value heads, key dimension, value dimension and convolution width.
+The remaining fields describe the static worker geometry, lossless FP8 operand
+packing and each projection's tile, K split and task grid. The current recipe
+uses 80 workers with 8 SIMD groups, TN=32, eight-column recurrence slices,
+tile-block=8 and subtraction decoding. QKV/AB/Z/output grids are 240/240/120/120;
+their K splits are 2/8/8/4 (AB uses TN=16). Empty or absent
+means native dispatches. Selection requires an exact shape match, FP8/BF16
+projections, the complete MLP normalization boundary, static T=8 and commuted
+normalization; dynamic and speculative programs retain native kernels.
+The native MLP and attention kernels remain selected. See the
+[M5 Max optimization study](../docs/research/m5max-gdn-mixer-optimization.md)
+for the search, selected configuration and comparisons. Input normalization and
+dual permutation are combined only where a preceding native residual has not
+already produced the normalized layout. Derived operand files are cached outside
+the repository; the original weight pack is unchanged.

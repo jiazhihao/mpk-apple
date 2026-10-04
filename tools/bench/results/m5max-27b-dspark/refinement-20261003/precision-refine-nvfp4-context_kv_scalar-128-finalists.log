@@ -1,0 +1,8 @@
+context_kv_scalar 128 {'context_kv_scalar': {'workers': 160, 'sgs': 8, 'rg': 2, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.011956944945268333, 'candidate': 0.011824999819509685}
+context_kv_scalar 128 {'context_kv_scalar': {'workers': 320, 'sgs': 8, 'rg': 2, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.012062499687696496, 'candidate': 0.011858333406659463}
+context_kv_scalar 128 {'context_kv_scalar': {'workers': 80, 'sgs': 16, 'rg': 2, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.012068055608930687, 'candidate': 0.011959721450693905}
+context_kv_scalar 128 {'context_kv_scalar': {'workers': 160, 'sgs': 8, 'rg': 1, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.011968055817609033, 'candidate': 0.012251388397999108}
+context_kv_scalar 128 {'context_kv_scalar': {'workers': 320, 'sgs': 8, 'rg': 1, 'rsplit': 8, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.012058332989302775, 'candidate': 0.012241666748498877}
+context_kv_scalar 128 {'context_kv_scalar': {'workers': 320, 'sgs': 8, 'rg': 4, 'rsplit': 4, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.012008332608578106, 'candidate': 0.012279166063914696}
+context_kv_scalar 128 {'context_kv_scalar': {'workers': 80, 'sgs': 16, 'rg': 4, 'rsplit': 4, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.012030555323387185, 'candidate': 0.012366665760055184}
+context_kv_scalar 128 {'context_kv_scalar': {'workers': 160, 'sgs': 8, 'rg': 4, 'rsplit': 4, 'x_preconvert': True, 'x_hoist': False}} {'baseline': 0.012070833084483942, 'candidate': 0.012265277716020742}

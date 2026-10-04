@@ -1,0 +1,102 @@
+[
+  {
+    "context_kv_scalar": {
+      "workers": 80,
+      "sgs": 16,
+      "rg": 2,
+      "rsplit": 8,
+      "x_hoist": false,
+      "x_preconvert": false
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 320,
+      "sgs": 16,
+      "rg": 2,
+      "rsplit": 8,
+      "x_hoist": false,
+      "x_preconvert": true
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 160,
+      "sgs": 16,
+      "rg": 2,
+      "rsplit": 8,
+      "x_hoist": false,
+      "x_preconvert": true
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 320,
+      "sgs": 4,
+      "rg": 1,
+      "rsplit": 4,
+      "x_hoist": false,
+      "x_preconvert": false
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 80,
+      "sgs": 16,
+      "rg": 2,
+      "rsplit": 8,
+      "x_hoist": false,
+      "x_preconvert": true
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 160,
+      "sgs": 16,
+      "rg": 2,
+      "rsplit": 8,
+      "x_hoist": false,
+      "x_preconvert": false
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 320,
+      "sgs": 4,
+      "rg": 2,
+      "rsplit": 8,
+      "x_hoist": false,
+      "x_preconvert": true
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 160,
+      "sgs": 16,
+      "rg": 2,
+      "rsplit": 4,
+      "x_hoist": false,
+      "x_preconvert": true
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 320,
+      "sgs": 8,
+      "rg": 2,
+      "rsplit": 4,
+      "x_hoist": false,
+      "x_preconvert": false
+    }
+  },
+  {
+    "context_kv_scalar": {
+      "workers": 40,
+      "sgs": 16,
+      "rg": 2,
+      "rsplit": 4,
+      "x_hoist": false,
+      "x_preconvert": true
+    }
+  }
+]

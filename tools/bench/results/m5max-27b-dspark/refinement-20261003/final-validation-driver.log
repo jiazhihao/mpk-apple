@@ -1,0 +1,7 @@
+START final-target-shader-validation
+END final-target-shader-validation 0
+START cache-final-128
+END cache-final-128 0
+START cache-final-32768
+END cache-final-32768 0
+DONE final validation

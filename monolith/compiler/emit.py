@@ -976,22 +976,28 @@ def _draft_attn(ctx: _Ctx, op: Op) -> None:
     if gamma > ctx.layout.gamma_max:
         raise ValueError(f"draft_attn: a block of {gamma} rows exceeds the layout's gamma_max {ctx.layout.gamma_max}")
     ctx_max = ctx.shape(kc)[0]
-    chunk = 64
+    mma = ctx.accelerator == "on" and (a.get("attention") or ctx.attention) in ("auto", "mma") and d in (128, 256)
+    groups = ctx.cores * 4
+    chunk = 32 if mma else 64
     macros = dict(kernels.gqa_macros(d, chunk=chunk, rb_max=ctx.attn_rows), DRAFT="1", STEP_STATE="1")
-    src = _gqa_src(ctx)
+    if mma:
+        macros.update(MMA_SG="8", FIXED_CHUNK="1")
+    src = _gqa_src(ctx, mma=mma)
     fused = _fused_permute(ctx, out)                              # the drafter's o_proj tile reads the merge's output
-    kd = ctx.kernel("gqa", src, "gqa_decode", macros)
-    km = ctx.kernel("gqa", src, "gqa_merge", dict(macros, **fused[1]) if fused else macros)
+    kd = ctx.kernel("gqa", src, "gqa_decode_mma" if mma else "gqa_decode", macros,
+                    language_version=(4 << 16) if mma else 0)
+    km = ctx.kernel("gqa", src, "gqa_merge", dict(macros, **fused[1]) if fused else macros,
+                    language_version=(4 << 16) if mma else 0)
     rep = heads // kv
     n_chunks_max, rows_max = -(-ctx_max // chunk), rep * gamma
     po, pm = kernels.gqa_workspace(kv, n_chunks_max, rows_max, d)
     part_o, part_md = ctx.scratch("draft_attn.part_o", po, shared=True), ctx.scratch("draft_attn.part_md", pm, shared=True)
     prm = ctx.params("draft_attn", kernels.draft_attn_params(
-        heads=heads, kv_heads=kv, gamma=gamma, ctx_len=0, n_new=0, n_sg=ctx.n_sg, q_off=0, k_off=heads * d, v_off=(heads + kv) * d,
+        heads=heads, kv_heads=kv, gamma=gamma, ctx_len=0, n_new=0, n_sg=groups if mma else ctx.n_sg, q_off=0, k_off=heads * d, v_off=(heads + kv) * d,
         in_stride=ctx.shape(proj)[1], kvp_stride=ctx.shape(kvp)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
         scaling=float(a["scaling"]), n_chunks_max=n_chunks_max))
     st = ctx.program.step_state
-    grid, tg = ctx.crew_grid()
+    grid, tg = ((groups, 1, 1), (256, 1, 1)) if mma else ctx.crew_grid()
     ctx.add(kd, [(0, *ctx.buf(proj)), (1, *ctx.buf(kc)), (2, *ctx.buf(vc)), (3, *ctx.windows[cos.name]), (4, *ctx.windows[sin.name]),
                  (5, *ctx.windows[qn.name]), (6, *ctx.windows[kn.name]), (7, part_o, 0), (8, part_md, 0), (9, prm, 0), (11, *ctx.buf(kvp)),
                  (15, st, 0)], grid, tg, op.kind, writes=[1, 2, 7, 8])
@@ -1293,7 +1299,8 @@ HANDLERS = {"embed": _embed, "rmsnorm_stat": _rmsnorm_stat, "norm_apply": _norm_
 def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile: Profile, t: Optional[int] = None, dynamic_t: bool = False,
                  layout: Optional[StepStateLayout] = None, eos: Union[int, Sequence[int]] = -1, ring_capacity: int = 4096, tg: int = 384, tuner: Any = None,
                  tail: Optional[str] = "advance", token: Optional[Value] = None, speculative: bool = False, barriers: str = "minimal",
-                 attention: Optional[str] = None, accelerator: Optional[str] = None, t_min: int = 1, commute_norm: bool = True) -> Program:
+                 attention: Optional[str] = None, accelerator: Optional[str] = None, t_min: int = 1, commute_norm: bool = True,
+                 gdn_mixer_fusion: bool = True) -> Program:
     """Check coverage on ``profile`` and emit the step program for a lowered (and passed) graph: for a static
     ``T = t`` (kernels specialized, T from params), or with ``dynamic_t`` for any T ≤ ``t`` read from StepState
     at run time. The dynamic bound defaults to ``layout.t_max``; an explicit smaller ``t`` lets programs share
@@ -1303,7 +1310,10 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     ``accept_scan``). ``barriers``: ``"minimal"`` keeps an ICB barrier only where a dependency needs one (the
     barrier pass), ``"all"`` after every op (v0; the A/B baseline). The profile's ``sibling_order`` decides whether a
     mixer's gate GEMV is encoded after its core (``alu_first``, ``either``) or before it (``bus_first``); its
-    ``accelerator`` (or the override) sends the T > 1 GEMVs to the tensor-ops tile (#51)."""
+    ``accelerator`` (or the override) sends the T > 1 GEMVs to the tensor-ops tile (#51).
+    ``gdn_mixer_fusion`` selects the profile's measured mixer recipe only for
+    static T=8, matching GDN shapes and a complete native MLP normalization boundary.
+    Set it false to retain original dispatches; dynamic/speculative programs are unchanged."""
     layout = layout or StepStateLayout()
     packs = [pack] if isinstance(pack, PackFile) else list(pack)
     if dynamic_t and t is None:
@@ -1350,8 +1360,11 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     order = list(g.ops)
     if profile.sibling_order == "bus_first":
         order = _bus_first(order)
+    emitted = {}
     for op in order:
+        start = len(program.ops)
         HANDLERS[op.kind](ctx, op)
+        emitted[id(op)] = (start, len(program.ops))
     if tail == "advance":
         if token is None:
             raise ValueError("emit_program: the advance needs the sampled token value")
@@ -1368,6 +1381,12 @@ def emit_program(g: Graph, *, pack: Union[PackFile, Sequence[PackFile]], profile
     for name in [n for n, spec in program.buffers.items() if spec.role == "arena" and n not in bound]:
         del program.buffers[name]
     place_barriers(program, barriers)
+    if (gdn_mixer_fusion and profile.gdn_mixer_fusion and profile.key == "apple10"
+            and t == 8 and not dynamic_t and not speculative and commute_norm
+            and ctx.accelerator == "on" and profile.sibling_order != "bus_first"):
+        from .gdn_fusion import apply_gdn_mixer_fusion
+        program = apply_gdn_mixer_fusion(program, g, emitted, profile.gdn_mixer_fusion)
+        place_barriers(program, barriers)
     return program
 
 
@@ -1453,7 +1472,8 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
                     layout: Optional[StepStateLayout] = None, tg: int = 384, passes=DEFAULT_PASSES, dynamic_t: bool = False,
                     tuner: Any = None, drafter: Any = None, drafter_pack: Optional[PackFile] = None, verify: str = "cost",
                     verify_threshold: Optional[float] = None, verify_length: Optional[int] = None, barriers: str = "minimal",
-                    attention: Optional[str] = None, accelerator: Optional[str] = None, prefill: bool = False, commute_norm: bool = True) -> Program:
+                    attention: Optional[str] = None, accelerator: Optional[str] = None, prefill: bool = False, commute_norm: bool = True,
+                    gdn_mixer_fusion: bool = True) -> Program:
     """Lower ``model``, run the ``passes`` and emit its step program (see :func:`emit_program`). With a ``drafter``
     (and its pack) the dynamic-T program carries the speculative round instead of the advance: ``verify`` = ``"cost"``
     (the cost-aware verify-length rule when the profile has a cost table for the pack's dominant format, otherwise the
@@ -1468,7 +1488,8 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
         for p in passes:
             p(g)
         return emit_program(g, pack=pack, profile=profile, t=t, dynamic_t=dynamic_t, layout=layout, eos=eos, ring_capacity=ring_capacity, tg=tg,
-                            tuner=tuner, tail="advance", token=token, barriers=barriers, attention=attention, accelerator=accelerator, commute_norm=commute_norm)
+                            tuner=tuner, tail="advance", token=token, barriers=barriers, attention=attention, accelerator=accelerator, commute_norm=commute_norm,
+                            gdn_mixer_fusion=gdn_mixer_fusion)
     if not dynamic_t:
         raise ValueError("compile_program: the speculative round needs the dynamic-T program (dynamic_t=True)")
     if drafter_pack is None:
@@ -1494,5 +1515,9 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     # above the bare anchor) and a fixed L >= 1 never does, so their programs skip the T = 1 variants — 144 dispatches
     # of the 8B's step that returned at once (decode-kernels.md §8); the threshold rule can pick L = 0 and keeps them
     t_min = 2 if not prefill and (cost is not None or (fixed is not None and fixed >= 1)) else 1
-    return emit_program(g, pack=[pack, drafter_pack], profile=profile, t=t, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
-                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention, accelerator=accelerator, t_min=t_min, commute_norm=commute_norm)
+    program = emit_program(g, pack=[pack, drafter_pack], profile=profile, t=t, dynamic_t=True, layout=layout, eos=eos, ring_capacity=ring_capacity,
+                        tg=tg, tuner=tuner, tail=None, speculative=True, barriers=barriers, attention=attention, accelerator=accelerator, t_min=t_min, commute_norm=commute_norm,
+                        gdn_mixer_fusion=gdn_mixer_fusion)
+    program = drafter.optimize_program(program, prefill=prefill)
+    place_barriers(program, barriers)
+    return program

@@ -29,6 +29,9 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
 
 ## transformers (huggingface/transformers 5.17, Apache-2.0)
 
+* `monolith/nn/rope.py::scaled_inv_freq`: NumPy implementation of the YaRN
+  equations and amplitude scaling in `src/transformers/modeling_rope_utils.py::_compute_yarn_parameters`.
+
 - `monolith/nn/oracle.py`, `monolith/nn/attention.py`, `monolith/nn/gdn.py` — the layer oracles reproduce the
   semantics and rounding order of `src/transformers/models/qwen3_5/modeling_qwen3_5.py` (`Qwen3_5RMSNorm`,
   `Qwen3_5RMSNormGated`, `torch_recurrent_gated_delta_rule`, `Qwen3_5GatedDeltaNet`, `Qwen3_5Attention`,

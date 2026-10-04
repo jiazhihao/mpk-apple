@@ -1,0 +1,6482 @@
+[
+  {
+    "layer": 0,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999998887864232,
+        "relative_l2": 0.0004716247958284818,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999798457791951,
+        "relative_l2": 0.00641637867086366,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999798513976839,
+        "relative_l2": 0.006415243638491948,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999909878139962,
+        "relative_l2": 0.004400269174841933,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999909892025991,
+        "relative_l2": 0.004400064907066426,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999990680813099,
+        "relative_l2": 0.0013653388332337461,
+        "max_abs": 0.006434168666601181,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999990680754278,
+        "relative_l2": 0.0013653431427767162,
+        "max_abs": 0.006434168666601181,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999820437849438,
+        "relative_l2": 0.006023070078295478,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999820400837566,
+        "relative_l2": 0.006023505807995737,
+        "max_abs": 0.5,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 1,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999996412959588,
+        "relative_l2": 0.000846999383042327,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999358826659878,
+        "relative_l2": 0.011344067817134196,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999357715477485,
+        "relative_l2": 0.01135387129998379,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999907440340228,
+        "relative_l2": 0.004308406561252827,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999907429425199,
+        "relative_l2": 0.004308644186743159,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999986710958237,
+        "relative_l2": 0.0016310117550977074,
+        "max_abs": 0.0021992027759552,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999986710877798,
+        "relative_l2": 0.0016310166145516482,
+        "max_abs": 0.0021992027759552,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999327861643733,
+        "relative_l2": 0.011604043647975017,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999327446755967,
+        "relative_l2": 0.01160763019018713,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 2,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997688364242,
+        "relative_l2": 0.0006799589055979081,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.99994778445292,
+        "relative_l2": 0.010220647571232675,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999947781346323,
+        "relative_l2": 0.010221030092905254,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999896439828194,
+        "relative_l2": 0.004552396535363788,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999896439055563,
+        "relative_l2": 0.004552413395266822,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999976167175333,
+        "relative_l2": 0.002205433731207372,
+        "max_abs": 0.001873016357421875,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999976167196271,
+        "relative_l2": 0.0022054327748678294,
+        "max_abs": 0.001873016357421875,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999495312729855,
+        "relative_l2": 0.01004819971519679,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999495342802135,
+        "relative_l2": 0.010047978260837231,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 3,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.999976292473176,
+        "relative_l2": 0.006892322400874545,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999976292473176,
+        "relative_l2": 0.006892322400874545,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999833928629882,
+        "relative_l2": 0.0057635128999074066,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999833928629882,
+        "relative_l2": 0.0057635128999074066,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903769449384,
+        "relative_l2": 0.004389284748719077,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903769449384,
+        "relative_l2": 0.004389284748719077,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999757794019398,
+        "relative_l2": 0.007085540175402103,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999757794019398,
+        "relative_l2": 0.007085540175402103,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 3,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999812603989159,
+        "relative_l2": 0.006162624019606598,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999812603989159,
+        "relative_l2": 0.006162624019606598,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999832287874035,
+        "relative_l2": 0.005791833260077537,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999832287874035,
+        "relative_l2": 0.005791833260077537,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903769449384,
+        "relative_l2": 0.004389284748719077,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903769449384,
+        "relative_l2": 0.004389284748719077,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999806804506282,
+        "relative_l2": 0.0062392096509060494,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999806804506282,
+        "relative_l2": 0.0062392096509060494,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 3,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999810352341464,
+        "relative_l2": 0.006259177129562529,
+        "max_abs": 0.1484375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999810352341464,
+        "relative_l2": 0.006259177129562529,
+        "max_abs": 0.1484375,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999833632287672,
+        "relative_l2": 0.005768518936112472,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999833632287672,
+        "relative_l2": 0.005768518936112472,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903769449384,
+        "relative_l2": 0.004389284748719077,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903769449384,
+        "relative_l2": 0.004389284748719077,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999734816569741,
+        "relative_l2": 0.007482471408108537,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999734816569741,
+        "relative_l2": 0.007482471408108537,
+        "max_abs": 0.1875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 4,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999995678037117,
+        "relative_l2": 0.0009297273052705969,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999213703306438,
+        "relative_l2": 0.012540062095432134,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999213509830298,
+        "relative_l2": 0.01254160472183224,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999897247505245,
+        "relative_l2": 0.004533661518601,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999897247602065,
+        "relative_l2": 0.004533659315671651,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999978077093733,
+        "relative_l2": 0.0020950213682933735,
+        "max_abs": 0.0023185759782791138,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999978076470879,
+        "relative_l2": 0.0020950511120488365,
+        "max_abs": 0.0023185759782791138,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999180805269731,
+        "relative_l2": 0.012815375860034625,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999180303433763,
+        "relative_l2": 0.012819305940620505,
+        "max_abs": 0.1875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 5,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999995829281926,
+        "relative_l2": 0.0009133238957543009,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999351585667082,
+        "relative_l2": 0.011388384010268142,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999352160238804,
+        "relative_l2": 0.011383380032345222,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999914977179548,
+        "relative_l2": 0.004124629344479925,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999914978660539,
+        "relative_l2": 0.00412459316222986,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999963241586949,
+        "relative_l2": 0.0027706408676171773,
+        "max_abs": 0.002418428659439087,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999963241629959,
+        "relative_l2": 0.002770640107329286,
+        "max_abs": 0.002418428659439087,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999384351248725,
+        "relative_l2": 0.011096491907068887,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999384904779239,
+        "relative_l2": 0.011091477419288082,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 6,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999996156356978,
+        "relative_l2": 0.0008768651672499015,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999404533417118,
+        "relative_l2": 0.010916624251994245,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999403362917793,
+        "relative_l2": 0.01092767827831896,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999898411064567,
+        "relative_l2": 0.00451494724508902,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.999989840243938,
+        "relative_l2": 0.004515124031300376,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999981774756209,
+        "relative_l2": 0.0019155286127849774,
+        "max_abs": 0.0013387652579694986,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999981774754306,
+        "relative_l2": 0.0019155287082503782,
+        "max_abs": 0.0013387652579694986,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999425742108425,
+        "relative_l2": 0.01072169023341974,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999425538949358,
+        "relative_l2": 0.010723213678673215,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 7,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999699635993362,
+        "relative_l2": 0.007758724024833452,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999699635993362,
+        "relative_l2": 0.007758724024833452,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999831912545679,
+        "relative_l2": 0.005801525373876492,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999831912545679,
+        "relative_l2": 0.005801525373876492,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999892798333957,
+        "relative_l2": 0.004633973558849647,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999892798333957,
+        "relative_l2": 0.004633973558849647,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999720282126064,
+        "relative_l2": 0.00748518032675207,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999720282126064,
+        "relative_l2": 0.00748518032675207,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 7,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999999,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999661448958489,
+        "relative_l2": 0.008273052348959168,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999661448958489,
+        "relative_l2": 0.008273052348959168,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999831525558276,
+        "relative_l2": 0.005808019225414385,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999831525558276,
+        "relative_l2": 0.005808019225414385,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999892798333957,
+        "relative_l2": 0.004633973558849647,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999892798333957,
+        "relative_l2": 0.004633973558849647,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999683773843071,
+        "relative_l2": 0.007960803570516468,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999683773843071,
+        "relative_l2": 0.007960803570516468,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 7,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999998,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999609315210284,
+        "relative_l2": 0.008842538051283584,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999609315210284,
+        "relative_l2": 0.008842538051283584,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999831319564063,
+        "relative_l2": 0.005812189001455513,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999831319564063,
+        "relative_l2": 0.005812189001455513,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999892798333957,
+        "relative_l2": 0.004633973558849647,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999892798333957,
+        "relative_l2": 0.004633973558849647,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999678944215064,
+        "relative_l2": 0.008013971227294532,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999678944215064,
+        "relative_l2": 0.008013971227294532,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 8,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999990104085199,
+        "relative_l2": 0.0014070066591597675,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999296843727273,
+        "relative_l2": 0.011866678194007866,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999296785488708,
+        "relative_l2": 0.01186641101174887,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999892544951858,
+        "relative_l2": 0.004638128188902675,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999892545716023,
+        "relative_l2": 0.0046381120824958095,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999989712343592,
+        "relative_l2": 0.0014355198660443269,
+        "max_abs": 0.0028814896941184998,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.999998971239944,
+        "relative_l2": 0.0014355159390892944,
+        "max_abs": 0.0028814896941184998,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.999931551136647,
+        "relative_l2": 0.01171277041450536,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999931518929116,
+        "relative_l2": 0.011714560217353122,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 9,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999993634036464,
+        "relative_l2": 0.0011299308190405454,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999388482665705,
+        "relative_l2": 0.011103162726275075,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999389619573286,
+        "relative_l2": 0.0110876908291894,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999898301257896,
+        "relative_l2": 0.0045147931809330554,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999898301738743,
+        "relative_l2": 0.004514783496704017,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999976843350561,
+        "relative_l2": 0.002192462139227022,
+        "max_abs": 0.002376943826675415,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999976843350613,
+        "relative_l2": 0.002192462136820253,
+        "max_abs": 0.002376943826675415,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999407572855618,
+        "relative_l2": 0.01091369235839701,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999404891503271,
+        "relative_l2": 0.010934052728876353,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 10,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.999999665742306,
+        "relative_l2": 0.0008176691276236435,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999359861217407,
+        "relative_l2": 0.011318695495830585,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999359968483876,
+        "relative_l2": 0.011317525044435067,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.999989634524497,
+        "relative_l2": 0.004556439848906238,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999896345325436,
+        "relative_l2": 0.004556437926630896,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999986225565811,
+        "relative_l2": 0.0016621345318932636,
+        "max_abs": 0.010439455509185791,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999986225565811,
+        "relative_l2": 0.0016621345318932636,
+        "max_abs": 0.010439455509185791,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999399783933032,
+        "relative_l2": 0.010964031146736013,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999400427195548,
+        "relative_l2": 0.01095784163767692,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 11,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999771570468159,
+        "relative_l2": 0.006772985513794442,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999771570468159,
+        "relative_l2": 0.006772985513794442,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840430106713,
+        "relative_l2": 0.0056504753675516405,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840430106713,
+        "relative_l2": 0.0056504753675516405,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999899437705368,
+        "relative_l2": 0.004484950605159955,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999899437705368,
+        "relative_l2": 0.004484950605159955,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.999976715798613,
+        "relative_l2": 0.00682580233173885,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999976715798613,
+        "relative_l2": 0.00682580233173885,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 11,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999766637265297,
+        "relative_l2": 0.006836019806183877,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999766637265297,
+        "relative_l2": 0.006836019806183877,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999838942517076,
+        "relative_l2": 0.005676793249683485,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999838942517076,
+        "relative_l2": 0.005676793249683485,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999899437705368,
+        "relative_l2": 0.004484950605159955,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999899437705368,
+        "relative_l2": 0.004484950605159955,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999776704313657,
+        "relative_l2": 0.006754813532384694,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999776704313657,
+        "relative_l2": 0.006754813532384694,
+        "max_abs": 0.5,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 11,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.999975577012514,
+        "relative_l2": 0.007051437305620483,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999975577012514,
+        "relative_l2": 0.007051437305620483,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999838955074654,
+        "relative_l2": 0.005676747535671402,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999838955074654,
+        "relative_l2": 0.005676747535671402,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999899437705368,
+        "relative_l2": 0.004484950605159955,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999899437705368,
+        "relative_l2": 0.004484950605159955,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999784421403977,
+        "relative_l2": 0.006611423473984448,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999784421403977,
+        "relative_l2": 0.006611423473984448,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 12,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999992875349208,
+        "relative_l2": 0.0011938949929358878,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999310046166009,
+        "relative_l2": 0.011748782654873068,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999309950388902,
+        "relative_l2": 0.011750000416501958,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999894432013016,
+        "relative_l2": 0.004613158674519452,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999894432754544,
+        "relative_l2": 0.004613142781260874,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999984415385302,
+        "relative_l2": 0.0017789799516856155,
+        "max_abs": 0.009049773216247559,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999984415414297,
+        "relative_l2": 0.0017789785138304774,
+        "max_abs": 0.009049773216247559,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999293763755517,
+        "relative_l2": 0.01188719283582325,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999293693441013,
+        "relative_l2": 0.01188736623372569,
+        "max_abs": 0.1875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 13,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999995849629493,
+        "relative_l2": 0.00091111635104452,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999342673196184,
+        "relative_l2": 0.011466573605408146,
+        "max_abs": 0.0859375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999343159239544,
+        "relative_l2": 0.011462440883881158,
+        "max_abs": 0.0859375,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999901442909761,
+        "relative_l2": 0.00459721381614085,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999901445530088,
+        "relative_l2": 0.004597103290650994,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999983991971073,
+        "relative_l2": 0.001791606030386962,
+        "max_abs": 0.00285927951335907,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999983991900122,
+        "relative_l2": 0.0017916099727337486,
+        "max_abs": 0.0028601735830307007,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999341247594534,
+        "relative_l2": 0.011478414278643807,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999341821663187,
+        "relative_l2": 0.011473478132312762,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 14,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999993876830755,
+        "relative_l2": 0.0011066783429856772,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999329678583391,
+        "relative_l2": 0.011590859649905277,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999328538456805,
+        "relative_l2": 0.011601189683022728,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999898386168224,
+        "relative_l2": 0.004511963511075833,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.99998983869099,
+        "relative_l2": 0.004511947023674132,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999981981164557,
+        "relative_l2": 0.0019039839598208063,
+        "max_abs": 0.0037370920181274414,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999981981164557,
+        "relative_l2": 0.0019039839598208063,
+        "max_abs": 0.0037370920181274414,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999337279084964,
+        "relative_l2": 0.011513808608302166,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999337156478405,
+        "relative_l2": 0.011515034891810313,
+        "max_abs": 0.078125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 15,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999999,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999512452805375,
+        "relative_l2": 0.010184083398800479,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999512452805375,
+        "relative_l2": 0.010184083398800479,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845262596265,
+        "relative_l2": 0.005563029739089664,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845262596265,
+        "relative_l2": 0.005563029739089664,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901229686895,
+        "relative_l2": 0.0044479436837683555,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901229686895,
+        "relative_l2": 0.0044479436837683555,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999519396645448,
+        "relative_l2": 0.010103104061520748,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999519396645448,
+        "relative_l2": 0.010103104061520748,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 15,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999999,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999447966018905,
+        "relative_l2": 0.011058492591313628,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999447966018905,
+        "relative_l2": 0.011058492591313628,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999844377452418,
+        "relative_l2": 0.0055789129503923856,
+        "max_abs": 0.0390625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999844377452418,
+        "relative_l2": 0.0055789129503923856,
+        "max_abs": 0.0390625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901229686895,
+        "relative_l2": 0.0044479436837683555,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901229686895,
+        "relative_l2": 0.0044479436837683555,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999451775194249,
+        "relative_l2": 0.010822165851510872,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999451775194249,
+        "relative_l2": 0.010822165851510872,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 15,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999998,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999547725060705,
+        "relative_l2": 0.0100760416846843,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999547725060705,
+        "relative_l2": 0.0100760416846843,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999844420481557,
+        "relative_l2": 0.00557817622186749,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999844420481557,
+        "relative_l2": 0.00557817622186749,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901229686895,
+        "relative_l2": 0.0044479436837683555,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901229686895,
+        "relative_l2": 0.0044479436837683555,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999518454915807,
+        "relative_l2": 0.010278501354457162,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999518454915807,
+        "relative_l2": 0.010278501354457162,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 16,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999993501942984,
+        "relative_l2": 0.0011401551571451883,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999302054226303,
+        "relative_l2": 0.01184375646631809,
+        "max_abs": 0.140625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999930228697834,
+        "relative_l2": 0.011840459473589688,
+        "max_abs": 0.140625,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999894379066091,
+        "relative_l2": 0.004597500023278371,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999894373179244,
+        "relative_l2": 0.004597615604604928,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.999998802756405,
+        "relative_l2": 0.00154808968784152,
+        "max_abs": 0.009276151657104492,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999988027400982,
+        "relative_l2": 0.0015481003427374146,
+        "max_abs": 0.009276390075683594,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.999935389715311,
+        "relative_l2": 0.011387884476578732,
+        "max_abs": 0.171875,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999353428934683,
+        "relative_l2": 0.011390862846286884,
+        "max_abs": 0.171875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 17,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999990595834142,
+        "relative_l2": 0.0013715802252372534,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999356105642849,
+        "relative_l2": 0.011348226061208659,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999355238098355,
+        "relative_l2": 0.011355727760862723,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999899855427287,
+        "relative_l2": 0.004479125442278749,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999899854970231,
+        "relative_l2": 0.0044791348802432854,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999986234332365,
+        "relative_l2": 0.0016641223117425442,
+        "max_abs": 0.002707928419113159,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999986234332365,
+        "relative_l2": 0.0016641223117425442,
+        "max_abs": 0.002707928419113159,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999333023438332,
+        "relative_l2": 0.011561358838660633,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999333493838114,
+        "relative_l2": 0.011556357415542153,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 18,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999995373449592,
+        "relative_l2": 0.0009619368428040271,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999363725102348,
+        "relative_l2": 0.011280896154737808,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999363558509563,
+        "relative_l2": 0.011282397304161055,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999900657032085,
+        "relative_l2": 0.004457434462440161,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999900656967798,
+        "relative_l2": 0.004457435904773917,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999985665106704,
+        "relative_l2": 0.0016938165257788706,
+        "max_abs": 0.0024447739124298096,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999985665038224,
+        "relative_l2": 0.0016938205144381548,
+        "max_abs": 0.0024447739124298096,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999371905718409,
+        "relative_l2": 0.011228436455825948,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999371849307437,
+        "relative_l2": 0.011229126915513785,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 19,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999831634063892,
+        "relative_l2": 0.005820846307569563,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999831634063892,
+        "relative_l2": 0.005820846307569563,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999847195407141,
+        "relative_l2": 0.00552993060743897,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999847195407141,
+        "relative_l2": 0.00552993060743897,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901072210875,
+        "relative_l2": 0.004449884185727989,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901072210875,
+        "relative_l2": 0.004449884185727989,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999820557056627,
+        "relative_l2": 0.0060209540242150035,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999820557056627,
+        "relative_l2": 0.0060209540242150035,
+        "max_abs": 0.5,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 19,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999999,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999865621538155,
+        "relative_l2": 0.00561667648179411,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999865621538155,
+        "relative_l2": 0.00561667648179411,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999846615646252,
+        "relative_l2": 0.0055416455062805995,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999846615646252,
+        "relative_l2": 0.0055416455062805995,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901072210875,
+        "relative_l2": 0.004449884185727989,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901072210875,
+        "relative_l2": 0.004449884185727989,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999838153413702,
+        "relative_l2": 0.005730384792788321,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999838153413702,
+        "relative_l2": 0.005730384792788321,
+        "max_abs": 0.5,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 19,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999999,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999861097483612,
+        "relative_l2": 0.005417091424472843,
+        "max_abs": 1.0,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999861097483612,
+        "relative_l2": 0.005417091424472843,
+        "max_abs": 1.0,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845596177857,
+        "relative_l2": 0.005558774647957786,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845596177857,
+        "relative_l2": 0.005558774647957786,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901072210875,
+        "relative_l2": 0.004449884185727989,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901072210875,
+        "relative_l2": 0.004449884185727989,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999724636223297,
+        "relative_l2": 0.007442336370297238,
+        "max_abs": 0.5,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999724636223297,
+        "relative_l2": 0.007442336370297238,
+        "max_abs": 0.5,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 20,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997635117726,
+        "relative_l2": 0.0006877355818818238,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999378360319562,
+        "relative_l2": 0.01115423833704037,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999377954533575,
+        "relative_l2": 0.011157934498586356,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999897415805336,
+        "relative_l2": 0.00453074014513014,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999897415802252,
+        "relative_l2": 0.004530740213189338,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999982337186196,
+        "relative_l2": 0.0018799853355074257,
+        "max_abs": 0.00860530138015747,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999982337187563,
+        "relative_l2": 0.0018799852628430406,
+        "max_abs": 0.00860530138015747,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999351738787121,
+        "relative_l2": 0.011403175934891136,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999351690394247,
+        "relative_l2": 0.011403719423764943,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 21,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997917200792,
+        "relative_l2": 0.0006454322268245362,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999389650398387,
+        "relative_l2": 0.011068398590862042,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999389546122915,
+        "relative_l2": 0.011069618016700094,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999894970791791,
+        "relative_l2": 0.004584782360001497,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999894974162136,
+        "relative_l2": 0.004584709251725374,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999982013180979,
+        "relative_l2": 0.0018972577191263432,
+        "max_abs": 0.012674212455749512,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999982013120279,
+        "relative_l2": 0.0018972609113364863,
+        "max_abs": 0.012674212455749512,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999407385551526,
+        "relative_l2": 0.0109009386516887,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999940685498718,
+        "relative_l2": 0.010906042647409386,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 22,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999998690468166,
+        "relative_l2": 0.0005117861875445159,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999302438611037,
+        "relative_l2": 0.011891710344770967,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999302188817465,
+        "relative_l2": 0.011894302230285866,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999896536954238,
+        "relative_l2": 0.004549262707094309,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999896567164698,
+        "relative_l2": 0.004548590709837925,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999978830119798,
+        "relative_l2": 0.0020609783073095925,
+        "max_abs": 0.011460840702056885,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999978829651834,
+        "relative_l2": 0.0020610011010138633,
+        "max_abs": 0.011460840702056885,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999351545787761,
+        "relative_l2": 0.011393098015831996,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999351405024379,
+        "relative_l2": 0.011394460166715685,
+        "max_abs": 0.1875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 23,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999434512925066,
+        "relative_l2": 0.01063660401063882,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999434512925066,
+        "relative_l2": 0.01063660401063882,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999835223620225,
+        "relative_l2": 0.005741602721055662,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999835223620225,
+        "relative_l2": 0.005741602721055662,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903737493991,
+        "relative_l2": 0.004398636954212908,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903737493991,
+        "relative_l2": 0.004398636954212908,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999436530087001,
+        "relative_l2": 0.010616193389923872,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999436530087001,
+        "relative_l2": 0.010616193389923872,
+        "max_abs": 0.0625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 23,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999112027188445,
+        "relative_l2": 0.013326774203196114,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999112027188445,
+        "relative_l2": 0.013326774203196114,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999832587629256,
+        "relative_l2": 0.005787976514988844,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999832587629256,
+        "relative_l2": 0.005787976514988844,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903737493991,
+        "relative_l2": 0.004398636954212908,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903737493991,
+        "relative_l2": 0.004398636954212908,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999080852313273,
+        "relative_l2": 0.013564606709971573,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999080852313273,
+        "relative_l2": 0.013564606709971573,
+        "max_abs": 0.0625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 23,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999999,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999124684205979,
+        "relative_l2": 0.013230855326695474,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999124684205979,
+        "relative_l2": 0.013230855326695474,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999832237140461,
+        "relative_l2": 0.005793378813802247,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999832237140461,
+        "relative_l2": 0.005793378813802247,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903737493991,
+        "relative_l2": 0.004398636954212908,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903737493991,
+        "relative_l2": 0.004398636954212908,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999075038633127,
+        "relative_l2": 0.01360335823463297,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999075038633127,
+        "relative_l2": 0.01360335823463297,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 24,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997777858731,
+        "relative_l2": 0.0006666559847916177,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.999925275645596,
+        "relative_l2": 0.01228064531795821,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999252937931663,
+        "relative_l2": 0.01227900984247735,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999896986237284,
+        "relative_l2": 0.004539379912641159,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999896986466664,
+        "relative_l2": 0.004539374849597554,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999986810533426,
+        "relative_l2": 0.001624969794497743,
+        "max_abs": 0.0031241774559020996,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999986810533426,
+        "relative_l2": 0.001624969794497743,
+        "max_abs": 0.0031241774559020996,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999266137187207,
+        "relative_l2": 0.01215077772184168,
+        "max_abs": 0.091796875,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999926595824844,
+        "relative_l2": 0.01215212571204041,
+        "max_abs": 0.091796875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 25,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999991881012482,
+        "relative_l2": 0.0012743228955348703,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999343680492749,
+        "relative_l2": 0.01149829174878804,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999343049865954,
+        "relative_l2": 0.011502859175371381,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999899158884514,
+        "relative_l2": 0.004490941334541405,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.999989915888546,
+        "relative_l2": 0.004490941313448094,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999987007937444,
+        "relative_l2": 0.0016119835917728284,
+        "max_abs": 0.0022441446781158447,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999987007940391,
+        "relative_l2": 0.0016119834137826921,
+        "max_abs": 0.0022441446781158447,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999380984586543,
+        "relative_l2": 0.01114227987742265,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999380303112468,
+        "relative_l2": 0.011147822533270976,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 26,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999995447102107,
+        "relative_l2": 0.0009544061954670542,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999333853513411,
+        "relative_l2": 0.011543836622932123,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999331999093417,
+        "relative_l2": 0.011559611011343543,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999904615146409,
+        "relative_l2": 0.004371934120077469,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999904638105279,
+        "relative_l2": 0.004371421676282059,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.999998585253234,
+        "relative_l2": 0.0016871870348087875,
+        "max_abs": 0.00465121865272522,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.999998585253234,
+        "relative_l2": 0.0016871870348087875,
+        "max_abs": 0.00465121865272522,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999331999847768,
+        "relative_l2": 0.011567660463395383,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999330787126616,
+        "relative_l2": 0.011578873183643168,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 27,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999732601233283,
+        "relative_l2": 0.007313065706361647,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999732601233283,
+        "relative_l2": 0.007313065706361647,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845907207568,
+        "relative_l2": 0.005551894866356942,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845907207568,
+        "relative_l2": 0.005551894866356942,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903892091325,
+        "relative_l2": 0.004384708641006795,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903892091325,
+        "relative_l2": 0.004384708641006795,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999702714740266,
+        "relative_l2": 0.007710886659343192,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999702714740266,
+        "relative_l2": 0.007710886659343192,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 27,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.999974673147248,
+        "relative_l2": 0.007117744508035167,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999974673147248,
+        "relative_l2": 0.007117744508035167,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840684272379,
+        "relative_l2": 0.005645457255368045,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840684272379,
+        "relative_l2": 0.005645457255368045,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903892091325,
+        "relative_l2": 0.004384708641006795,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903892091325,
+        "relative_l2": 0.004384708641006795,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999720984183891,
+        "relative_l2": 0.007470152246481909,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999720984183891,
+        "relative_l2": 0.007470152246481909,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 27,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999722025479112,
+        "relative_l2": 0.007540440004956065,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999722025479112,
+        "relative_l2": 0.007540440004956065,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999842977832053,
+        "relative_l2": 0.005604495544830731,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999842977832053,
+        "relative_l2": 0.005604495544830731,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903892091325,
+        "relative_l2": 0.004384708641006795,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903892091325,
+        "relative_l2": 0.004384708641006795,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999731672166354,
+        "relative_l2": 0.007373585083082566,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999731672166354,
+        "relative_l2": 0.007373585083082566,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 28,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.999999646410924,
+        "relative_l2": 0.0008409504626835368,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999258311920324,
+        "relative_l2": 0.012179405982463561,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999258008243385,
+        "relative_l2": 0.012181870060238239,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999902283307873,
+        "relative_l2": 0.0044253556001452995,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999902285438989,
+        "relative_l2": 0.004425311242034241,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999990603902279,
+        "relative_l2": 0.0013719851212218063,
+        "max_abs": 0.0068328119814395905,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999990604019622,
+        "relative_l2": 0.0013719765570418003,
+        "max_abs": 0.0068328119814395905,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999260936068245,
+        "relative_l2": 0.012157887411719819,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999261015714903,
+        "relative_l2": 0.012157200518825616,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 29,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999990667084567,
+        "relative_l2": 0.0013666112633358087,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999254832241623,
+        "relative_l2": 0.012228952594871967,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999253650645736,
+        "relative_l2": 0.012240506576605394,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999901663078413,
+        "relative_l2": 0.004441350625686024,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.999990166363915,
+        "relative_l2": 0.004441341372363905,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999985899059178,
+        "relative_l2": 0.0016793460966666863,
+        "max_abs": 0.0036015044897794724,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999985899034689,
+        "relative_l2": 0.0016793475556476205,
+        "max_abs": 0.0036015044897794724,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999280458711861,
+        "relative_l2": 0.011996128348861235,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999280745863818,
+        "relative_l2": 0.011993609929635381,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 30,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999994041962622,
+        "relative_l2": 0.001091609253546309,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999198765608697,
+        "relative_l2": 0.012701080566385609,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999197890938254,
+        "relative_l2": 0.01270776740817923,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999902195992855,
+        "relative_l2": 0.004423834197835805,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999902195983426,
+        "relative_l2": 0.004423834411004408,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999986033167888,
+        "relative_l2": 0.0016886739232225844,
+        "max_abs": 0.001999136060476303,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.999998603316667,
+        "relative_l2": 0.0016886739904128048,
+        "max_abs": 0.001999136060476303,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999235771842607,
+        "relative_l2": 0.012374341036533768,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999923452912817,
+        "relative_l2": 0.012384276543599481,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 31,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999295050601524,
+        "relative_l2": 0.011878720043401627,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999295050601524,
+        "relative_l2": 0.011878720043401627,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999846264444144,
+        "relative_l2": 0.005549005097560313,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999846264444144,
+        "relative_l2": 0.005549005097560313,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999905063717728,
+        "relative_l2": 0.004361067936663004,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999905063717728,
+        "relative_l2": 0.004361067936663004,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999296052994713,
+        "relative_l2": 0.011893405445779583,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999296052994713,
+        "relative_l2": 0.011893405445779583,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 31,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999157715333863,
+        "relative_l2": 0.01298093129838887,
+        "max_abs": 0.1015625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999157715333863,
+        "relative_l2": 0.01298093129838887,
+        "max_abs": 0.1015625,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999843414215218,
+        "relative_l2": 0.005600496787801722,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999843414215218,
+        "relative_l2": 0.005600496787801722,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999905063717728,
+        "relative_l2": 0.004361067936663004,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999905063717728,
+        "relative_l2": 0.004361067936663004,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999313205842602,
+        "relative_l2": 0.011719817481251343,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999313205842602,
+        "relative_l2": 0.011719817481251343,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 31,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999149312375114,
+        "relative_l2": 0.013046854403666104,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999149312375114,
+        "relative_l2": 0.013046854403666104,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999843798168856,
+        "relative_l2": 0.005594298190591218,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999843798168856,
+        "relative_l2": 0.005594298190591218,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999905063717728,
+        "relative_l2": 0.004361067936663004,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999905063717728,
+        "relative_l2": 0.004361067936663004,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999044601132369,
+        "relative_l2": 0.013824024180474688,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999044601132369,
+        "relative_l2": 0.013824024180474688,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 32,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999996364265074,
+        "relative_l2": 0.0008527321579111741,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999247699238824,
+        "relative_l2": 0.01227289655908236,
+        "max_abs": 0.203125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999248105274827,
+        "relative_l2": 0.012269678885399638,
+        "max_abs": 0.203125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999904451762384,
+        "relative_l2": 0.0043724294762943405,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999904453044296,
+        "relative_l2": 0.004372400519890617,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.999998875951952,
+        "relative_l2": 0.0015037682617461687,
+        "max_abs": 0.002273544669151306,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.999998875951952,
+        "relative_l2": 0.0015037682617461687,
+        "max_abs": 0.002273544669151306,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999323688195478,
+        "relative_l2": 0.011631275874543507,
+        "max_abs": 0.11328125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999323289684028,
+        "relative_l2": 0.011634663402222741,
+        "max_abs": 0.11328125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 33,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999998729113885,
+        "relative_l2": 0.0005041875169561205,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999226767127218,
+        "relative_l2": 0.012439051647212124,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999226399140625,
+        "relative_l2": 0.012441885862117254,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.999990252026089,
+        "relative_l2": 0.004417269241102336,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.99999025197038,
+        "relative_l2": 0.004417282506518379,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999986972424909,
+        "relative_l2": 0.0016195707693328737,
+        "max_abs": 0.009523570537567139,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999986972442458,
+        "relative_l2": 0.0016195697062864143,
+        "max_abs": 0.009523570537567139,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999243268634515,
+        "relative_l2": 0.012302967235363197,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999242642554982,
+        "relative_l2": 0.012307992303032703,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 34,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999996183843705,
+        "relative_l2": 0.0008736311802055631,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999225700809041,
+        "relative_l2": 0.012449115368047003,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999226622139605,
+        "relative_l2": 0.012441715740708353,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999901813208417,
+        "relative_l2": 0.004436448380369662,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999901813612966,
+        "relative_l2": 0.004436438677211992,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999989817058001,
+        "relative_l2": 0.0014272765458945367,
+        "max_abs": 0.0038333162665367126,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999989817060253,
+        "relative_l2": 0.0014272763870690722,
+        "max_abs": 0.0038333162665367126,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.999928429650982,
+        "relative_l2": 0.011985628709640777,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999283603901992,
+        "relative_l2": 0.011991421092086854,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 35,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999065427519859,
+        "relative_l2": 0.0136715467013992,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999065427519859,
+        "relative_l2": 0.0136715467013992,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999846935620204,
+        "relative_l2": 0.005537055743432352,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999846935620204,
+        "relative_l2": 0.005537055743432352,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903042358966,
+        "relative_l2": 0.004404496004592112,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903042358966,
+        "relative_l2": 0.004404496004592112,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999017553399626,
+        "relative_l2": 0.014020018150265094,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999017553399626,
+        "relative_l2": 0.014020018150265094,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 35,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999383746610735,
+        "relative_l2": 0.01110730477045691,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999383746610735,
+        "relative_l2": 0.01110730477045691,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845425366686,
+        "relative_l2": 0.0055651555953025525,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845425366686,
+        "relative_l2": 0.0055651555953025525,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903042358966,
+        "relative_l2": 0.004404496004592112,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903042358966,
+        "relative_l2": 0.004404496004592112,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999259192505734,
+        "relative_l2": 0.012196979656722668,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999259192505734,
+        "relative_l2": 0.012196979656722668,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 35,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999506536220173,
+        "relative_l2": 0.01000524996268163,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999506536220173,
+        "relative_l2": 0.01000524996268163,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999843123706037,
+        "relative_l2": 0.005606441959641642,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999843123706037,
+        "relative_l2": 0.005606441959641642,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903042358966,
+        "relative_l2": 0.004404496004592112,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999903042358966,
+        "relative_l2": 0.004404496004592112,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999326492255883,
+        "relative_l2": 0.01162219340162698,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999326492255883,
+        "relative_l2": 0.01162219340162698,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 36,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999992888558453,
+        "relative_l2": 0.0011926253568028734,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999309122078455,
+        "relative_l2": 0.011787062591159022,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999309014412263,
+        "relative_l2": 0.011787421821207053,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999898947083009,
+        "relative_l2": 0.004497498772308741,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.999989894708227,
+        "relative_l2": 0.004497498788762854,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999983346479475,
+        "relative_l2": 0.0018353671664446433,
+        "max_abs": 0.007001101970672607,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999983346479475,
+        "relative_l2": 0.0018353671664446433,
+        "max_abs": 0.007001101970672607,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999312822015417,
+        "relative_l2": 0.011776234814096441,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999313181770146,
+        "relative_l2": 0.011772474317685067,
+        "max_abs": 0.078125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 37,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997186049798,
+        "relative_l2": 0.0007502699934516178,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999264814062155,
+        "relative_l2": 0.012143039203541407,
+        "max_abs": 0.06640625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999926559362434,
+        "relative_l2": 0.012137177657633395,
+        "max_abs": 0.06640625,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999901489175353,
+        "relative_l2": 0.004438713709931948,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999901489393995,
+        "relative_l2": 0.0044387087864050465,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999987740700645,
+        "relative_l2": 0.001567440155962114,
+        "max_abs": 0.004695147275924683,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.999998774072872,
+        "relative_l2": 0.0015674383582240834,
+        "max_abs": 0.004695147275924683,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999293648989087,
+        "relative_l2": 0.01188648367560305,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999294357726128,
+        "relative_l2": 0.011880391349777744,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 38,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997406702826,
+        "relative_l2": 0.0007201835610146116,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999340657779187,
+        "relative_l2": 0.011488003018372023,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999340880730688,
+        "relative_l2": 0.011486118856387792,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999897477872474,
+        "relative_l2": 0.004529956455696706,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999897477765449,
+        "relative_l2": 0.004529958819102942,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999987184976838,
+        "relative_l2": 0.0016012553319836049,
+        "max_abs": 0.007497072219848633,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999987184976838,
+        "relative_l2": 0.0016012553319836049,
+        "max_abs": 0.007497072219848633,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999357411738282,
+        "relative_l2": 0.011353630286969287,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999357680411137,
+        "relative_l2": 0.01135137140769138,
+        "max_abs": 0.078125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 39,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998934818092092,
+        "relative_l2": 0.01464271379498165,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998934818092092,
+        "relative_l2": 0.01464271379498165,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.99998392758343,
+        "relative_l2": 0.005669758700969123,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.99998392758343,
+        "relative_l2": 0.005669758700969123,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999902934200061,
+        "relative_l2": 0.004407870230612258,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999902934200061,
+        "relative_l2": 0.004407870230612258,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999014746197536,
+        "relative_l2": 0.014090932549183883,
+        "max_abs": 0.06640625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999014746197536,
+        "relative_l2": 0.014090932549183883,
+        "max_abs": 0.06640625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 39,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999211986127714,
+        "relative_l2": 0.012563190432798535,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999211986127714,
+        "relative_l2": 0.012563190432798535,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999836673451286,
+        "relative_l2": 0.00571543374149565,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999836673451286,
+        "relative_l2": 0.00571543374149565,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999902934200061,
+        "relative_l2": 0.004407870230612258,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999902934200061,
+        "relative_l2": 0.004407870230612258,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999098415645389,
+        "relative_l2": 0.013449333528972502,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999098415645389,
+        "relative_l2": 0.013449333528972502,
+        "max_abs": 0.15625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 39,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999998,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999265125287876,
+        "relative_l2": 0.012144549845839125,
+        "max_abs": 0.0703125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999265125287876,
+        "relative_l2": 0.012144549845839125,
+        "max_abs": 0.0703125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999836855420351,
+        "relative_l2": 0.005712361394753804,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999836855420351,
+        "relative_l2": 0.005712361394753804,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999902934200061,
+        "relative_l2": 0.004407870230612258,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999902934200061,
+        "relative_l2": 0.004407870230612258,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9998914844565667,
+        "relative_l2": 0.014764799656962806,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9998914844565667,
+        "relative_l2": 0.014764799656962806,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 40,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.999999557317638,
+        "relative_l2": 0.0009409779670814228,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.999925608527047,
+        "relative_l2": 0.012199961786941455,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999255271753626,
+        "relative_l2": 0.012206814455516066,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999895474747607,
+        "relative_l2": 0.004572327484879101,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999895467172721,
+        "relative_l2": 0.0045724911321454636,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999979100405709,
+        "relative_l2": 0.002046667292174258,
+        "max_abs": 0.004372546449303627,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999979100405618,
+        "relative_l2": 0.0020466672965663807,
+        "max_abs": 0.004372546449303627,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999295891554225,
+        "relative_l2": 0.011866709806487236,
+        "max_abs": 0.140625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999295314644182,
+        "relative_l2": 0.011871538831115159,
+        "max_abs": 0.140625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 41,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997048941903,
+        "relative_l2": 0.0007683305299761208,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.999927146621225,
+        "relative_l2": 0.012074754925860472,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999927090952307,
+        "relative_l2": 0.012079659945251321,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999899975439994,
+        "relative_l2": 0.0044738293745673055,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999899975492882,
+        "relative_l2": 0.004473830094292227,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999988716674241,
+        "relative_l2": 0.0015081649474188567,
+        "max_abs": 0.0017493367195129395,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999988716655043,
+        "relative_l2": 0.0015081662333445843,
+        "max_abs": 0.0017493367195129395,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999316809851665,
+        "relative_l2": 0.011693810976566335,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999316287973238,
+        "relative_l2": 0.011697957487160422,
+        "max_abs": 0.0625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 42,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997450554826,
+        "relative_l2": 0.0007140657659928198,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999249713708417,
+        "relative_l2": 0.012252844709498731,
+        "max_abs": 0.109375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999250600926571,
+        "relative_l2": 0.012245587608568304,
+        "max_abs": 0.109375,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.999990019383046,
+        "relative_l2": 0.004469689333900989,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999900193889549,
+        "relative_l2": 0.00446968797316855,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.999999009585338,
+        "relative_l2": 0.0014090041181421718,
+        "max_abs": 0.0031126439571380615,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999990093353816,
+        "relative_l2": 0.0014091814646586215,
+        "max_abs": 0.0031126439571380615,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999249876487587,
+        "relative_l2": 0.01224830950940401,
+        "max_abs": 0.12109375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999250296010459,
+        "relative_l2": 0.012244881678126594,
+        "max_abs": 0.12109375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 43,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999320065947006,
+        "relative_l2": 0.011704244724552093,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999320065947006,
+        "relative_l2": 0.011704244724552093,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999844208880188,
+        "relative_l2": 0.005583907080379528,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999844208880188,
+        "relative_l2": 0.005583907080379528,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999896500611951,
+        "relative_l2": 0.004551960096328942,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999896500611951,
+        "relative_l2": 0.004551960096328942,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999385203497776,
+        "relative_l2": 0.01109288840638962,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999385203497776,
+        "relative_l2": 0.01109288840638962,
+        "max_abs": 0.078125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 43,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999468745496508,
+        "relative_l2": 0.010425373396575564,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999468745496508,
+        "relative_l2": 0.010425373396575564,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999841431802944,
+        "relative_l2": 0.005632994050610515,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999841431802944,
+        "relative_l2": 0.005632994050610515,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999896500611951,
+        "relative_l2": 0.004551960096328942,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999896500611951,
+        "relative_l2": 0.004551960096328942,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.99994293825219,
+        "relative_l2": 0.010689209692413666,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.99994293825219,
+        "relative_l2": 0.010689209692413666,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 43,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999424201398054,
+        "relative_l2": 0.010767223883893026,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999424201398054,
+        "relative_l2": 0.010767223883893026,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999841905078071,
+        "relative_l2": 0.0056249536578086195,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999841905078071,
+        "relative_l2": 0.0056249536578086195,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999896500611951,
+        "relative_l2": 0.004551960096328942,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999896500611951,
+        "relative_l2": 0.004551960096328942,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999396069092498,
+        "relative_l2": 0.011022352204497564,
+        "max_abs": 0.09619140625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999396069092498,
+        "relative_l2": 0.011022352204497564,
+        "max_abs": 0.09619140625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 44,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997348141794,
+        "relative_l2": 0.000728289127984577,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999278383113256,
+        "relative_l2": 0.01201382040151806,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999927895285275,
+        "relative_l2": 0.012009025414039982,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.999990103856639,
+        "relative_l2": 0.004450822215706711,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999901038561654,
+        "relative_l2": 0.004450822322111513,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999990432984558,
+        "relative_l2": 0.0013835388237806222,
+        "max_abs": 0.0032134056091308594,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999990432949273,
+        "relative_l2": 0.001383541355775384,
+        "max_abs": 0.0032134056091308594,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999251632524486,
+        "relative_l2": 0.01223510598396138,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999251724106529,
+        "relative_l2": 0.012234280821114104,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 45,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999994184674507,
+        "relative_l2": 0.0010785224112419137,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999238956452429,
+        "relative_l2": 0.012337065853123582,
+        "max_abs": 0.10791015625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999238171795028,
+        "relative_l2": 0.012343447236882486,
+        "max_abs": 0.10791015625,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999898765048144,
+        "relative_l2": 0.0045002085820086656,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999898764929405,
+        "relative_l2": 0.004500211133114857,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999986367275141,
+        "relative_l2": 0.0016529264584919353,
+        "max_abs": 0.004020854830741882,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999986367299811,
+        "relative_l2": 0.001652925005926564,
+        "max_abs": 0.004020854830741882,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999216273677518,
+        "relative_l2": 0.012522009962428965,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999214359763601,
+        "relative_l2": 0.012537536764459576,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 46,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999992945008606,
+        "relative_l2": 0.0011879566241403895,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999222867005657,
+        "relative_l2": 0.012474645902075789,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999224238717936,
+        "relative_l2": 0.012463130616612443,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999902483680588,
+        "relative_l2": 0.004418411384668696,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999902483818779,
+        "relative_l2": 0.004418408247143453,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999985808220776,
+        "relative_l2": 0.0016888873587825163,
+        "max_abs": 0.004756893962621689,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999985808226933,
+        "relative_l2": 0.0016888870063956369,
+        "max_abs": 0.004756893962621689,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999238613852844,
+        "relative_l2": 0.012340890367534944,
+        "max_abs": 0.0859375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999239219665375,
+        "relative_l2": 0.012336184049746228,
+        "max_abs": 0.0859375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 47,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999999,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998900297890395,
+        "relative_l2": 0.014831812003069522,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998900297890395,
+        "relative_l2": 0.014831812003069522,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840917660523,
+        "relative_l2": 0.005641719779504524,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840917660523,
+        "relative_l2": 0.005641719779504524,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901965097773,
+        "relative_l2": 0.004435127427873155,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901965097773,
+        "relative_l2": 0.004435127427873155,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.999891929345656,
+        "relative_l2": 0.014704151379184273,
+        "max_abs": 0.109375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999891929345656,
+        "relative_l2": 0.014704151379184273,
+        "max_abs": 0.109375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 47,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998929567057555,
+        "relative_l2": 0.01463245017186439,
+        "max_abs": 0.0888671875,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998929567057555,
+        "relative_l2": 0.01463245017186439,
+        "max_abs": 0.0888671875,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999838748416401,
+        "relative_l2": 0.005680596676979927,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999838748416401,
+        "relative_l2": 0.005680596676979927,
+        "max_abs": 0.046875,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901965097773,
+        "relative_l2": 0.004435127427873155,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901965097773,
+        "relative_l2": 0.004435127427873155,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9998807260012079,
+        "relative_l2": 0.015445950328691041,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9998807260012079,
+        "relative_l2": 0.015445950328691041,
+        "max_abs": 0.078125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 47,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999014151800668,
+        "relative_l2": 0.014047431085723087,
+        "max_abs": 0.080078125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999014151800668,
+        "relative_l2": 0.014047431085723087,
+        "max_abs": 0.080078125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999837803241808,
+        "relative_l2": 0.0056968976991999595,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999837803241808,
+        "relative_l2": 0.0056968976991999595,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901965097773,
+        "relative_l2": 0.004435127427873155,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901965097773,
+        "relative_l2": 0.004435127427873155,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.999846422017297,
+        "relative_l2": 0.01752519324729161,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999846422017297,
+        "relative_l2": 0.01752519324729161,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 48,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999992677939994,
+        "relative_l2": 0.0012101332189666007,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999263691220087,
+        "relative_l2": 0.012144456799452858,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999262976023836,
+        "relative_l2": 0.012150239530705466,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999901978527577,
+        "relative_l2": 0.004428014813470987,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999902007076878,
+        "relative_l2": 0.004427359999092458,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999989813674373,
+        "relative_l2": 0.0014280920138820565,
+        "max_abs": 0.004991352558135986,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999989813559174,
+        "relative_l2": 0.0014281001190291273,
+        "max_abs": 0.004991352558135986,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999300918249038,
+        "relative_l2": 0.011870662466875128,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999300759785377,
+        "relative_l2": 0.011871768683811266,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 49,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999993782869644,
+        "relative_l2": 0.0011151084035400747,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999260853937191,
+        "relative_l2": 0.012159048672813507,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999261303505882,
+        "relative_l2": 0.012155273410467812,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999898252863553,
+        "relative_l2": 0.004513383445640217,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999898247121015,
+        "relative_l2": 0.004513517080090068,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999986093902331,
+        "relative_l2": 0.0016792324636886178,
+        "max_abs": 0.00394594669342041,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999986094246884,
+        "relative_l2": 0.0016792119536288793,
+        "max_abs": 0.00394594669342041,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999313945119432,
+        "relative_l2": 0.011726341499555044,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999313230523211,
+        "relative_l2": 0.011732110041541628,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 50,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999988004038434,
+        "relative_l2": 0.001549442688783575,
+        "max_abs": 0.015625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999228275540091,
+        "relative_l2": 0.012477751087088458,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999228970838632,
+        "relative_l2": 0.012468410060679289,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999899012366227,
+        "relative_l2": 0.0044976687808030965,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999899011702322,
+        "relative_l2": 0.004497683651744763,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999988278107194,
+        "relative_l2": 0.0015337271884335217,
+        "max_abs": 0.0021383389830589294,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999988277636189,
+        "relative_l2": 0.0015337599502830276,
+        "max_abs": 0.0021383389830589294,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999258478612449,
+        "relative_l2": 0.012259018425421203,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999260620777621,
+        "relative_l2": 0.012236855532855074,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 51,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998837355381224,
+        "relative_l2": 0.01526483573141536,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998837355381224,
+        "relative_l2": 0.01526483573141536,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999838654992065,
+        "relative_l2": 0.005680797229960551,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999838654992065,
+        "relative_l2": 0.005680797229960551,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999898462022037,
+        "relative_l2": 0.004518921920169244,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999898462022037,
+        "relative_l2": 0.004518921920169244,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.999894172836557,
+        "relative_l2": 0.014578814425533805,
+        "max_abs": 0.0703125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999894172836557,
+        "relative_l2": 0.014578814425533805,
+        "max_abs": 0.0703125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 51,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998451446341087,
+        "relative_l2": 0.017617218564556305,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998451446341087,
+        "relative_l2": 0.017617218564556305,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999836711450234,
+        "relative_l2": 0.005715172755274361,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999836711450234,
+        "relative_l2": 0.005715172755274361,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999898462022037,
+        "relative_l2": 0.004518921920169244,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999898462022037,
+        "relative_l2": 0.004518921920169244,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9998697592663376,
+        "relative_l2": 0.016253281683336455,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9998697592663376,
+        "relative_l2": 0.016253281683336455,
+        "max_abs": 0.15625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 51,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999999999999999,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998157714763369,
+        "relative_l2": 0.019195270608983666,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998157714763369,
+        "relative_l2": 0.019195270608983666,
+        "max_abs": 0.15625,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999836530431255,
+        "relative_l2": 0.005718189147230317,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999836530431255,
+        "relative_l2": 0.005718189147230317,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999898462022037,
+        "relative_l2": 0.004518921920169244,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999898462022037,
+        "relative_l2": 0.004518921920169244,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9998009642236213,
+        "relative_l2": 0.019954554145026743,
+        "max_abs": 0.21875,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9998009642236213,
+        "relative_l2": 0.019954554145026743,
+        "max_abs": 0.21875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 52,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999993913442363,
+        "relative_l2": 0.0011033200852220686,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999166294337365,
+        "relative_l2": 0.01292230242314429,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999916597766341,
+        "relative_l2": 0.012924652252116598,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999901304725098,
+        "relative_l2": 0.004442913280442636,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999901289551951,
+        "relative_l2": 0.004443253478454977,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999973134895352,
+        "relative_l2": 0.0023191958074296067,
+        "max_abs": 0.017839908599853516,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999973134880108,
+        "relative_l2": 0.002319196473367327,
+        "max_abs": 0.017839908599853516,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999156146194571,
+        "relative_l2": 0.012993481498867228,
+        "max_abs": 0.07421875,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999156503025569,
+        "relative_l2": 0.012990788386659112,
+        "max_abs": 0.07421875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 53,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999993882981023,
+        "relative_l2": 0.001106148936390307,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999123175532844,
+        "relative_l2": 0.013242410952184229,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999123389864634,
+        "relative_l2": 0.013240857500851057,
+        "max_abs": 0.078125,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999899977485911,
+        "relative_l2": 0.004472631555629605,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999899977624472,
+        "relative_l2": 0.004472628462275183,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999979535371997,
+        "relative_l2": 0.002023265292830112,
+        "max_abs": 0.005828946828842163,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.999997953547764,
+        "relative_l2": 0.0020232600808351778,
+        "max_abs": 0.005828946828842163,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999148915783665,
+        "relative_l2": 0.013050321012988622,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999149946520595,
+        "relative_l2": 0.013042719897905019,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 54,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999985372420712,
+        "relative_l2": 0.0017106070923986118,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999166075180316,
+        "relative_l2": 0.01291766992050532,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999164547483629,
+        "relative_l2": 0.012928951948586372,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999896338414462,
+        "relative_l2": 0.004553329879094175,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999896332332374,
+        "relative_l2": 0.004553462132314717,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999978018063266,
+        "relative_l2": 0.002113516267777774,
+        "max_abs": 0.0076868534088134766,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999978019994948,
+        "relative_l2": 0.0021134267288340424,
+        "max_abs": 0.0076868534088134766,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999200842477152,
+        "relative_l2": 0.012642320554470435,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999201406430899,
+        "relative_l2": 0.01263799011463051,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 55,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.999857666536756,
+        "relative_l2": 0.016871566318372656,
+        "max_abs": 0.1015625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999857666536756,
+        "relative_l2": 0.016871566318372656,
+        "max_abs": 0.1015625,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999841883076112,
+        "relative_l2": 0.005623534331538584,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999841883076112,
+        "relative_l2": 0.005623534331538584,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999895940105854,
+        "relative_l2": 0.004562231808695428,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999895940105854,
+        "relative_l2": 0.004562231808695428,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9998759000000305,
+        "relative_l2": 0.01576695126128404,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9998759000000305,
+        "relative_l2": 0.01576695126128404,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 55,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.999838493225144,
+        "relative_l2": 0.0179735196011369,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999838493225144,
+        "relative_l2": 0.0179735196011369,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840153636365,
+        "relative_l2": 0.005654236345384575,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840153636365,
+        "relative_l2": 0.005654236345384575,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999895940105854,
+        "relative_l2": 0.004562231808695428,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999895940105854,
+        "relative_l2": 0.004562231808695428,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9997897410191687,
+        "relative_l2": 0.020506095431741155,
+        "max_abs": 0.1328125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9997897410191687,
+        "relative_l2": 0.020506095431741155,
+        "max_abs": 0.1328125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 55,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998860830665488,
+        "relative_l2": 0.015096845354129154,
+        "max_abs": 0.109375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998860830665488,
+        "relative_l2": 0.015096845354129154,
+        "max_abs": 0.109375,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999839341520341,
+        "relative_l2": 0.005668551297322021,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999839341520341,
+        "relative_l2": 0.005668551297322021,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999895940105854,
+        "relative_l2": 0.004562231808695428,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999895940105854,
+        "relative_l2": 0.004562231808695428,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9998555573181327,
+        "relative_l2": 0.01699684773326559,
+        "max_abs": 0.109375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9998555573181327,
+        "relative_l2": 0.01699684773326559,
+        "max_abs": 0.109375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 56,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999989272501768,
+        "relative_l2": 0.0014647678634379165,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999023552910313,
+        "relative_l2": 0.013981696428312367,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999023173595836,
+        "relative_l2": 0.013984155081277046,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999902596128301,
+        "relative_l2": 0.004486178839060513,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999902596177683,
+        "relative_l2": 0.0044861776458144445,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999973212931462,
+        "relative_l2": 0.002316263207705227,
+        "max_abs": 0.008141905069351196,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.999997321294408,
+        "relative_l2": 0.002316262636638413,
+        "max_abs": 0.008141905069351196,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999110551992476,
+        "relative_l2": 0.013358724871328255,
+        "max_abs": 0.09375,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999112150721796,
+        "relative_l2": 0.0133462984456555,
+        "max_abs": 0.09375,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 57,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.99999912745873,
+        "relative_l2": 0.0013210220914406491,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999031224061092,
+        "relative_l2": 0.013927845131818658,
+        "max_abs": 0.1015625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999031522922532,
+        "relative_l2": 0.013925521322292389,
+        "max_abs": 0.09765625,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.999990029943489,
+        "relative_l2": 0.00453986033590781,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999900303129764,
+        "relative_l2": 0.0045397697555539926,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.999997076413239,
+        "relative_l2": 0.0024199663405303044,
+        "max_abs": 0.009836077690124512,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999970764081987,
+        "relative_l2": 0.0024199684608899,
+        "max_abs": 0.009836077690124512,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999113937806721,
+        "relative_l2": 0.013313207199294772,
+        "max_abs": 0.105377197265625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999113717221254,
+        "relative_l2": 0.013314792018260949,
+        "max_abs": 0.1062469482421875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 58,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999993119577066,
+        "relative_l2": 0.0011730680391474674,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999011764553787,
+        "relative_l2": 0.014058730824541593,
+        "max_abs": 0.16015625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999010491538328,
+        "relative_l2": 0.014067801886766883,
+        "max_abs": 0.16015625,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999898405048226,
+        "relative_l2": 0.004507963116220284,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999898405735808,
+        "relative_l2": 0.004507947854322095,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999958875319689,
+        "relative_l2": 0.0028812868242454985,
+        "max_abs": 0.007555723190307617,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999958875322819,
+        "relative_l2": 0.0028812867144764587,
+        "max_abs": 0.007555723190307617,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999019737129184,
+        "relative_l2": 0.01400935568144954,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.999901848393702,
+        "relative_l2": 0.014018207862342336,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 59,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998201260555283,
+        "relative_l2": 0.018974677849234962,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998201260555283,
+        "relative_l2": 0.018974677849234962,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840497156245,
+        "relative_l2": 0.005648554001241509,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999840497156245,
+        "relative_l2": 0.005648554001241509,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901874415492,
+        "relative_l2": 0.004443277334115144,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901874415492,
+        "relative_l2": 0.004443277334115144,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9998368253858827,
+        "relative_l2": 0.01806586893761007,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9998368253858827,
+        "relative_l2": 0.01806586893761007,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 59,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9996909177107035,
+        "relative_l2": 0.024971479933056102,
+        "max_abs": 0.375,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9996909177107035,
+        "relative_l2": 0.024971479933056102,
+        "max_abs": 0.375,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999839080876508,
+        "relative_l2": 0.005673597223269775,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999839080876508,
+        "relative_l2": 0.005673597223269775,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901874415492,
+        "relative_l2": 0.004443277334115144,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901874415492,
+        "relative_l2": 0.004443277334115144,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9997927945972668,
+        "relative_l2": 0.02047141081152837,
+        "max_abs": 0.25,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9997927945972668,
+        "relative_l2": 0.02047141081152837,
+        "max_abs": 0.25,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 59,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9996271689553311,
+        "relative_l2": 0.02733567466873913,
+        "max_abs": 0.5625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9996271689553311,
+        "relative_l2": 0.02733567466873913,
+        "max_abs": 0.5625,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999837477972248,
+        "relative_l2": 0.005701710785447001,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999837477972248,
+        "relative_l2": 0.005701710785447001,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901874415492,
+        "relative_l2": 0.004443277334115144,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901874415492,
+        "relative_l2": 0.004443277334115144,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9997293769130631,
+        "relative_l2": 0.023325981504280544,
+        "max_abs": 0.5625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9997293769130631,
+        "relative_l2": 0.023325981504280544,
+        "max_abs": 0.5625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 60,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999985895170166,
+        "relative_l2": 0.001679781073236617,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998997880051019,
+        "relative_l2": 0.01415831311770168,
+        "max_abs": 0.236328125,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.999899689663333,
+        "relative_l2": 0.014164872975411667,
+        "max_abs": 0.234375,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999902068285522,
+        "relative_l2": 0.004425636485231441,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999902087893372,
+        "relative_l2": 0.004425192976357497,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999957132507907,
+        "relative_l2": 0.0029288132311490133,
+        "max_abs": 0.006873965263366699,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999957133860699,
+        "relative_l2": 0.002928761587208403,
+        "max_abs": 0.006873965263366699,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999056247078818,
+        "relative_l2": 0.013739797667893563,
+        "max_abs": 0.173828125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999057731350796,
+        "relative_l2": 0.013728610166746645,
+        "max_abs": 0.171875,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 61,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999997731359708,
+        "relative_l2": 0.0006737047402557043,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999043764989237,
+        "relative_l2": 0.013828877758943658,
+        "max_abs": 0.140625,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999043202281745,
+        "relative_l2": 0.0138329499575758,
+        "max_abs": 0.140625,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999895371795644,
+        "relative_l2": 0.004574459156704872,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.9999895372037637,
+        "relative_l2": 0.004574453863926123,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999976157159596,
+        "relative_l2": 0.0022476635121864096,
+        "max_abs": 0.009099900722503662,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999976156988111,
+        "relative_l2": 0.002247671205718946,
+        "max_abs": 0.009099900722503662,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999061900425458,
+        "relative_l2": 0.013708431703772981,
+        "max_abs": 0.140625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999062300541308,
+        "relative_l2": 0.013706005177413352,
+        "max_abs": 0.140625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 62,
+    "kind": "gdn",
+    "ctx": 128,
+    "dispatches": {
+      "production": 11,
+      "default": 3
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 0.9999985180412142,
+        "relative_l2": 0.0017216319864725813,
+        "max_abs": 0.03125,
+        "finite": true
+      },
+      "default_selected": true,
+      "production_vs_mlx": {
+        "cosine": 0.9998835622536772,
+        "relative_l2": 0.015272035986810416,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9998835310742684,
+        "relative_l2": 0.015273735342596906,
+        "max_abs": 0.1875,
+        "finite": true
+      },
+      "production_conv_state_vs_mlx": {
+        "cosine": 0.9999897675868638,
+        "relative_l2": 0.0045238655859589,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_conv_state_vs_mlx": {
+        "cosine": 0.999989766025863,
+        "relative_l2": 0.004524212949207264,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_rec_state_vs_mlx": {
+        "cosine": 0.9999978816833699,
+        "relative_l2": 0.002058623284852651,
+        "max_abs": 0.005385681986808777,
+        "finite": true
+      },
+      "default_rec_state_vs_mlx": {
+        "cosine": 0.9999978816443928,
+        "relative_l2": 0.0020586420901266,
+        "max_abs": 0.005385681986808777,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9998929412595882,
+        "relative_l2": 0.014660792947874344,
+        "max_abs": 0.125,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9998932059254203,
+        "relative_l2": 0.014642215532069527,
+        "max_abs": 0.125,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 63,
+    "kind": "attention",
+    "ctx": 128,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0000000000000002,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999654583332173,
+        "relative_l2": 0.008418873037405896,
+        "max_abs": 1.0,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999654583332173,
+        "relative_l2": 0.008418873037405896,
+        "max_abs": 1.0,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999846070654227,
+        "relative_l2": 0.0055484804148768505,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999846070654227,
+        "relative_l2": 0.0055484804148768505,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901424120771,
+        "relative_l2": 0.004440707550250086,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901424120771,
+        "relative_l2": 0.004440707550250086,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999635626884676,
+        "relative_l2": 0.008617967240187287,
+        "max_abs": 1.0,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999635626884676,
+        "relative_l2": 0.008617967240187287,
+        "max_abs": 1.0,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 63,
+    "kind": "attention",
+    "ctx": 4096,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999414507690512,
+        "relative_l2": 0.010895911497945481,
+        "max_abs": 0.75,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999414507690512,
+        "relative_l2": 0.010895911497945481,
+        "max_abs": 0.75,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845326371983,
+        "relative_l2": 0.005561905243030323,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999845326371983,
+        "relative_l2": 0.005561905243030323,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901424120771,
+        "relative_l2": 0.004440707550250086,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901424120771,
+        "relative_l2": 0.004440707550250086,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999388474955596,
+        "relative_l2": 0.011061930822645656,
+        "max_abs": 2.5,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999388474955596,
+        "relative_l2": 0.011061930822645656,
+        "max_abs": 2.5,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  },
+  {
+    "layer": 63,
+    "kind": "attention",
+    "ctx": 8192,
+    "dispatches": {
+      "production": 9,
+      "default": 9
+    },
+    "checks": {
+      "default_vs_production": {
+        "cosine": 1.0,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+        "finite": true
+      },
+      "default_selected": false,
+      "fallback_bit_exact": true,
+      "production_vs_mlx": {
+        "cosine": 0.9999289838718791,
+        "relative_l2": 0.011935929487784843,
+        "max_abs": 0.75,
+        "finite": true
+      },
+      "default_vs_mlx": {
+        "cosine": 0.9999289838718791,
+        "relative_l2": 0.011935929487784843,
+        "max_abs": 0.75,
+        "finite": true
+      },
+      "production_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999843502343161,
+        "relative_l2": 0.005594584572709386,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_k_cache_tail_vs_mlx": {
+        "cosine": 0.9999843502343161,
+        "relative_l2": 0.005594584572709386,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901424120771,
+        "relative_l2": 0.004440707550250086,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "default_v_cache_tail_vs_mlx": {
+        "cosine": 0.9999901424120771,
+        "relative_l2": 0.004440707550250086,
+        "max_abs": 0.0625,
+        "finite": true
+      },
+      "production_vs_mlx_bf16": {
+        "cosine": 0.9999291371603856,
+        "relative_l2": 0.011976561237206177,
+        "max_abs": 0.625,
+        "finite": true
+      },
+      "default_vs_mlx_bf16": {
+        "cosine": 0.9999291371603856,
+        "relative_l2": 0.011976561237206177,
+        "max_abs": 0.625,
+        "finite": true
+      }
+    },
+    "oracle_pass": true
+  }
+]

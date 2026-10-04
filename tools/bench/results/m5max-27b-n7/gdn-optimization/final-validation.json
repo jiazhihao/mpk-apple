@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-10-02T09:28:55.405446+00:00",
+  "shader_validation": true,
+  "shared_regressions_passed": 587,
+  "prepromotion_default_tests_passed": 19,
+  "real_gdn_layers": 48,
+  "chain_layers": 5,
+  "chain_replay_bit_exact": true,
+  "sha256": {
+    "final-regressions.log": "41e2260cf9cb351a4ca6f13a7da0b06c90201ee53509dc120f91736859d03bd1",
+    "candidate-default-tests.log": "0caf379acbcb845c31b98bf4efeffb865a66d527d27d5bb4f34018bea0099078",
+    "all48-shader.jsonl": "98f142d30501656c0bda009ed8b76eeb64d85296c854ad85b6decbe619bab7de",
+    "chain5-shader.json": "ab3a402872d96e647225e34146bb9975a43726922671f5be2f0f315dd0ad6271",
+    "all48.jsonl": "23028ee70b39a11c1c5dccdc4583c2d5dd67e79c038a86c792dffdbc77ec7190",
+    "chain5.json": "83964ae9ad545af5a506104d5d3094bb99e0b98a0e4e2f56706d21040c90ecde",
+    "chain64.log": "ff09a0501f9532844aa9fe39857a3ffb348d23c285d5e6cb419527ce95802024",
+    "chain64-real.json": "d67465aa5d7863d54043e6671e70b664b93b0982c616faab6c7872174ca3aaf3",
+    "chain64-diagnostic.json": "9fd671fd8bff1f3f1ddcf9bbe3f58088854138d57aecb514a4dc5cd5940711a8",
+    "chain_diagnostic.py": "551954da3a4d981c12b57f3353f88ff8d543a2bdc70e3e33785e44ce9d502778",
+    "chain_compare.py": "5a2fc28e8918c8ad33e609cc736e292daa3a28b4287c0a1ce6c215eb9950a976",
+    "chain-finalists-ranking.json": "3a921bf7fa06cf6551f22b969c3fb4440838a6add7a8cbeb48b50f0eff36c32c"
+  },
+  "completed_utc": "2026-10-02T09:54:56.598483+00:00",
+  "all48_uninstrumented_passed": true,
+  "mlx_paired_wins": 432,
+  "mlx_pairs": 432,
+  "isolated_mixer_layers": [
+    0,
+    1,
+    30,
+    62
+  ],
+  "chain_finalists_passed": 9,
+  "chain_real64_passed": true,
+  "synthetic64_accumulated_passed": false,
+  "synthetic64_local_passed": true,
+  "synthetic64_local_checks": 256
+}

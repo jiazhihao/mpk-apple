@@ -1,0 +1,122 @@
+[
+  {
+    "feature": {
+      "workers": 80,
+      "sgs": 4,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 2,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 40,
+      "sgs": 8,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 1,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 40,
+      "sgs": 8,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 2,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 160,
+      "sgs": 8,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 1,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 320,
+      "sgs": 8,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 1,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 80,
+      "sgs": 8,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 1,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 320,
+      "sgs": 4,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 1,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 80,
+      "sgs": 4,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 1,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 1,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  },
+  {
+    "feature": {
+      "workers": 40,
+      "sgs": 8,
+      "tn": 16,
+      "compact": true,
+      "ksplit": 4,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  }
+]

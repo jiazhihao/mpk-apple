@@ -1,0 +1,14 @@
+[
+  {
+    "lm_head": {
+      "workers": 160,
+      "sgs": 4,
+      "tn": 32,
+      "compact": true,
+      "ksplit": 4,
+      "mode": "native",
+      "staged_tk": 64,
+      "ragged_teams": true
+    }
+  }
+]

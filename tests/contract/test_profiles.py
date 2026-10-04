@@ -56,3 +56,23 @@ def test_accelerator_fields():
         Profile.from_dict("p", dict(base, engine=dict(base["engine"], accelerator_min_t={"nvfp4": 0})))
     m5 = load_profiles()["apple-m5-pro-20c"]
     assert m5.accelerator == "on" and m5.accelerator_min_t["nvfp4"] == 2 and m5.accelerator_min_t["bf16"] == 4 and 0.9 < m5.cost("accelerator_nvfp4", 8) < 1.2   # the writer's row (1.04 with the V3 decode)
+
+
+def test_gdn_mixer_default_is_limited_to_measured_profile():
+    ps = load_profiles()
+    assert {name for name, p in ps.items() if p.gdn_mixer_fusion} == {"apple-m5-max-40c"}
+    p = ps["apple-m5-max-40c"]
+    assert p.gdn_mixer_fusion["shape"] == [5120, 16, 48, 128, 128, 4]
+    assert (p.gdn_mixer_fusion["workers"], p.gdn_mixer_fusion["sgs"]) == (80, 8)
+    for change in ({"workers": 0}, {"workers": 161}, {"barrier": "leader"}, {"sgs": 32}, {"shape": [5120]},
+                   {"q_outer": True}, {"fp8_decode": "half"}, {"fp8_tile_block": 512}, {"direct_norm": False},
+                   {"dual_permute": False}, {"perm_sgs": 32}, {"gemm_overrides": {}}, {"unknown_knob": 1}):
+        doc = dict(p.raw, engine=dict(p.raw["engine"], gdn_mixer_fusion=dict(p.gdn_mixer_fusion, **change)))
+        with pytest.raises(ValueError, match="gdn_mixer_fusion"):
+            Profile.from_dict("invalid", doc)
+    for change in ({"groups": 0}, {"groups": 241}, {"ksplit": 3}, {"ragged_teams": False}, {"tn": 16}):
+        overrides = dict(p.gdn_mixer_fusion["gemm_overrides"])
+        overrides["0"] = dict(overrides["0"], **change)
+        doc = dict(p.raw, engine=dict(p.raw["engine"], gdn_mixer_fusion=dict(p.gdn_mixer_fusion, gemm_overrides=overrides)))
+        with pytest.raises(ValueError, match="gdn_mixer_fusion"):
+            Profile.from_dict("invalid", doc)

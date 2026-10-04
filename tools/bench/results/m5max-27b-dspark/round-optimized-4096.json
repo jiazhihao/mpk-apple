@@ -1,0 +1,395 @@
+{
+  "mode": "optimized",
+  "config": {
+    "bf16_min_t": 2,
+    "draft_attention": "mma",
+    "draft": {
+      "mixer": {
+        "workers": 160,
+        "sgs": 8,
+        "tn": 32,
+        "compact": true,
+        "split": true,
+        "barrier": "simd",
+        "task_barrier": false,
+        "schedule": "queue",
+        "task_grain": "tile",
+        "task_seed": true,
+        "task_seed_bound": true,
+        "attention_chunk_tiles": 8,
+        "attention_qm": 16,
+        "attention_cached_prefix": true,
+        "attention_compact_partials": true
+      },
+      "mlp": {
+        "workers": 80,
+        "sgs": 4,
+        "tn": 16,
+        "compact": true,
+        "ksplit": 4,
+        "mode": "native",
+        "staged_tk": 128
+      }
+    },
+    "target": {
+      "gdn": {
+        "shape": [
+          5120,
+          16,
+          48,
+          128,
+          128,
+          4
+        ],
+        "workers": 80,
+        "sgs": 8,
+        "tn": 32,
+        "split": true,
+        "compact": true,
+        "gdn_sl": 8,
+        "barrier": "simd",
+        "task_barrier": false,
+        "scalar_sgs": 8,
+        "fp8_layout": "tile",
+        "q_outer": 0,
+        "fp8_decode": "subtract",
+        "fp8_tile_block": 8,
+        "restrict_weights": false,
+        "gemm_overrides": {
+          "3": {
+            "tn": 32,
+            "ksplit": 4,
+            "groups": 120,
+            "ragged_teams": true
+          },
+          "0": {
+            "tn": 32,
+            "ksplit": 2,
+            "groups": 240,
+            "ragged_teams": true
+          },
+          "1": {
+            "tn": 16,
+            "ksplit": 8,
+            "groups": 240,
+            "ragged_teams": true
+          },
+          "2": {
+            "tn": 32,
+            "ksplit": 8,
+            "groups": 120,
+            "ragged_teams": true
+          }
+        },
+        "perm_sgs": 64,
+        "direct_norm": true,
+        "dual_permute": true
+      },
+      "attention": {
+        "attention_cached_prefix": true,
+        "attention_chunk_tiles": 16,
+        "attention_groups": 160,
+        "attention_prepare": false,
+        "attention_qm": 16,
+        "attention_task_tiles": 1,
+        "barrier": "simd",
+        "compact": true,
+        "fp8_decode": "half",
+        "fp8_layout": "tile",
+        "fp8_tile_block": 8,
+        "gemm_overrides": {
+          "0": {
+            "ksplit": 8,
+            "q_outer": 1,
+            "tn": 16
+          },
+          "2": {
+            "ksplit": 4,
+            "q_outer": 1,
+            "tn": 32
+          }
+        },
+        "merge_sgs": 8,
+        "merge_unroll": 2,
+        "q_outer": 0,
+        "scalar_sgs": 2,
+        "schedule": "queue",
+        "sgs": 8,
+        "split": true,
+        "task_barrier": false,
+        "task_batch": 1,
+        "task_grain": "tile",
+        "task_seed": true,
+        "tn": 32,
+        "workers": 120
+      },
+      "mlp": {
+        "cache_external_inputs": false,
+        "compact": true,
+        "gemm_overrides": {
+          "1": {
+            "groups": 640
+          }
+        },
+        "ksplit": 4,
+        "mode": "native",
+        "nvfp4_layout": "tile",
+        "nvfp4_tile_block": 32,
+        "post_norm_loads": 16,
+        "post_norm_once": true,
+        "post_norm_prefold": false,
+        "sgs": 4,
+        "staged_tk": 64,
+        "tn": 32,
+        "workers": 160
+      }
+    }
+  },
+  "chip": "Apple M5 Max",
+  "cores": 40,
+  "weights": "target NVFP4/FP8; draft original BF16, shared target embedding and LM head",
+  "semantics": "seven drafts plus anchor verified; acceptance/commit and next drafting included; nonterminal replay",
+  "prompt_sha256": "c913ab9975beb8c592556d4e9a63305edfdbb1b89ead4fc24126ad492a753628",
+  "contexts": [
+    {
+      "context": 4096,
+      "prefill_ms": 11931.308874976821,
+      "initial_drafts": [
+        7905,
+        48889,
+        13,
+        2302,
+        9150,
+        279,
+        1788
+      ],
+      "samples": [
+        {
+          "gpu_ms": 52.14212500141002,
+          "wall_ms": 52.4852499961853,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 52.73975001182407,
+          "wall_ms": 53.13270831108093,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 51.96116666775197,
+          "wall_ms": 53.41266664862633,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 51.51591668254696,
+          "wall_ms": 52.77224999666214,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 52.13895833003335,
+          "wall_ms": 52.9195416867733,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 53.23545835562982,
+          "wall_ms": 54.406375020742416,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        },
+        {
+          "gpu_ms": 55.70945833460428,
+          "wall_ms": 56.0633749961853,
+          "tokens": [
+            7905,
+            48889,
+            13,
+            2302,
+            9150,
+            279,
+            1788,
+            1879
+          ],
+          "accepted": 7,
+          "committed": 8,
+          "next_drafts": [
+            10885,
+            11,
+            1558,
+            13914,
+            11,
+            2193,
+            27396
+          ]
+        }
+      ],
+      "generated_source_sha256": "21bf7f47add3b48c6688d89d07f272b42334b0bca6c4aacb3e2bb2679ed827f6",
+      "dispatches": 313,
+      "gpu_ms_min": 51.51591668254696,
+      "gpu_ms_median": 52.14212500141002,
+      "gpu_ms_max": 55.70945833460428,
+      "wall_ms_median": 53.13270831108093,
+      "stage_medians": {
+        "verification": 39.343500015093014,
+        "accept_commit": 1.2974583369214088,
+        "draft": 11.080124997533858
+      },
+      "stages": [
+        {
+          "verification": 42.167958308709785,
+          "accept_commit": 1.339250011369586,
+          "draft": 11.536041653016582
+        },
+        {
+          "verification": 42.84062501392327,
+          "accept_commit": 1.3100833166390657,
+          "draft": 11.79200000478886
+        },
+        {
+          "verification": 40.58324999641627,
+          "accept_commit": 1.3412916741799563,
+          "draft": 11.027124972315505
+        },
+        {
+          "verification": 39.1372500162106,
+          "accept_commit": 1.2790833425242454,
+          "draft": 11.01633335929364
+        },
+        {
+          "verification": 39.250875008292496,
+          "accept_commit": 1.2666249822359532,
+          "draft": 11.325625004246831
+        },
+        {
+          "verification": 39.343500015093014,
+          "accept_commit": 1.2710000155493617,
+          "draft": 11.042124999221414
+        },
+        {
+          "verification": 39.322166674537584,
+          "accept_commit": 1.2974583369214088,
+          "draft": 11.080124997533858
+        }
+      ],
+      "split_bit_exact": true,
+      "replay_bit_exact": true
+    }
+  ]
+}

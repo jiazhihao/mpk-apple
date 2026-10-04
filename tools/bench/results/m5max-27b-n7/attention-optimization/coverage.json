@@ -1,0 +1,2313 @@
+{
+  "scope": "Finite adaptive search; full Cartesian product of all knobs was not evaluated.",
+  "phases": [
+    {
+      "file": "packing.jsonl",
+      "sha256": "a8bdb39505a00a90390d2cf9a8a7db1f88a4237f85dd2fcb055d48c10b070fb7",
+      "points": 336,
+      "accepted": 336,
+      "rejected": 0,
+      "configurations": 112,
+      "contexts": [
+        128,
+        8192,
+        32768
+      ],
+      "errors": {}
+    },
+    {
+      "file": "partition.jsonl",
+      "sha256": "de86ada1b0df8c06d775909ddb9a11357c8b4f536650ee2d51ff6345fad6b67d",
+      "points": 930,
+      "accepted": 895,
+      "rejected": 35,
+      "configurations": 320,
+      "contexts": [
+        128,
+        8192,
+        32768
+      ],
+      "errors": {
+        "bounded static barrier timed out": 35
+      }
+    },
+    {
+      "file": "architecture-refine-128.jsonl",
+      "sha256": "b1f8f48ee382006a04921195dee1799a6900f4fd0e253653b029bf9348048497",
+      "points": 182,
+      "accepted": 172,
+      "rejected": 10,
+      "configurations": 182,
+      "contexts": [
+        128
+      ],
+      "errors": {
+        "bounded static barrier timed out": 10
+      }
+    },
+    {
+      "file": "architecture-refine-8192.jsonl",
+      "sha256": "8a0ca86a46faa8487cbb5051aca4011a2eef3ff7663eaba55b9362a2d36f5944",
+      "points": 180,
+      "accepted": 167,
+      "rejected": 13,
+      "configurations": 180,
+      "contexts": [
+        8192
+      ],
+      "errors": {
+        "bounded static barrier timed out": 13
+      }
+    },
+    {
+      "file": "architecture-refine-32768.jsonl",
+      "sha256": "1adf26c9ce260dc5507eb3788afe706c56ff6ad303c77f3d192a20883f12d13c",
+      "points": 180,
+      "accepted": 169,
+      "rejected": 11,
+      "configurations": 180,
+      "contexts": [
+        32768
+      ],
+      "errors": {
+        "bounded static barrier timed out": 11
+      }
+    },
+    {
+      "file": "memory-refine-128.jsonl",
+      "sha256": "b7560073b9cc8b722386bc59fc58e709d378edd66a198509af10003afc57fde5",
+      "points": 85,
+      "accepted": 85,
+      "rejected": 0,
+      "configurations": 85,
+      "contexts": [
+        128
+      ],
+      "errors": {}
+    },
+    {
+      "file": "memory-refine-8192.jsonl",
+      "sha256": "6038fa196523f86000ccfe6a62e2a54c14fe6a028bcd39d2652527d0e80da68b",
+      "points": 85,
+      "accepted": 85,
+      "rejected": 0,
+      "configurations": 85,
+      "contexts": [
+        8192
+      ],
+      "errors": {}
+    },
+    {
+      "file": "memory-refine-32768.jsonl",
+      "sha256": "695bd9182f06e18059c8922aa86ab81aa6ba71b1f2621e15511233b35c4151a9",
+      "points": 85,
+      "accepted": 85,
+      "rejected": 0,
+      "configurations": 85,
+      "contexts": [
+        32768
+      ],
+      "errors": {}
+    },
+    {
+      "file": "projection-refine-128.jsonl",
+      "sha256": "d0ed481ca8d59b8f29ce20a467c7655ced30df2cc3c379e42ac1729d785adbe8",
+      "points": 92,
+      "accepted": 92,
+      "rejected": 0,
+      "configurations": 92,
+      "contexts": [
+        128
+      ],
+      "errors": {}
+    },
+    {
+      "file": "projection-refine-8192.jsonl",
+      "sha256": "e8c8f5444fdc81c6a89a772e706a78ba4dcd90a45741659ac19f7572fb263005",
+      "points": 94,
+      "accepted": 90,
+      "rejected": 4,
+      "configurations": 94,
+      "contexts": [
+        8192
+      ],
+      "errors": {
+        "static task preprocessing failed: <stdin>:270:2: error: \"gemm_tile: KSPLIT must divide the K tiles\"": 4
+      }
+    },
+    {
+      "file": "projection-refine-32768.jsonl",
+      "sha256": "3972c92cf40bf529b24852c90fc0f5f27849595814b8777f5c895305a266f919",
+      "points": 94,
+      "accepted": 90,
+      "rejected": 4,
+      "configurations": 94,
+      "contexts": [
+        32768
+      ],
+      "errors": {
+        "static task preprocessing failed: <stdin>:270:2: error: \"gemm_tile: KSPLIT must divide the K tiles\"": 4
+      }
+    },
+    {
+      "file": "q24-refine-128.jsonl",
+      "sha256": "7615aedaa343745908fee5903c8e49d7fc74891f6d7a81110e20a60915a7c0ea",
+      "points": 30,
+      "accepted": 30,
+      "rejected": 0,
+      "configurations": 30,
+      "contexts": [
+        128
+      ],
+      "errors": {}
+    },
+    {
+      "file": "q24-refine-8192.jsonl",
+      "sha256": "5f77af4fc6cb5443722856726130880a608dfc96e696a99fbfdc0de75d7337c8",
+      "points": 30,
+      "accepted": 29,
+      "rejected": 1,
+      "configurations": 30,
+      "contexts": [
+        8192
+      ],
+      "errors": {
+        "bounded static barrier timed out": 1
+      }
+    },
+    {
+      "file": "q24-refine-32768.jsonl",
+      "sha256": "4ab7becf55ada4aef80088ad28565a199169f7cc33e7c57c46c4912f35fd175a",
+      "points": 30,
+      "accepted": 29,
+      "rejected": 1,
+      "configurations": 30,
+      "contexts": [
+        32768
+      ],
+      "errors": {
+        "bounded static barrier timed out": 1
+      }
+    },
+    {
+      "file": "stage-refine-128.jsonl",
+      "sha256": "316eab7cdbfa873505724e337867b595f758c9a1ff6bdf8c89c952ec0df3de22",
+      "points": 97,
+      "accepted": 97,
+      "rejected": 0,
+      "configurations": 97,
+      "contexts": [
+        128
+      ],
+      "errors": {}
+    },
+    {
+      "file": "stage-refine-8192.jsonl",
+      "sha256": "2939c293290f6514566aab1189bc63d8428002cfaa963f2ac324fc6555e201b1",
+      "points": 109,
+      "accepted": 109,
+      "rejected": 0,
+      "configurations": 109,
+      "contexts": [
+        8192
+      ],
+      "errors": {}
+    },
+    {
+      "file": "stage-refine-32768.jsonl",
+      "sha256": "d58c459ace8fc65669247c552e04bc39fbdfa4d14a1438656364fddaf8171fa4",
+      "points": 109,
+      "accepted": 109,
+      "rejected": 0,
+      "configurations": 109,
+      "contexts": [
+        32768
+      ],
+      "errors": {}
+    },
+    {
+      "file": "combination-refine-128.jsonl",
+      "sha256": "2d3c282a1de06389a337c6eda1a5139e43136e0329b8a42da0e2f9aaf3fb8bb0",
+      "points": 27,
+      "accepted": 27,
+      "rejected": 0,
+      "configurations": 27,
+      "contexts": [
+        128
+      ],
+      "errors": {}
+    },
+    {
+      "file": "combination-refine-8192.jsonl",
+      "sha256": "7d1b7a5f911522ec471bdf8b0e7ec8ce37c560f33db145af9d6abd1781127514",
+      "points": 27,
+      "accepted": 27,
+      "rejected": 0,
+      "configurations": 27,
+      "contexts": [
+        8192
+      ],
+      "errors": {}
+    },
+    {
+      "file": "combination-refine-32768.jsonl",
+      "sha256": "47af881f0af9eabbcf3fd9da5cfe0db70608affb92718efbdd2134c7338630c1",
+      "points": 27,
+      "accepted": 27,
+      "rejected": 0,
+      "configurations": 27,
+      "contexts": [
+        32768
+      ],
+      "errors": {}
+    },
+    {
+      "file": "schedule-refine-128.jsonl",
+      "sha256": "11751ecc8097b956c70ea9320b01001536476da59e68e1d5fabbb46dde3ee6f2",
+      "points": 281,
+      "accepted": 281,
+      "rejected": 0,
+      "configurations": 281,
+      "contexts": [
+        128
+      ],
+      "errors": {}
+    },
+    {
+      "file": "schedule-refine-8192.jsonl",
+      "sha256": "fce3e33da2805fda43949022ea2f36923c6481843b9d5211734ff7f46cd7cbe7",
+      "points": 344,
+      "accepted": 344,
+      "rejected": 0,
+      "configurations": 344,
+      "contexts": [
+        8192
+      ],
+      "errors": {}
+    },
+    {
+      "file": "schedule-refine-32768.jsonl",
+      "sha256": "79163831eb13634b525d0b40cf9041440c84c0e8ab35c3fec48c10f43e2914bd",
+      "points": 344,
+      "accepted": 344,
+      "rejected": 0,
+      "configurations": 344,
+      "contexts": [
+        32768
+      ],
+      "errors": {}
+    },
+    {
+      "file": "worker-refine-128.jsonl",
+      "sha256": "351a815174708818aa3fb3a629f37f67851dc55c1ae9c7d1b0856f86d5d319e4",
+      "points": 256,
+      "accepted": 256,
+      "rejected": 0,
+      "configurations": 256,
+      "contexts": [
+        128
+      ],
+      "errors": {}
+    },
+    {
+      "file": "worker-refine-8192.jsonl",
+      "sha256": "e717a51ff2aa77042edede57d984d3b37cdf3a3794d4fc7ac8b1f20cfb3b15dc",
+      "points": 256,
+      "accepted": 197,
+      "rejected": 59,
+      "configurations": 256,
+      "contexts": [
+        8192
+      ],
+      "errors": {
+        "bounded static barrier timed out": 59
+      }
+    },
+    {
+      "file": "worker-refine-32768.jsonl",
+      "sha256": "22e4105bf43a3d4e5bdd71f7e6e19ab10cf648a4714371e4c32b2c4cd0943a0b",
+      "points": 256,
+      "accepted": 197,
+      "rejected": 59,
+      "configurations": 256,
+      "contexts": [
+        32768
+      ],
+      "errors": {
+        "bounded static barrier timed out": 59
+      }
+    },
+    {
+      "file": "compact-refine-128.jsonl",
+      "sha256": "6d2a38394842fee62d95c9bc4646b4855561264fa204fbaa31d9357263b399fa",
+      "points": 16,
+      "accepted": 16,
+      "rejected": 0,
+      "configurations": 16,
+      "contexts": [
+        128
+      ],
+      "errors": {}
+    },
+    {
+      "file": "compact-refine-8192.jsonl",
+      "sha256": "7d75c8e2b509fd7907f7daf8e6af78d855fac88f71c253fa951bb73bac5fa314",
+      "points": 8,
+      "accepted": 8,
+      "rejected": 0,
+      "configurations": 8,
+      "contexts": [
+        8192
+      ],
+      "errors": {}
+    },
+    {
+      "file": "compact-refine-32768.jsonl",
+      "sha256": "1c8aa2800a0c05dc8772efbacaa910284b92e58594f84a2d62bbdb28f95991f0",
+      "points": 16,
+      "accepted": 16,
+      "rejected": 0,
+      "configurations": 16,
+      "contexts": [
+        32768
+      ],
+      "errors": {}
+    },
+    {
+      "file": "bridge.jsonl",
+      "sha256": "3eb288672f9cd5b3e0c3605e75f5db13f79d00e922204fb491808b727659e6e5",
+      "points": 296,
+      "accepted": 296,
+      "rejected": 0,
+      "configurations": 148,
+      "contexts": [
+        4096,
+        16384
+      ],
+      "errors": {}
+    }
+  ],
+  "total_points": 4902,
+  "accepted": 4705,
+  "rejected": 197,
+  "unique_configurations": 3459,
+  "explicit_values": {
+    "arrival": [
+      "register",
+      "rmw",
+      "store"
+    ],
+    "attention_alias_scratch": [
+      false,
+      true
+    ],
+    "attention_cached_prefix": [
+      true
+    ],
+    "attention_chunk_tiles": [
+      1,
+      1024,
+      12,
+      128,
+      16,
+      2,
+      24,
+      256,
+      3,
+      32,
+      4,
+      48,
+      512,
+      6,
+      64,
+      8
+    ],
+    "attention_compact_partials": [
+      false,
+      true
+    ],
+    "attention_groups": [
+      160,
+      320,
+      40,
+      640,
+      80
+    ],
+    "attention_key_tile": [
+      128,
+      16,
+      32,
+      64
+    ],
+    "attention_prepare": [
+      false,
+      true
+    ],
+    "attention_qm": [
+      16,
+      24,
+      32,
+      8
+    ],
+    "attention_style": [
+      "cooperative",
+      "staged"
+    ],
+    "attention_task_tiles": [
+      1,
+      12,
+      16,
+      2,
+      24,
+      3,
+      32,
+      4,
+      6,
+      8
+    ],
+    "barrier": [
+      "leader",
+      "serial",
+      "simd"
+    ],
+    "compact": [
+      false,
+      true
+    ],
+    "direct_norm": [
+      false,
+      true
+    ],
+    "flag_stride": [
+      1,
+      16,
+      2,
+      32,
+      4,
+      64,
+      8
+    ],
+    "fp8_decode": [
+      "bits",
+      "half",
+      "half_operand",
+      "lut",
+      "standard",
+      "subtract",
+      "vector"
+    ],
+    "fp8_layout": [
+      "blm",
+      "tile"
+    ],
+    "fp8_storage": [
+      "bf16",
+      "half"
+    ],
+    "fp8_tile_block": [
+      1,
+      128,
+      16,
+      2,
+      256,
+      32,
+      4,
+      512,
+      64,
+      8
+    ],
+    "gemm_overrides": [
+      {
+        "0": {
+          "fp8_decode": "bits"
+        }
+      },
+      {
+        "0": {
+          "fp8_decode": "half"
+        }
+      },
+      {
+        "0": {
+          "fp8_decode": "half_operand"
+        }
+      },
+      {
+        "0": {
+          "fp8_decode": "lut"
+        }
+      },
+      {
+        "0": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "0": {
+          "fp8_decode": "subtract"
+        }
+      },
+      {
+        "0": {
+          "fp8_decode": "vector"
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 128
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        },
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 16
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 256
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 32
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 4
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        },
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        },
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 512
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 64
+        }
+      },
+      {
+        "0": {
+          "fp8_tile_block": 8
+        }
+      },
+      {
+        "0": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "1": {
+          "fp8_tile_block": 32
+        },
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "1": {
+          "fp8_tile_block": 32
+        },
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "1": {
+          "fp8_tile_block": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "1": {
+          "fp8_tile_block": 32
+        },
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "1": {
+          "fp8_tile_block": 32
+        },
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "1": {
+          "fp8_tile_block": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "0": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "subtract"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "subtract"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "subtract"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "vector"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "vector"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "vector"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "subtract"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "subtract"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "subtract"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "vector"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "vector"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        },
+        "1": {
+          "fp8_decode": "vector"
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "0": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "0": {
+          "weight_prefetch": 1
+        }
+      },
+      {
+        "0": {
+          "weight_prefetch": 2
+        }
+      },
+      {
+        "0": {
+          "weight_prefetch": 4
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "bits"
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "half"
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "half_operand"
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "lut"
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "subtract"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "subtract"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "subtract"
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "vector"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "vector"
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "fp8_decode": "vector"
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 128
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 16
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 256
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 32
+        },
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 32
+        },
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 32
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 4
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 512
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 64
+        }
+      },
+      {
+        "1": {
+          "fp8_tile_block": 8
+        }
+      },
+      {
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        },
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        },
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "1": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "1": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "1": {
+          "weight_prefetch": 1
+        }
+      },
+      {
+        "1": {
+          "weight_prefetch": 2
+        }
+      },
+      {
+        "1": {
+          "weight_prefetch": 4
+        }
+      },
+      {
+        "2": {
+          "fp8_decode": "bits"
+        }
+      },
+      {
+        "2": {
+          "fp8_decode": "half"
+        }
+      },
+      {
+        "2": {
+          "fp8_decode": "half_operand"
+        }
+      },
+      {
+        "2": {
+          "fp8_decode": "lut"
+        }
+      },
+      {
+        "2": {
+          "fp8_decode": "standard"
+        }
+      },
+      {
+        "2": {
+          "fp8_decode": "subtract"
+        }
+      },
+      {
+        "2": {
+          "fp8_decode": "vector"
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 128
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 16
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 1
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 256
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 2
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 32
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 4
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 512
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 64
+        }
+      },
+      {
+        "2": {
+          "fp8_tile_block": 8
+        }
+      },
+      {
+        "2": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "2": {
+          "ksplit": 1,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "2": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "2": {
+          "ksplit": 1,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "2": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "2": {
+          "ksplit": 2,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "2": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "2": {
+          "ksplit": 2,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "2": {
+          "ksplit": 4,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "2": {
+          "ksplit": 4,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "2": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 16
+        }
+      },
+      {
+        "2": {
+          "ksplit": 8,
+          "q_outer": 0,
+          "tn": 32
+        }
+      },
+      {
+        "2": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 16
+        }
+      },
+      {
+        "2": {
+          "ksplit": 8,
+          "q_outer": 1,
+          "tn": 32
+        }
+      },
+      {
+        "2": {
+          "weight_prefetch": 1
+        }
+      },
+      {
+        "2": {
+          "weight_prefetch": 2
+        }
+      },
+      {
+        "2": {
+          "weight_prefetch": 4
+        }
+      }
+    ],
+    "k_unroll": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "ksplit": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "merge_sgs": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "merge_unroll": [
+      1,
+      16,
+      2,
+      32,
+      4,
+      8
+    ],
+    "mode": [
+      "staged"
+    ],
+    "narrow_weights": [
+      false,
+      true
+    ],
+    "noinline": [
+      false,
+      true
+    ],
+    "perm_sgs": [
+      1,
+      128,
+      16,
+      2,
+      32,
+      4,
+      64,
+      8
+    ],
+    "poll_sgs": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "q_outer": [
+      0,
+      1
+    ],
+    "restrict_weights": [
+      true
+    ],
+    "scalar_sgs": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "schedule": [
+      "interleave",
+      "queue",
+      "stages"
+    ],
+    "sgs": [
+      1,
+      16,
+      2,
+      32,
+      4,
+      8
+    ],
+    "short_decode": [
+      false,
+      true
+    ],
+    "split": [
+      true
+    ],
+    "staged_tk": [
+      128,
+      256,
+      64
+    ],
+    "task_barrier": [
+      false,
+      true
+    ],
+    "task_batch": [
+      1,
+      16,
+      2,
+      32,
+      4,
+      8
+    ],
+    "task_grain": [
+      "group",
+      "tile"
+    ],
+    "task_seed": [
+      false,
+      true
+    ],
+    "task_seed_bound": [
+      false,
+      true
+    ],
+    "tk": [
+      16,
+      32
+    ],
+    "tm": [
+      16,
+      32
+    ],
+    "tn": [
+      16,
+      32
+    ],
+    "unroll": [
+      false,
+      true
+    ],
+    "weight_prefetch": [
+      0,
+      1,
+      2,
+      4
+    ],
+    "workers": [
+      1,
+      10,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108,
+      109,
+      11,
+      110,
+      111,
+      112,
+      113,
+      114,
+      115,
+      116,
+      117,
+      118,
+      119,
+      12,
+      120,
+      121,
+      122,
+      123,
+      124,
+      125,
+      126,
+      127,
+      128,
+      129,
+      13,
+      130,
+      131,
+      132,
+      133,
+      134,
+      135,
+      136,
+      137,
+      138,
+      139,
+      14,
+      140,
+      141,
+      142,
+      143,
+      144,
+      145,
+      146,
+      147,
+      148,
+      149,
+      15,
+      150,
+      151,
+      152,
+      153,
+      154,
+      155,
+      156,
+      157,
+      158,
+      159,
+      16,
+      160,
+      161,
+      162,
+      163,
+      164,
+      165,
+      166,
+      167,
+      168,
+      169,
+      17,
+      170,
+      171,
+      172,
+      173,
+      174,
+      175,
+      176,
+      177,
+      178,
+      179,
+      18,
+      180,
+      181,
+      182,
+      183,
+      184,
+      185,
+      186,
+      187,
+      188,
+      189,
+      19,
+      190,
+      191,
+      192,
+      193,
+      194,
+      195,
+      196,
+      197,
+      198,
+      199,
+      2,
+      20,
+      200,
+      201,
+      202,
+      203,
+      204,
+      205,
+      206,
+      207,
+      208,
+      209,
+      21,
+      210,
+      211,
+      212,
+      213,
+      214,
+      215,
+      216,
+      217,
+      218,
+      219,
+      22,
+      220,
+      221,
+      222,
+      223,
+      224,
+      225,
+      226,
+      227,
+      228,
+      229,
+      23,
+      230,
+      231,
+      232,
+      233,
+      234,
+      235,
+      236,
+      237,
+      238,
+      239,
+      24,
+      240,
+      241,
+      242,
+      243,
+      244,
+      245,
+      246,
+      247,
+      248,
+      249,
+      25,
+      250,
+      251,
+      252,
+      253,
+      254,
+      255,
+      256,
+      26,
+      27,
+      28,
+      29,
+      3,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      4,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      5,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      6,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      7,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      8,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      9,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99
+    ]
+  },
+  "measurement_exclusions": {
+    "reason": "A shader validation process briefly overlapped the timing process; conservatively discard the final 20 of 180 rows and repeat them serially.",
+    "source": "architecture-refine-32768-initial.jsonl",
+    "excluded_one_based_rows": [
+      161,
+      180
+    ],
+    "observed_overlap_after_completed_rows": 167,
+    "completed_rows_after_validation_exited": 176,
+    "replacement": "architecture-tail-repair.jsonl",
+    "replacement_complete": true,
+    "valid_combined_file": "architecture-refine-32768.jsonl"
+  },
+  "selection": {
+    "from_phase": "stage",
+    "seed_selection": "minimum absolute candidate GPU time among accepted rows, excluding every configuration with a rejection",
+    "reason": "An unusually slow native sample can make candidate/native ranking favor an objectively slower candidate.",
+    "final_selection": "After four-layer confirmation, retain the fastest recipe among the candidates that win every original pair, fall within the 3% minimum-time band, and whose worst paired ratio is within 5% of the best worst ratio in that band. The initial simplicity preference was superseded because repeated short/4K measurements showed useful gains from their projection overrides. Complexity only breaks exact performance ties. The following all16 comparison is independent confirmation.",
+    "stability_amendment": "Longer 32K repeats exposed stalls for the same generated shader with 160 workers. Finalists include median/max leaders and the two most stable dense-worker candidates crossed with compact-partial and seeded-bound options. Selection requires every original-Monolith pair won on the four confirmation layers, then chooses the simplest recipe within 3% of the best minimum-latency eligible recipe. All16 independent confirmation still reports every pair, including failures.",
+    "tail_amendment": "Among candidates within the 3% minimum-time band and winning every original pair, retain only candidates whose worst paired ratio is within 5% of the best worst ratio in that set, then apply the simplicity tie-breaker. This prevents near-threshold intermittent stalls from winning solely through a smaller dictionary or round worker count."
+  },
+  "finalist_confirmation": {
+    "points": 188,
+    "accepted": 184,
+    "rejected": 4,
+    "file_sha256": {
+      "finalists-128-layer15.jsonl": "5ea503f6262e1fb9894ff55ef2a19e866f3a6d9b6489b6582c1e7f5bc595deb0",
+      "finalists-128-layer3.jsonl": "821f4d982ab0035ea9df93597a8f318b81503daa15ae0f48e741620993d8d92d",
+      "finalists-128-layer31.jsonl": "b01b91290ea7de7e1983d74c4fb2dc1de5f0edbcfe07089115ea4f9fa644f8e2",
+      "finalists-128-layer63.jsonl": "785689005f0914b615ee27a4e920c81b4b766d2e0b030d37a1a5bd3cfa52ef9a",
+      "finalists-16384-layer15.jsonl": "5976527e2c179d69219772ceae13c06b1e467b14043fadca6ede6cee1992a875",
+      "finalists-16384-layer3.jsonl": "2f06147f2580261aec8580b849f450c4d2efde1db04ef0595db9af98247ea0a5",
+      "finalists-16384-layer31.jsonl": "f1e9f067f0a78f58a4c340319e2e6623f82e6d715281304b2e9f9b683757c46a",
+      "finalists-16384-layer63.jsonl": "90d7f2c5b830cb66c6656ab4de18a89240c2070ef29deea3f1d53fedce6d1fa6",
+      "finalists-32768-layer15.jsonl": "1b8b89a4d3f76bd13152962e781ed17bf7af3e243cae636698254680ed06d751",
+      "finalists-32768-layer3.jsonl": "9e43bd36710d21b0a59b4033011f1a92663f58119ba9b8049f0f5870ff0336c7",
+      "finalists-32768-layer31.jsonl": "1ded2c9bb367c7ec0af3057f6124d1fbe7cce56a998cc18b7c89ae1b34adbfc5",
+      "finalists-32768-layer63.jsonl": "aca1c9a6a8dc794686161724124da8959068ce53934ae34f3d57cc74dcd7e9bf",
+      "finalists-4096-layer15.jsonl": "a6ea23dccf552167b1c87af8b9ef937dacdd329ef454a28199e4c2cfa7e22162",
+      "finalists-4096-layer3.jsonl": "9a1822dfd49ba35b75b86d21a3b58b62b499e8a4cd3c0639bc5ac5f9cdffb67b",
+      "finalists-4096-layer31.jsonl": "6047c3cdee363b4e28b9b25976684b4d295872dd68e9fab90aae280ccf1fe3e4",
+      "finalists-4096-layer63.jsonl": "1671132d36f8cf048a98cd7b678bbdc098b56ea7f41d32d7ffa0b99ed9373d6c",
+      "finalists-8192-layer15.jsonl": "cf8ee2fbadc94d6616a7d1410c51f3c690a5a3a17da4e468d4ee7c5653e3c174",
+      "finalists-8192-layer3.jsonl": "c6220753bd53c1baadb5fcb0413129b2ab83dada78c91ee4cde7753053d7bcc4",
+      "finalists-8192-layer31.jsonl": "47e0bdca709c5831222028acc68f8c6b6f66235f8d6dae540b461713d1b89997",
+      "finalists-8192-layer63.jsonl": "f1e3320244f18ac27ab6b9aae3451fe43b5ea4f370d73d12713e6bcefe813862"
+    }
+  }
+}
