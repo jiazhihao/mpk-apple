@@ -22,6 +22,16 @@ jobs:
               assert os.environ['GITHUB_REF_NAME'] == 'v' + version
           PY
           python tools/release/build_macos.py --repository "$GITHUB_REPOSITORY"
+      - name: Validate Homebrew formula requirements
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+        run: |
+          tap="$(brew --repository)/Library/Taps/lithos-ai/homebrew-release-check"
+          mkdir -p "$tap/Formula"
+          cp dist/lithos-metal.rb "$tap/Formula/lithos-metal.rb"
+          if brew command trust >/dev/null 2>&1; then brew trust lithos-ai/release-check; fi
+          brew readall lithos-ai/release-check
       - name: Smoke test outside the source checkout
         run: |
           mkdir /tmp/lithos-metal-release-test

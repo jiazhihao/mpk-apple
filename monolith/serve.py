@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
+from . import __version__
 
 from .serving.protocol import (APIError, ChatRequest, Message, TextPart, anthropic_request,
                                responses_request, parse_completion)
@@ -104,7 +105,7 @@ class Backend:
 
 
 def create_app(backend, model_name, api_key=None):
-    app = FastAPI(title="lithos-metal", version="0.1.0")
+    app = FastAPI(title="lithos-metal", version=__version__)
     lock = threading.Lock()
     created = int(time.time())
 

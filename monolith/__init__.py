@@ -6,6 +6,6 @@ decoders (``monolith.spec``) and the compiler (``monolith.compiler``). The C++/O
 through ``monolith.runtime``. Design: docs/design/design.md (§5.13–5.14 for how the package is organized).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = ["__version__"]

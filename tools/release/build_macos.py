@@ -54,8 +54,7 @@ def formula(version, repository, archive, digest):
   sha256 "{digest}"
   license "Apache-2.0"
 
-  depends_on :macos
-  depends_on :arm64
+  depends_on arch: :arm64
   depends_on macos: :tahoe
   depends_on "python@3.12"
 
