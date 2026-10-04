@@ -8,9 +8,20 @@ using namespace mpp::tensor_ops;
 #ifndef DIRECT_KV
 #define DIRECT_KV 0
 #endif
+#ifndef MMA_PROB_FP16
+#define MMA_PROB_FP16 0
+#endif
 #define QM 16
 #define KN CH
 using GqaTG = tensor<threadgroup bfloat, dextents<int, 2>, tensor_inline>;
+#if MMA_PROB_FP16
+// Probabilities are in [0, 1]. Keep the BF16 Q/K/V range while reducing
+// rounding error in the unnormalized softmax partition used by the value MMA.
+using GqaProbability = half;
+#else
+using GqaProbability = bfloat;
+#endif
+using GqaProbTG = tensor<threadgroup GqaProbability, dextents<int, 2>, tensor_inline>;
 #if DIRECT_KV
 using GqaDevice = tensor<device bfloat, dextents<int, 2>, tensor_inline>;
 #endif
@@ -35,7 +46,7 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
 #if !DIRECT_KV
   threadgroup bfloat kv_tile[KN * D];
 #endif
-  threadgroup bfloat prob[QM * KN];
+  threadgroup GqaProbability prob[QM * KN];
 #if STEP_STATE
   if (st->done) return;
 #if DRAFT
@@ -151,7 +162,7 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
       float den = 0;
       for (uint u = 0; u < KN / 32; u++) {
         const float pr = sc[u] == -INFINITY ? 0.0f : exp(sc[u] - m);
-        prob[r * KN + lane + u * 32] = bfloat(pr);
+        prob[r * KN + lane + u * 32] = GqaProbability(pr);
         den += pr;
       }
       den = simd_sum(den);
@@ -177,14 +188,14 @@ kernel void gqa_decode_mma(device const ushort* qkvg [[buffer(0)]], device ushor
 #endif
     threadgroup_barrier(mem_flags::mem_threadgroup);
     matmul2d<value_desc, execution_simdgroups<MMA_SG>> value_op;
-    GqaTG pt(prob, dextents<int, 2>(KN, QM));
+    GqaProbTG pt(prob, dextents<int, 2>(KN, QM));
 #if DIRECT_KV
     GqaDevice vt_cache((device bfloat*)v_cache, dextents<int, 2>(p.kv_heads * D, p.ctx_max));
     auto vt = vt_cache.slice<D, KN>(j * D, c * KN);
 #else
     GqaTG vt(kv_tile, dextents<int, 2>(D, KN));
 #endif
-    auto out = value_op.get_destination_cooperative_tensor<GqaTG, decltype(vt), float>();
+    auto out = value_op.get_destination_cooperative_tensor<GqaProbTG, decltype(vt), float>();
     for (uint16_t i = 0; i < out.get_capacity(); i++) if (out.is_valid_element(i)) out[i] = 0.0f;
     value_op.run(pt, vt, out);
     for (uint16_t i = 0; i < out.get_capacity(); i++) if (out.is_valid_element(i)) {

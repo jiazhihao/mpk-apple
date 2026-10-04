@@ -81,14 +81,24 @@ def merge_labeled_regions(control, configs):
         op.bindings = [(slot, renames.get(n, n), off) for slot, n, off in op.bindings]
         op.kernel = label + '.megakernel'
         op.name = label + '_megakernel'
+        kernel = merged.kernels['mega']
+        state_slot = next((slot for slot, n, _ in op.bindings if n == control.step_state), None)
+        if state_slot is None:
+            # Static projection regions do not otherwise read StepState. The
+            # region still needs its done guard and bounded-barrier error path.
+            state_slot = max(slot for slot, _, _ in op.bindings) + 1
+            if state_slot >= 31:
+                raise ValueError('fused region has no Metal binding left for StepState')
+            op.bindings.append((state_slot, control.step_state, 0))
+            kernel.source = kernel.source.replace(
+                'kernel void full_gdn(',
+                f'kernel void full_gdn(coherent(device) device uchar* b{state_slot} [[buffer({state_slot})]],', 1)
         written = {n for task in part.ops for slot, n, _ in task.bindings
                    if slot in task.meta.get('writes', [b[0] for b in task.bindings])}
         written |= {renames[n] for n in renames if merged.buffers[n].role != 'params'}
         written.add(control.step_state)
         op.meta = dict(op.meta, fusion_region=label, fused_dispatches=len(part.ops),
                        writes=[slot for slot, n, _ in op.bindings if n in written])
-        kernel = merged.kernels['mega']
-        state_slot = next(slot for slot, n, _ in op.bindings if n == control.step_state)
         done, error = (control.layout.offset(n) for n in ('done', 'error'))
         guard = f'if (*((coherent(device) device uint*)(b{state_slot}+{done}ul))) return;\n'
         kernel.source = kernel.source.replace('threadgroup uint& ok=', guard + 'threadgroup uint& ok=', 1)

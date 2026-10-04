@@ -16,7 +16,8 @@ nanobind_add_module(_native NB_STATIC src/native.mm src/metal_core.mm)
 set_source_files_properties(src/native.mm src/metal_core.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 target_include_directories(_native PRIVATE src)
 target_link_libraries(_native PRIVATE "-framework Metal" "-framework Foundation" "-framework IOKit")
+set(LITHOS_METAL_NATIVE_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/monolith/runtime" CACHE PATH "Python extension output directory")
 set_target_properties(_native PROPERTIES
-  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/monolith/runtime"
-  LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/monolith/runtime"
-  LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/monolith/runtime")
+  LIBRARY_OUTPUT_DIRECTORY "${LITHOS_METAL_NATIVE_OUTPUT_DIRECTORY}"
+  LIBRARY_OUTPUT_DIRECTORY_RELEASE "${LITHOS_METAL_NATIVE_OUTPUT_DIRECTORY}"
+  LIBRARY_OUTPUT_DIRECTORY_DEBUG "${LITHOS_METAL_NATIVE_OUTPUT_DIRECTORY}")

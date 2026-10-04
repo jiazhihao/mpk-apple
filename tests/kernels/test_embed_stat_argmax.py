@@ -135,3 +135,32 @@ def test_embed_dequantizes_a_quantized_table(dev, fmt, K, placement, scale_order
     _run(dev, d)
     out = np.frombuffer(h.read(0, t * K * 2), dtype=np.uint16).reshape(t, K)
     assert np.array_equal(out, ref[tokens])
+
+
+@pytest.mark.parametrize('placement', ['inline', 'block'])
+def test_embed_applies_nonunit_nvfp4_tensor_scales(dev, placement):
+    """Pack-time NVFP4 quantization has nonunit scales, including distinct row scales."""
+    rng = np.random.default_rng(81)
+    vocab, width = 48, 2048
+    fmt = FORMATS.get('nvfp4')
+    spec = fmt.quantize(rng.normal(0, .08, (vocab, width)).astype(np.float32))
+    tensor_scale = spec.params['weight_scale_2']
+    assert tensor_scale != 1
+    data, info, _ = pack_spec(spec, PackLayout(rows=16, scale_placement=placement))
+    scales = np.full(vocab, tensor_scale, dtype=np.float32)
+    scales[17] *= 2
+    # Recover the unscaled block decode so the expected multiplication order is explicit.
+    spec.params['weight_scale_2'] = 1.
+    expected = f32_to_bf16(fmt.dequantize(spec) * scales[:, None])
+    tokens = np.array([17, 47, 0, -1, vocab], dtype=np.int32)
+    macros = kernels.embed_macros(info, row_scales=True)
+    pso = nt.Pipeline(nt.Library(dev, kernels.embed_source('nvfp4'), macros), 'embed')
+    h = nt.Buffer(dev, (len(tokens)+1)*width*2); h.fill(0xAB)
+    d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, tokens.tobytes()))
+         .buffer(1, nt.Buffer(dev, data)).buffer(2, h)
+         .bytes(3, kernels.embed_params(width, len(tokens), vocab))
+         .buffer(4, nt.Buffer(dev, scales.tobytes())).grid(len(tokens)+1).threadgroup(32))
+    _run(dev, d)
+    out = np.frombuffer(h.read(0, h.nbytes), dtype=np.uint16).reshape(-1,width)
+    assert np.array_equal(out[:-1], expected[[17,47,0,0,0]])
+    assert np.all(out[-1] == 0xABAB)

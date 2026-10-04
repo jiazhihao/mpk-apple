@@ -30,7 +30,7 @@ class ChipConfig:
     threadgroups_per_core: int = 1
     sibling_order: str = "either"     # "alu_first" | "bus_first" | "either"
     max_cb_ms: float = 16.0
-    attention: str = "v1"             # v1 / v2 / v3 / mma; auto chooses M5 matrix tiles at T >= 4, otherwise v3
+    attention: str = "v1"             # v1 / v2 / v3 / mma / mma-direct / auto
     attention_rows: int = 4           # v1's query rows per pass over a chunk (RBMAX): more rows stream the chunk fewer times, at register cost
     attention_v2_threadgroups: int = 2  # v2's threadgroups per core (its blocks are threadgroups: two per core hide the latency of one)
     accelerator: str = "off"          # "on": T > 1 GEMVs run on the tensor-ops tile (gemm_tile, #50/#51) above accelerator_min_t
@@ -89,8 +89,8 @@ class ChipConfig:
             raise ValueError(f"profile {name}: engine.lane_order must be 'contiguous' or 'interleaved16'")
         if eng.get("scale_placement", "inline") not in ("inline", "block"):
             raise ValueError(f"profile {name}: engine.scale_placement must be 'inline' or 'block'")
-        if eng.get("attention", "v1") not in ("v1", "v2", "v3", "mma", "auto"):
-            raise ValueError(f"profile {name}: engine.attention must be 'v1', 'v2', 'v3', 'mma' or 'auto'")
+        if eng.get("attention", "v1") not in ("v1", "v2", "v3", "mma", "mma-direct", "auto"):
+            raise ValueError(f"profile {name}: engine.attention must be 'v1', 'v2', 'v3', 'mma', 'mma-direct' or 'auto'")
         if int(eng.get("attention_rows", 4)) not in (1, 2, 4, 8, 16):
             raise ValueError(f"profile {name}: engine.attention_rows must be 1, 2, 4, 8 or 16")
         if int(eng.get("attention_v2_threadgroups", 2)) not in (1, 2, 3, 4):

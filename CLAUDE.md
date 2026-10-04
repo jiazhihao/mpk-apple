@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-Context for anyone (human or agent) picking this repo up on another machine. Working codename: **Monolith** — a
-placeholder; do not use the MPK or Mirage names for this engine.
+Context for anyone (human or agent) picking this repo up on another machine. Project name: **lithos-metal**. The Python import namespace remains
+`monolith` for compatibility; use `lithos-metal` for public CLI examples.
 
 ## What this is
 
@@ -68,7 +68,11 @@ LM-drafter plugin (a 0.6B Qwen3 step inside the round) projects 6–8 % under ml
 8–133 ms compute buffers: `max_cb_ms` is a latency knob, not a pacing one.
 Model 3 (#46) is built as packages: the MoE ops (`ops/moe.py`: `moe_route`, `moe_gemv` = the GEMV template's pairs
 mode addressing expert blocks through the router's ids, `moe_combine`), the `SparseMoE` layer and the `qwen3_moe`
-package, proven on a synthetic checkpoint; the real Qwen3-MoE checkpoints do not fit this machine.
+package, proven on a synthetic checkpoint; the real Qwen3-MoE checkpoints did not fit the M5 Pro.
+**2026-10-04 M5 Max update:** the real NVFP4 30B-A3B fits the 48 GB / 40-core machine and matches
+the repeated 48-token HF continuation. Its long synthetic-KV layer gate remains open on routing
+precision; bit-identical expert row/crew tuning is separate from that gate. See
+`docs/research/m5max-qwen-llama-audit.md` for the Qwen/Llama audit and bounded searches.
 An intermittent model-tier failure (wrong tokens / a hang / an empty generation, never reproducible alone) was three
 out-of-bounds stores found with shader validation (#92): the GDN commit pass wrote its read-out through a 16-byte
 placeholder, the tile's permute wrote a slab's K into a scratch sized by a narrower input, a drafter appended past
@@ -195,6 +199,11 @@ hand-derived. `p12`–`p14` never ran on the M3 Pro (dropped with the machine, 2
 check` (same for `p14`) compiles every kernel variant without dispatching.
 
 ## Next steps
+
+The numbered list below records the September M5 Pro roadmap. Its memory limits
+do not apply to the current 48 GB M5 Max: 27B work has proceeded, and the real
+30B-A3B MoE is now measured. The current Qwen/Llama correctness limitations and
+retained 40-core tuning are in `docs/research/m5max-qwen-llama-audit.md`.
 
 0. **Keep building.** The M5 contingency tasks (#100–#103) are done and closed (2026-09-27): the gate is met at 8.97
    (LM drafter) / 9.14 (DSpark) ms per token against mlx-lm's 9.24. Open on this machine: #113's remaining items —

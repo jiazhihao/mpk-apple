@@ -51,11 +51,11 @@ if a.generate:
 original = emit._gqa_kernel
 active = {}
 
-def select(ctx, heads, kv, lm_mode=0, t_c=None, d=128):
+def select(ctx, heads, kv, lm_mode=0, t_c=None, d=128, qk_norm=True):
     prior = ctx.attention
     ctx.attention = active['draft' if lm_mode else 'target']
     try:
-        return original(ctx, heads, kv, lm_mode, t_c, d)
+        return original(ctx, heads, kv, lm_mode, t_c, d, qk_norm)
     finally:
         ctx.attention = prior
 configs = [('off-auto', False, 'auto', 'auto'), ('tuned-auto', True, 'auto', 'auto'), ('tuned-mma', True, 'mma', 'mma'), ('tuned-v1', True, 'v1', 'v1')]

@@ -48,19 +48,36 @@ then `kernels/common`. The reorganization moves shared templates without changin
 their contents; chip directories initially reuse those implementations.
 
 To customize a chip, override `Backend.handler` for individual operations,
-`finalize` for fusion/scheduling after emission, `optimize_decoder` or
+`finalize` for fusion/scheduling after emission, `direct_attention_shape` for
+additional explicitly requested direct-cache shapes, `optimize_decoder` or
 `optimize_draft` for explicit recipes, or `emit`/`compile` to replace the full
 lowering strategy. A `.metal` file with the same relative name overrides only
 that chip's source. Shared compiler fusion helpers remain reusable. Direct
 source-building experiments can use `with using_backend("m5_max_32c"):`.
 
-The 40-core backend's `scheduling.py` owns automatic GDN mixer fusion. Its
-existing recipe still requires static T=8, matching shapes/formats and a complete
-normalization boundary. Dynamic/speculative programs use native dispatches
-unless an explicit decoder recipe is supplied. Attention, MLP and DSpark context
+The 40-core backend's `scheduling.py` owns automatic GDN mixer fusion, the
+measured routed-expert crews in `routed.py`, and the two-kernel INT4 MLP
+layout in `mlp.py`. The routed policies apply only to NVFP4 top-8 experts:
+2048 hidden / 768 intermediate dimensions at static T=1 or T=8, and
+2048 hidden / 512 intermediate dimensions at T=8 including speculative rounds;
+the latter also fuses expert down projection, weighted reduction, shared-expert
+addition and residual in threadgroup-local tasks. Gate/up remains separate.
+The MLP policy applies only to static T=8 affine INT4 with 1024 hidden / 3584
+intermediate dimensions and BF16 activations/scales. Other shapes and prefill
+retain their existing geometry. The GDN recipe requires static T=8,
+matching shapes/formats and a complete
+normalization boundary. Dynamic/speculative mixer fusion requires a decoder
+recipe. Attention, MLP and DSpark context
 maps live in [the 40-core recipes directory](m5_max_40c/recipes/); they do not
 enable automatic context routing. See the
 [optimization study](../../../docs/research/m5max-gdn-mixer-optimization.md).
+The additional direct-cache attention shapes live in `m5_max_40c/attention.py`.
+The [hybrid MoE study](../../../docs/qwen-hybrid-moe.md#eight-row-moe-task-tuning)
+records eight-row expert task tuning, experimental megakernel boundaries and
+the seven-proposal DSpark serving default.
+The [Qwen/Llama audit](../../../docs/research/m5max-qwen-llama-audit.md) records
+their context choices and the remaining numerical gates, including the excluded
+INT4 hybrid direct-cache choice at 32K.
 
 Autotuning cache names include backend, core count and a digest of configuration,
 resolved Metal sources and backend Python code. Existing caches are left intact;

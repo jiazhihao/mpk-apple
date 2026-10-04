@@ -8,7 +8,8 @@ class MetalBackend:
 
     @property
     def kernel_directories(self):
-        root = Path(__file__).resolve().parents[3] / "kernels"
+        from ...resources import kernel_root
+        root = kernel_root()
         return (root / self.id, root / "common") if self.id != "common" else (root / "common",)
 
     def emit(self, shared_emit, *args, **kwargs):
@@ -20,6 +21,10 @@ class MetalBackend:
 
     def handler(self, kind, shared_handlers):
         return shared_handlers[kind]
+
+    def direct_attention_shape(self, ctx, heads, kv, d, t, lm_mode, qk_norm):
+        """Additional shapes eligible for the explicit direct-cache attention route."""
+        return False
 
     def validate_config(self, config):
         """Chip backends may add constraints for their own scheduling options."""
@@ -58,3 +63,7 @@ class MetalBackend:
 
     def optimize_draft(self, program, drafter, *, prefill=False):
         return drafter.optimize_program(program, prefill=prefill)
+
+    def serving_recipes(self, model, drafter, quantization):
+        """Only opt matching workloads into recipes validated on this chip."""
+        return {}

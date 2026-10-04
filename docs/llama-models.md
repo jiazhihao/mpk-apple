@@ -77,3 +77,7 @@ MLX is claimed for the newly added checkpoints.
 A [plain/speculative comparison against MLX](research/llama-mlx-comparison.md)
 records decode and whole-request latency, draft settings, token agreement and all
 504 timed samples for these checkpoints, including a paired N=5/N=7 follow-up.
+
+The [40-core M5 Max Qwen/Llama audit](research/m5max-qwen-llama-audit.md)
+checks Llama-1B/3B again, fixes the matrix-attention probability rounding exposed
+on 3B, and records per-model configuration searches through 32K context.

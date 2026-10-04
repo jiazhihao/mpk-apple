@@ -152,7 +152,7 @@ def main():
     parser.add_argument('--max-context', type=int, default=4608)
     parser.add_argument('--autotune', action='store_true',
                         help='Enable projection tuning/cache reuse in the Monolith adapter')
-    parser.add_argument('--attention', choices=['auto', 'v1', 'v2', 'v3', 'mma'])
+    parser.add_argument('--attention', choices=['auto', 'v1', 'v2', 'v3', 'mma', 'mma-direct'])
     parser.add_argument('--pack')
     parser.add_argument('--drafter')
     parser.add_argument('--drafter-pack')

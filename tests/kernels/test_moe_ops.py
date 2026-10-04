@@ -74,22 +74,24 @@ def test_moe_route(dev, n_experts, k, renorm):
 
 
 @pytest.mark.parametrize("x_slot,silu", [(False, False), (True, False), (False, True)])
-def test_gemv_pairs_mode_streams_the_chosen_experts(dev, x_slot, silu):
+@pytest.mark.parametrize("rsplit", [1, 2, 4, 8])
+@pytest.mark.parametrize("fmt", ["bf16", "nvfp4"])
+def test_gemv_pairs_mode_streams_the_chosen_experts(dev, x_slot, silu, rsplit, fmt):
     """Items (token, slot, block) over the ids: y[t, slot·n_out + …] = x_row · W_{ids[t, slot]}ᵀ (silu·mul over the
     chunk-interleaved gate|up rows with the epilogue); x_row = x[t] or, per slot, x[t·k + slot]."""
     rng = np.random.default_rng(2)
     E, rows_per_expert, K, R, t, k = 6, 64, 256, 16, 3, 2
-    spec = random_spec("bf16", E * rows_per_expert, K, rng)
+    spec = random_spec(fmt, E * rows_per_expert, K, rng)
     data, pinfo, row_scales = pack_spec(spec, PackLayout(rows=R))
-    W = FORMATS.get("bf16").dequantize(spec)                                              # [E·rows, K] exact
+    W = FORMATS.get(fmt).dequantize(spec)                                              # [E·rows, K] exact
     n_in_rows = t * k if x_slot else t
     x = _bf16_round(rng.uniform(-1, 1, size=(n_in_rows, K)))
     ids = np.array([[0, 5], [3, 3], [2, 1]], np.int32)
     epilogue = "silu_mul" if silu else None
     n_out = rows_per_expert // 2 if silu else rows_per_expert
-    macros = kernels.gemv_macros(pinfo, t=1, epilogue=epilogue, out_bf16=True, pairs=(k, rows_per_expert // R, x_slot))
+    macros = kernels.gemv_macros(pinfo, t=1, rg=1, rsplit=rsplit, epilogue=epilogue, out_bf16=True, pairs=(k, rows_per_expert // R, x_slot))
     assert macros["PAIRS"] == "1" and macros["T"] == "1"
-    pso = nt.Pipeline(nt.Library(dev, kernels.gemv_source("bf16"), macros), "gemv_T")
+    pso = nt.Pipeline(nt.Library(dev, kernels.gemv_source(fmt), macros), "gemv_T")
     n_sg = 12 * dev.info().gpu_cores
     y = nt.Buffer(dev, t * k * n_out * 2); y.fill(0)
     d = (nt.Dispatch().pipeline(pso).buffer(0, nt.Buffer(dev, data)).buffer(1, nt.Buffer(dev, row_scales.tobytes()))

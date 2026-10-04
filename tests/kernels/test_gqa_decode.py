@@ -57,7 +57,8 @@ class Harness:
     def __init__(self, dev, cfg, qn, kn):
         self.dev, self.cfg = dev, cfg
         def library(source, macros, language_version=0):
-            return nt.Library(dev, source, dict(macros, QK_NORM=str(int(cfg.qk_norm))), language_version)
+            return nt.Library(dev, source, dict(macros, QK_NORM=str(int(cfg.qk_norm)),
+                MMA_PROB_FP16=str(int(getattr(cfg, 'prob_fp16', False)))), language_version)
         if cfg.mma:
             macros = dict(kernels.gqa_macros(cfg.d, chunk=cfg.chunk, rb_max=16, lm_mode=cfg.lm_mode, chain_i=2 if cfg.lm_mode == 2 else 0), FIXED_CHUNK="1", MMA_SG=str(kernels.gqa_mma_simdgroups(cfg.d, cfg.rep)))
             if cfg.direct:
@@ -236,7 +237,8 @@ def ref_step(h, proj, position, k_cache, v_cache):
                     continue
                 p = np.exp((sc - m).astype(np.float32)).astype(np.float32)
                 p[sc == -np.inf] = 0
-                parts.append((m, float(p.sum(dtype=np.float32)), rbf(p).astype(np.float64) @ v_cache[c0: min(c0 + c.chunk, ctx), j].astype(np.float64)))
+                rounded_p = p.astype(np.float16).astype(np.float32) if getattr(c, 'prob_fp16', False) else rbf(p)
+                parts.append((m, float(p.sum(dtype=np.float32)), rounded_p.astype(np.float64) @ v_cache[c0: min(c0 + c.chunk, ctx), j].astype(np.float64)))
             m_g = max(m for m, _, _ in parts)
             d_g = sum(dc * np.exp(m - m_g) for m, dc, _ in parts)
             o = sum(oc * np.exp(m - m_g) for m, _, oc in parts) / d_g
@@ -555,6 +557,26 @@ def test_mma_matches_kernel_contract(dev, heads, kv, rot, ctx_max, gate):
     test_v3_matches_kernel_contract(dev, cfg)
 
 
+@pytest.mark.parametrize("position,large_query", [(0, False), (128, False), (4096, False), (32768, False), (128, True)])
+def test_mma_fp16_probabilities_keep_bf16_operands(dev, position, large_query):
+    cfg = Cfg(6, 2, 128, 128, position+16, 8, gate=False, mma=True, qk_norm=False)
+    cfg.prob_fp16 = True
+    rng = np.random.default_rng(915)
+    h = Harness(dev, cfg, *_norms(rng, cfg.d))
+    caches = [rbf(rng.normal(0, .1, (cfg.ctx_max, cfg.kv, cfg.d))) for _ in range(2)]
+    h.set_caches(*caches)
+    proj = _random_proj(rng, cfg, 8)
+    if large_query:
+        # A whole-operand FP16 conversion would overflow this valid BF16 query.
+        proj[:, 0] = f32_to_bf16(np.array([131072], np.float32))[0]
+    expected = ref_step(h, bf16_to_f32(proj), position, *caches)
+    got = h.step(proj, position)
+    cos, error, scale = _bars(got, expected)
+    assert cos > .99999 and error <= 2 * _ulp(scale), (cos, error, scale)
+    np.testing.assert_array_equal(h.caches()[1], caches[1])
+    np.testing.assert_array_equal(h.step(proj, position), got)
+
+
 @pytest.mark.parametrize("mode", [0, 1, 2, 3])
 @pytest.mark.parametrize("heads", [4, 12])
 def test_mma_step_state_and_strided_grid(dev, mode, heads):
@@ -735,6 +757,36 @@ def test_packed_merge_buffer_bounds(dev, position):
             results.append(np.frombuffer(out.read(0, out.nbytes), np.uint16).reshape(8, 4096))
         np.testing.assert_array_equal(*results)
         assert not results[1][active:].any()
+
+
+@pytest.mark.parametrize("position,t", [(128, 1), (128, 8), (32768, 8)])
+def test_v2_merge_permuted_output(dev, position, t):
+    """A fused output permutation must preserve every merge result bit."""
+    rng = np.random.default_rng(819)
+    heads, kv, d = 8, 2, 128
+    rows, chunks = t * heads // kv, -(-(position + t) // 32)
+    partials = rng.normal(0, .2, (kv, chunks, rows, d)).astype(np.float32)
+    md = rng.uniform(.5, 1.5, (kv, chunks, rows, 2)).astype(np.float32)
+    po, pm = nt.Buffer(dev, partials.tobytes()), nt.Buffer(dev, md.tobytes())
+    params = kernels.gqa_params(heads=heads, kv_heads=kv, t_active=t, position=position,
+        n_sg=80, q_off=0, gate_off=0, k_off=0, v_off=0, in_stride=heads*d,
+        out_stride=heads*d, ctx_max=position+t, eps=EPS, scaling=1, has_gate=False,
+        n_chunks_max=chunks, rows_max=rows)
+    outputs = []
+    for permuted in (False, True):
+        macros = kernels.gqa_v2_macros(d, rmax=rows, rg=4)
+        if permuted:
+            macros.update(kernels.perm_out_macros(heads*d, 8, 128))
+        pipeline = nt.Pipeline(nt.Library(dev, kernels.gqa_source(True), macros), "gqa_merge_v2")
+        out = nt.Buffer(dev, t*heads*d*2)
+        dispatch = (nt.Dispatch().pipeline(pipeline).buffer(0, po).buffer(1, pm)
+                    .buffer(2, po).buffer(3, out).bytes(4, params)
+                    .grid(t*heads).threadgroup(32))
+        result = nt.Queue(dev).run([dispatch])
+        assert not result.error, result.error
+        outputs.append(np.frombuffer(out.read(0, out.nbytes), np.uint16).reshape(t, heads*d))
+    columns = kernels.x_permute_columns(heads*d, 8, 128)
+    np.testing.assert_array_equal(outputs[1], outputs[0][:, columns])
 
 
 @pytest.mark.parametrize("position,t", [(0, 8), (255, 8), (4095, 1), (8191, 8), (8696, 8)])

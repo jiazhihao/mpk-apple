@@ -191,6 +191,10 @@ kernel void gqa_merge_v2(device const float* part_o [[buffer(0)]], device const 
       const float g = bf16f(qkvg[t * p.in_stride + p.gate_off + h * D + lane * DL + e]);
       y = round_bf16(y * round_bf16(1.0f / (1.0f + exp(-g))));
     }
+#if PERM_OUT
+    out[t * PERM_K + perm_dest(h * D + lane * DL + e)] = bf16bits(y);
+#else
     out[t * p.out_stride + h * D + lane * DL + e] = bf16bits(y);
+#endif
   }
 }

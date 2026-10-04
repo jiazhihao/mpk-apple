@@ -500,6 +500,13 @@ Exit: a short written result per chip; stealing enabled only for ops where it ga
   (Qwen3-30B-A3B, 17 GB resident at NVFP4) exceed this machine's working set: the golden and the tok/s row wait for a
   machine that hosts one. The survey shows this is where an overhead-free
   engine has the most headroom (today's engines reach only 36–55 % of the bound on 3B-active MoE).
+  **M5 Max update, 2026-10-04:** the real NVFP4 30B-A3B pack fits the 48 GB,
+  40-core machine (19.21 GB pack), and its repeated 48-token continuation matches
+  HF. The long-context synthetic-KV layer gate remains open because expert
+  routing magnifies numerical differences. See the
+  [Qwen/Llama audit](../docs/research/m5max-qwen-llama-audit.md) for the separate
+  correctness and performance evidence; the old M5 Pro capacity limit no longer
+  blocks this checkpoint on the Max.
 * Format 2 — **built (#47): affine INT4 groups** (`formats/int4_affine`, the MLX / AWQ / GPTQ family; mlx 0.32's
   quantizer reproduced bit-exactly). The plugin path held for the decode contract, but the port needed four
   engine-side extensions the first formats had not exercised — a per-group **bias** hook (`decode_bias`, the GEMV's

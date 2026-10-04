@@ -660,6 +660,18 @@ def stage(k,i,immutable=()):
         # cross-worker activations. Preserve their ordinary weight-cache path.
         src=re.sub(r'reinterpret_cast<coherent\(device\) device const (uchar|ushort|uint|uint2)\*>\((wb|w)\b',
                    r'reinterpret_cast<device const \1*>(\2',src)
+    if k.function in ('gemv_T','moe_gemm') and k.macros.get('FUSED_READ_CACHE') == '1':
+        # wb addresses immutable packed weights, including helper scale loads.
+        # Activation pointers remain coherent across expert producer/consumer tasks.
+        src=src.replace('coherent(device) device const uint4* wb', 'device const uint4* wb')
+        src=re.sub(r'reinterpret_cast<coherent\(device\) device const (uchar|ushort|uint|uint2)\*>\((wb|w)\b',
+                   r'reinterpret_cast<device const \1*>(\2',src)
+        if 'x' in immutable:
+            src=src.replace('coherent(device) device const ushort* xrow','device const ushort* xrow')
+            src=src.replace('coherent(device) device const uint4* xp','device const uint4* xp')
+            src=src.replace('(coherent(device) device const uint4*)(xrow','(device const uint4*)(xrow')
+        if 'ids' in immutable:
+            src=src.replace('coherent(device) device const int* entry','device const int* entry')
 
     return f'namespace s{i} {{\n'+src+'\n}\n',pars
 

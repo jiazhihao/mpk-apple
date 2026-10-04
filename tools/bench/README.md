@@ -143,7 +143,9 @@ python tools/bench/layer_fixed_vs_mlx.py \
 Pack the same checkpoint with sufficient RoPE capacity first (at least
 `max(ctx) + max(T) + 256`, the benchmark's cache allocation). The compiler rejects
 undersized constant tables. Both engines use the original checkpoint weights and
-BF16 activations, with identical seeded nonzero KV prefixes by default. GDN starts
+identical BF16-rounded input/prefix values. Monolith uses BF16 activations; MLX
+retains the checkpoint's native activation/cache dtype (FP16 for these Llama
+INT4 checkpoints, BF16 for Qwen). GDN starts
 from the same zero recurrent/convolution input state on each replay; this is a
 fixed-state kernel comparison, not a generation or acceptance-rate benchmark.
 `--kv-prefix zero` permits comparison with older zero-prefix measurements.
@@ -200,8 +202,11 @@ See the [backend verification study](../../docs/research/m5max-27b-backend-verif
 for timings, numerical checks, rejected runs, and exact reproduction metadata.
 
 `dspark_round_latency.py` measures complete non-terminal DSpark rounds after real
-prefill: eight-row target verification, acceptance and recurrent-state commit,
-then the next seven-token draft block. It also times the same dispatches as three
+prefill: target verification of the anchor plus the checkpoint's proposal count,
+acceptance and recurrent-state commit, then the next draft block. Use
+`--draft-block-size` to benchmark another supported block; the default is seven
+proposals, or the checkpoint's smaller supported block.
+It also times the same dispatches as three
 ICB stages, checking split/full token identity. `dspark_tune.py` compares native,
 normalized and fused draft-layer recipes with exact control/fusion and cache
 checks. Add `--compare-draft-fusion` to the round benchmark for an alternating
@@ -229,8 +234,139 @@ independent real prefills. It shares only identical file-backed weights and
 keeps each precision's caches and recurrent state private. It reports acceptance
 with latency and checks equal committed target prefixes; use actual generation
 checks to evaluate the throughput effect of changed acceptance.
+
+`dspark_quantization.py` evaluates a draft pack with real greedy generations and
+matched-prefix acceptance. Supply local `--model`, `--pack`, `--drafter`,
+`--drafter-pack`, `--profile`, `--prompts` and `--out` paths. The prompt JSON is a
+list of objects with `text` and `category` fields. Run the source-precision pack
+first, then pass its output as `--reference` when running the quantized pack.
+By default it generates 96 tokens per prompt and checks one seven-proposal block
+at offsets 0/24/48/72 of each reference continuation. Both packs receive the same
+target prefix and anchor at each offset. This separates proposal quality from
+changes in the generated trajectory; free-running acceptance and GPU decode
+time are also reported. `--matched-only` skips candidate free-running generation
+when screening precision choices. This comparison qualifies the conversion
+against the existing engine, not the target model's independent accuracy.
+See the [35B NVFP4 conversion](../../docs/qwen-hybrid-moe.md#nvfp4-draft-conversion)
+for the measured quality and latency tradeoff.
+
 See the [M5 Max DSpark study](../../docs/research/m5max-27b-dspark.md)
 for checkpoint revisions, context recipes, memory handling and measurements.
 The [draft refinement study](../../docs/research/m5max-27b-dspark-refinement.md)
 records the later projection, task scheduling, scalar fallback and precision
 searches, with paired full-round checks against the preceding selected recipe.
+
+## Per-model compiler and routed-expert searches
+
+`model_config_tune.py` enumerates attention v1/v2/v3/MMA, normalization fusion,
+matrix acceleration, crew density and sibling order for each requested token
+count and context. It hashes emitted programs to avoid timing equivalent
+configurations, compares real checkpoint layer chains in alternating pairs, and
+records rejected numerical configurations. The existing shape autotuner still
+selects projection and GDN geometry. Completed context/token points can resume
+from the accompanying `.selected.json` file.
+
+```bash
+python tools/bench/model_config_tune.py --model CHECKPOINT --pack PACK \
+  --ts 1,4,8 --contexts 128,1024,4096,8192,16384,32768 \
+  --out /tmp/model-config.jsonl
+python tools/bench/routed_expert_tune.py --model MOE_CHECKPOINT --pack MOE_PACK \
+  --layers 0,24,47 --ts 1,8 --context 128 --out /tmp/expert-config.jsonl
+```
+
+The expert search varies row grouping, row splitting, worker count, SIMD groups
+and activation preconversion. It requires bit-identical layer-chain outputs,
+then confirms the combined gate/up and down choices against the original chain.
+Projection row splitting partitions output rows; it does not split a dot-product
+reduction or change its accumulation order. These are screening tools: check
+independent HF goldens, complete model latency and other contexts before
+promoting a result to a chip backend.
+
+`attention_geometry_tune.py` separately sweeps workers, SIMD groups and row
+groups for the selected attention algorithm. `--extended` reaches 1,280 workers
+and 32 SIMD groups; direct-KV matrix attention retains its four-SIMD constraint.
+Use `--configs choices.json` for a list of `{T, context, config}` compiler
+choices. Results distinguish bit-exact geometry changes from changes that only
+pass the cosine screen. To reproduce a selected complete-model configuration,
+pass `full_fixed_vs_mlx.py --configs choices.json` with an optional
+`attention_geometry` object on each entry (for example
+`{"workers": 320, "sgs": 8}`). These explicit context choices are benchmark
+overrides, not automatic context routing in the serving runtime.
+
+The `mma-direct` attention choice enables the additional measured static-T=8
+direct-cache shapes on the 40-core M5 Max; it uses 256-key tiles and four SIMD
+groups with a cache capacity divisible by 256. Other modes/shapes use `auto`.
+The [Qwen/Llama audit](../../docs/research/m5max-qwen-llama-audit.md) lists the
+shape guards, context-specific workers, numerical exclusions and full-forward
+comparisons. To reproduce a long-context point, put `"attention": "mma-direct"`
+in its `config`, with `"attention_geometry": {"workers": 320, "sgs": 4}` (or
+the measured worker count for that point). This does not affect draft attention.
+
+`layer_fixed_vs_mlx.py --modelopt` loads dense Qwen3 and Qwen3-MoE ModelOpt NVFP4
+weights into the installed MLX-LM architecture using native `quantized_matmul`
+and `gather_qmm`. It retains the checkpoint's codes and block scales, applying
+the separate tensor scales in FP32; there is no requantization. This is an
+explicit weight-loading adapter, and its intermediate rounding differs from
+the BF16-dequantized HF correctness oracle. Use `--layers` to load a subset of
+the large MoE model when both engines must fit in memory. The hybrid benchmark
+materializes both next recurrent states as well as the hidden output.
+
+`tools/goldens/moe_streaming_hf.py` produces an independent HF eager reference
+without keeping all dequantized experts resident. It changes parameter storage
+only, dequantizing selected expert matrices on CPU when HF indexes them. Its
+runtime is not a performance baseline. A contract test compares this storage
+adapter with a fully materialized HF model, including cached continuation.
+
+`full_fixed_vs_mlx.py` measures a complete fixed-position target forward,
+including embedding, every decoder layer, final normalization and vocabulary
+projection. Run `--engine monolith --model CHECKPOINT --pack PACK` and
+`--engine mlx --model CHECKPOINT` in separate processes, supplying an `--out`
+path to each. Add `--modelopt` to the MLX run for original ModelOpt NVFP4
+checkpoints. Defaults cover T=1/8 at 128/4K/8K/16K/32K; each result retains all
+15 single-step wall samples and checks deterministic replay. Prefix KV is
+seeded random BF16 and GDN input state is zero; these are target-kernel
+measurements, not real-prompt generation, draft, acceptance or serving results.
+
+`modelopt_mega_tune.py --force-tiles` explores tile-based fusion even where the
+shape autotuner selected scalar projections. Its production baseline remains
+the autotuned program. Unsupported tasks, scratch limits and numerical
+failures are recorded as rejections, not treated as successful timings.
+
+### Routed-expert task and megakernel comparisons
+
+`moe_tasks.py` compares complete MoE blocks, including the router, shared
+expert, weighted reduction and residual. Supply `--configs choices.json`, a
+mapping from labels to `monolith.compiler.moe_fusion.optimize_moe` recipes.
+`group_tokens` selects ungrouped pairs (0) or compact groups of 1/2/4/8 selected
+tokens per expert. `gate_up` and `down` accept the scalar GEMV knobs above.
+Optional `fusion`, `local`, `ready` and `matrix` recipes explore global-stage
+workers, local expert activation storage, per-expert readiness queues and
+matrix tiles respectively. These experimental alternatives are explicit
+choices; a recipe that fails the exact-output check is not a qualified winner.
+`down_combine` fuses the expert down projection with the ordered weighted
+reduction, shared-expert addition and residual. Its `blocks`, `sgs`, `workers`
+and `noinline` settings control independent output-tile tasks. This path is
+selected automatically for the measured 40-core eight-row expert shape.
+Explicit MoE recipes first recover native operations, so comparisons remain
+possible after the backend enables fusion by default.
+
+```bash
+.venv/bin/python tools/bench/moe_tasks.py \
+  --model CHECKPOINT --pack PACK --configs choices.json \
+  --inputs /tmp/moe-inputs.npz --layer 0 --rows 8 \
+  --reps 11 --replays 20 --out /tmp/moe-comparison.json
+```
+
+Capture real residuals with `dspark_round_latency.py --compare-moe choices.json
+--capture-moe-inputs /tmp/moe-inputs.npz`. The full-round comparison checks each
+MoE layer's output bytes, committed tokens, acceptance, position and next
+proposals against its baseline. It alternates A/B order and restores recurrent
+state before every nonterminal round. Seven proposals plus the anchor are the
+benchmark default; `--draft-block-size` explicitly overrides the proposal count.
+Use `--contexts 128,4096,8192,16384,32768` for the context sweep. GPU timing
+excludes packing, compilation, prefill, correctness readback and HTTP overhead.
+
+The [hybrid MoE model notes](../../docs/qwen-hybrid-moe.md) record the measured
+40-core policy, experiment envelope and remaining independent-model accuracy
+gates. Isolated routing and latency can differ from the complete serving graph;
+confirm finalists in complete rounds before changing a backend default.

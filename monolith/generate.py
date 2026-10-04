@@ -189,7 +189,8 @@ class Session:
                 if spec.role in ("state", "step_state", "ring"):
                     eng.buffers[name].fill(0)
 
-    def generate(self, prompt_ids: List[int], max_new_tokens: int, *, steps_per_cb: int = 8, in_flight: int = 3) -> Generation:
+    def generate(self, prompt_ids: List[int], max_new_tokens: int, *, steps_per_cb: int = 8, in_flight: int = 3,
+                 on_tokens=None, cancelled=None) -> Generation:
         p = len(prompt_ids)
         if p < 1:
             raise ValueError("the prompt must have at least one token")
@@ -213,6 +214,8 @@ class Session:
         prefill_ms = 0.0
         tokens: List[int] = []
         for k, chunk in enumerate(chunks):
+            if cancelled and cancelled():
+                return Generation([], prefill_ms, 0, 0, 0, 0)
             # the host writes each chunk's tokens and length; the advance emits only after the last chunk
             state = self.layout.unpack(st.read(0, self.layout.size))
             state.update(t_this_step=len(chunk), pending_tokens=chunk, prefill_left=len(chunks) - 1 - k,
@@ -222,10 +225,12 @@ class Session:
             r1 = pre.run(1, steps_per_cb=1, in_flight=1)
             prefill_ms += r1.gpu_ms
             tokens += r1.tokens
+        if on_tokens:
+            on_tokens(tokens)
         dec_ms = dec_wall = host = 0.0
         steps = 0
         n_pre = len(tokens)
-        if max_new_tokens > 1 and not r1.done:
+        if max_new_tokens > 1 and not r1.done and not (cancelled and cancelled()):
             if self.decoder_kernel_config is not None:
                 self.buffers = {n: b for n, b in pre.buffers.items()
                                 if pre.program.buffers[n].role in ('state', 'step_state', 'ring')
@@ -233,7 +238,28 @@ class Session:
                 self.engines.clear()
                 self._last_engine = None
                 del pre
-            if self.drafter is None:
+            if on_tokens:
+                # Bound each host pump for incremental output/cancellation, while
+                # retaining the complete speculative round and its kernel recipe.
+                dec = self.engine(0 if self.drafter is not None else 1)
+                self._last_engine = dec
+                while len(tokens) < max_new_tokens and not (cancelled and cancelled()):
+                    need = max_new_tokens - len(tokens)
+                    r2 = dec.run(min(4 if self.drafter else 8, need),
+                                 steps_per_cb=self.spec_steps_per_cb if self.drafter else steps_per_cb,
+                                 in_flight=self.spec_in_flight if self.drafter else in_flight,
+                                 max_tokens=need)
+                    tokens += r2.tokens
+                    dec_ms += r2.gpu_ms
+                    dec_wall += r2.wall_ms
+                    host += r2.host_busy_ms
+                    steps += r2.steps
+                    on_tokens(tokens[:max_new_tokens])
+                    if r2.done:
+                        break
+                    if not r2.tokens:
+                        raise RuntimeError('Streaming decode made no progress')
+            elif self.drafter is None:
                 dec = self.engine(1)
                 self._last_engine = dec
                 r2 = dec.run(max_new_tokens - 1, steps_per_cb=steps_per_cb, in_flight=in_flight)
@@ -249,7 +275,7 @@ class Session:
                 r2 = dec.run(need, steps_per_cb=self.spec_steps_per_cb, in_flight=self.spec_in_flight, max_tokens=need)
                 tokens += r2.tokens
                 dec_ms, dec_wall, host, steps = r2.gpu_ms, r2.wall_ms, r2.host_busy_ms, r2.steps
-        if len(tokens) < max_new_tokens:
+        if len(tokens) < max_new_tokens and not (cancelled and cancelled()):
             err = int(self._last_engine.state()["error"])        # 1: the ring overflowed; 2: the context filled (the pump's over-run
             if err:                                               # past a request that fits sets 2 harmlessly, so only a short result is one)
                 raise RuntimeError(f"generate: the program stopped with error {err} after {len(tokens)} of {max_new_tokens} tokens "
@@ -341,6 +367,13 @@ def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos:
         from .spec import DRAFTERS
 
         dopts = dict(drafter_options or {})
+        if drafter_kind == 'dspark':
+            from .spec.dspark import DSparkConfig
+            if dopts.get('block_size') is None:
+                dopts['block_size'] = min(7, DSparkConfig.from_pretrained(drafter_dir).block_size)
+            options.setdefault('verify', 'fixed')
+            if options['verify'] == 'fixed' and options.get('verify_length') is None:
+                options['verify_length'] = dopts['block_size']
         if sts_path:
             with open(sts_path) as f:
                 dopts["sts"] = json.load(f)["temperatures"]
@@ -369,13 +402,14 @@ def main(argv=None) -> int:
     ap.add_argument("--drafter-kernel-config", type=Path, help="explicit drafter task-compiler recipe JSON")
     ap.add_argument("--decoder-kernel-config", type=Path, help="explicit eight-row target decoder recipe JSON")
     ap.add_argument("--draft-gamma", type=int, default=None, help="an LM drafter's drafts per round (--drafter-kind lm; default 5)")
-    ap.add_argument("--verify", default="cost", choices=["cost", "threshold", "fixed"], help="the verify-length rule (cost needs the chip's cost table)")
+    ap.add_argument("--draft-block-size", type=int, help="DSpark proposals per round (default: up to seven plus the target anchor)")
+    ap.add_argument("--verify", default=None, choices=["cost", "threshold", "fixed"], help="the verify-length rule (DSpark default: fixed; LM default: cost)")
     ap.add_argument("--verify-threshold", type=float, default=None, help="the confident-prefix threshold (<= 0: verify the whole block)")
     ap.add_argument("--verify-length", type=int, default=None, help="with --verify fixed: the drafts verified every step")
     ap.add_argument("--sts", default=None, help="STS temperatures JSON for the confidence chain (tools/bench/sts_calibrate.py)")
     ap.add_argument("--barriers", default="minimal", choices=["minimal", "all"], help="ICB barriers: only where a dependency needs one, or on every op")
-    ap.add_argument("--attention", default=None, choices=["v1", "v2", "v3", "mma", "auto"],
-                    help="the attention kernel (default: the chip profile's; auto = M5 matrix attention for verification blocks, v3 for short blocks)")
+    ap.add_argument("--attention", default=None, choices=["v1", "v2", "v3", "mma", "mma-direct", "auto"],
+                    help="attention kernel (auto = chip policy; mma-direct = measured static-eight-row long-context shapes, otherwise auto)")
     ap.add_argument("--prefill-attention", default=None, choices=["v1", "v2", "v3", "mma", "auto"],
                     help="independent prefill attention selection (v3 avoids large matrix partial workspaces)")
     ap.add_argument("--accelerator", default=None, choices=["on", "off"], help="T > 1 GEMVs on the tensor-ops tile (default: the chip profile's)")
@@ -385,17 +419,22 @@ def main(argv=None) -> int:
                     help="use the chip profile's fixed-eight-row GDN mixer fusion when supported")
     ap.add_argument("--math", default="safe", choices=["safe", "fast"], help="Metal math mode for the kernels")
     a = ap.parse_args(argv)
+    if a.draft_block_size is not None and (not a.drafter or a.drafter_kind != 'dspark'):
+        ap.error('--draft-block-size requires a DSpark drafter')
     from tokenizers import Tokenizer
 
     tok = Tokenizer.from_file(str(Path(a.model) / "tokenizer.json"))
     ids = tok.encode(a.prompt, add_special_tokens=False).ids
     t0 = time.time()
     draft_options = {"gamma": a.draft_gamma} if a.draft_gamma is not None else {}
+    if a.draft_block_size is not None:
+        draft_options['block_size'] = a.draft_block_size
     if a.drafter_kernel_config:
         draft_options["kernel_config"] = json.loads(a.drafter_kernel_config.read_text())
     sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1 if a.no_eos else None,
                         temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed, autotune=not a.no_autotune,
-                        drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind, verify=a.verify,
+                        drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind,
+                        verify=a.verify or ('fixed' if a.drafter_kind == 'dspark' else 'cost'),
                         verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts, barriers=a.barriers,
                         drafter_options=draft_options,
                         prefill_chunk_size=a.prefill_chunk_size, attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator, commute_norm=a.commute_norm,
