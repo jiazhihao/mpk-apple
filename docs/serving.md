@@ -1,7 +1,8 @@
 # lithos-metal serving and coding agents
 
-Install lithos-metal with `pip install '.[serve]'` from a checkout; this builds the Metal runtime
-and includes the kernel sources. The [installation guide](installation.md) covers the
+Install lithos-metal with `brew install lithos-ai/tap/lithos-metal`, or use
+`pip install '.[serve]'` from a checkout to build the Metal runtime
+and bundle the kernel sources. The [installation guide](installation.md) covers the
 precompiled Homebrew release bundle.
 
 ```bash

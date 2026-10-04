@@ -7,13 +7,10 @@ standalone repository: code from MPK and other projects is copied in with its li
 
 ## Install and run
 
-On Apple silicon with macOS 26+, install from a checkout (Xcode Command Line Tools and
-Python 3.12 are needed to build the runtime):
+On Apple silicon with macOS 26+, install the precompiled package with Homebrew:
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install '.[serve]'
+brew install lithos-ai/tap/lithos-metal
 lithos-metal serve --model nvidia/Qwen3.8-27B-NVFP4
 ```
 
@@ -40,9 +37,9 @@ client approval settings and do not rewrite global configuration. The endpoint s
 text, tool calls and SSE through Chat Completions, Responses, and Anthropic Messages.
 See [serving and client setup](docs/serving.md) for options and API limits.
 
-A precompiled, offline Homebrew bundle and release workflow are included. The intended
-public command is `brew install lithos-ai/tap/lithos-metal`; **the tap is not published yet**.
-See [release instructions](docs/installation.md) for building and publishing it.
+The [Homebrew tap](https://github.com/lithos-ai/homebrew-tap) installs the native runtime
+and serving dependencies from a checksum-pinned release bundle. See
+[installation and release instructions](docs/installation.md) for source builds and publishing.
 
 The idea, carried over from MPK: compile the *whole generation loop* — every layer, sampling, speculative
 accept/rollback, stop detection — into one GPU-resident static program so that no CPU work and no CPU↔GPU

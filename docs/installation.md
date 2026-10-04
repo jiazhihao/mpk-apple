@@ -25,16 +25,16 @@ Python namespace and `python -m monolith.serve` remain supported.
 
 ## Homebrew release
 
-The intended public command is:
+Install the published package from the [Lithos tap](https://github.com/lithos-ai/homebrew-tap):
 
 ```bash
 brew install lithos-ai/tap/lithos-metal
 lithos-metal serve --model nvidia/Qwen3.8-27B-NVFP4
 ```
 
-**Publication pending:** this command requires a public `lithos-ai/homebrew-tap` GitHub
-repository containing `Formula/lithos-metal.rb`, and a published macOS bundle. Hugging Face
-organization access does not grant access to a GitHub organization of the same name.
+The tap's `Formula/lithos-metal.rb` pins the archive and SHA-256 from the
+[GitHub release](https://github.com/jiazhihao/mpk-apple/releases/latest). Tap CI runs
+`brew install` and `brew test` on macOS ARM64.
 
 On an Apple silicon Mac using Python 3.12:
 
