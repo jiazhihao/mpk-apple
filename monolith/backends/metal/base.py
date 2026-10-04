@@ -58,3 +58,7 @@ class MetalBackend:
 
     def optimize_draft(self, program, drafter, *, prefill=False):
         return drafter.optimize_program(program, prefill=prefill)
+
+    def serving_recipes(self, model, drafter, quantization):
+        """Only opt matching workloads into recipes validated on this chip."""
+        return {}

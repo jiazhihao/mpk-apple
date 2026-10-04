@@ -121,3 +121,40 @@ def test_template_sampling_context_and_stop(monkeypatch, eos):
     parts = [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]
     client.post("/v1/chat/completions", json=payload(max_tokens=2, messages=[{"role": "user", "content": parts}]))
     assert prompts[-1][0] == [{"role": "user", "content": "ab"}]
+
+
+def test_cli_accepts_hub_ids_and_optional_cache():
+    from monolith.serve import parse_args
+    args = parse_args(['--model', 'org/target', '--draft', 'org/draft'])
+    assert args.pack is None and args.draft == 'org/draft' and args.draft_kind == 'dspark'
+    for flags in (['--draft-kind', 'lm'], ['--draft-pack', 'pack'], ['--kernel-config-key', '128']):
+        with pytest.raises(SystemExit):
+            parse_args(['--model', 'org/target', *flags])
+
+
+def test_draft_options_survive_sampling_changes_and_metrics_are_per_request(monkeypatch):
+    from pathlib import Path
+    from monolith import generate
+    from monolith.backends.metal import load_configs
+    from monolith.serving.setup import ServingAssets
+    calls = []
+    def load(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(eos=99, generate=lambda ids, n: SimpleNamespace(tokens=[10, 11], steps=2, decode_ms=84))
+    monkeypatch.setattr(generate, 'load_session', load)
+    backend = Backend.__new__(Backend)
+    backend.model_dir, backend.pack_dir, backend.max_context = 'model', 'pack', 4096
+    backend.prefill_chunk_size = 128
+    backend.session, backend.sampling = None, None
+    backend.assets = ServingAssets(Path('m'), Path('p'), 4096, 4102,
+        load_configs()['apple-m5-max-40c'], Path('draft'), Path('draft-pack'), 7)
+    backend.tokenizer = SimpleNamespace(apply_chat_template=lambda *a, **kw: [1, 2, 3], decode=lambda *a, **kw: 'Hello')
+    client = TestClient(create_app(backend, 'test-model'))
+    for temperature in (0, 0, 0.7):
+        response = client.post('/v1/chat/completions', json=payload(max_tokens=2, temperature=temperature))
+        assert response.status_code == 200
+        assert float(response.headers['x-monolith-decode-step-ms']) == 42
+        assert response.headers['x-monolith-verify-tokens'] == '8'
+    assert len(calls) == 2
+    assert all(c['drafter_dir'] == 'draft' and c['drafter_pack'] == 'draft-pack'
+               and c['verify_length'] == 7 for c in calls)

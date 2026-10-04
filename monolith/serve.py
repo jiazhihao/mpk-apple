@@ -65,7 +65,7 @@ class APIError(Exception):
 class Backend:
     """One cached session; sampling changes rebuild its compiled programs, never duplicate model residency."""
 
-    def __init__(self, model_dir, pack_dir, max_context=4096, prefill_chunk_size=128):
+    def __init__(self, model_dir, pack_dir, max_context=4096, prefill_chunk_size=128, *, assets=None):
         from transformers import AutoTokenizer
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=False)
@@ -74,6 +74,8 @@ class Backend:
         self.model_dir, self.pack_dir, self.max_context = model_dir, pack_dir, max_context
         self.prefill_chunk_size = prefill_chunk_size
         self.session, self.sampling = None, None
+        self.assets = assets
+        self.last_metrics = {}
 
     def complete(self, request):
         from jinja2 import TemplateError
@@ -91,15 +93,24 @@ class Backend:
             raise APIError(f"Prompt ({len(ids)} tokens) plus output budget ({limit}) exceeds context capacity "
                            f"({self.max_context}); reduce messages or max_completion_tokens.",
                            code="context_length_exceeded")
-        sampling = (request.temperature, request.top_p, request.seed)
+        assets = getattr(self, 'assets', None)
+        recipe_key, options = assets.options(len(ids)) if assets else (None, {'max_context': self.max_context})
+        sampling = (request.temperature, request.top_p, request.seed, recipe_key)
         if self.session is None or sampling != self.sampling:
             self.session = None
-            self.session = load_session(self.model_dir, self.pack_dir, max_context=self.max_context,
+            self.session = load_session(self.model_dir, self.pack_dir, **options,
                                        temperature=request.temperature, top_p=request.top_p, seed=request.seed,
                                        autotune=False, prefill_chunk_size=self.prefill_chunk_size)
             self.sampling = sampling
         try:
-            tokens = self.session.generate(ids, limit).tokens
+            started = time.perf_counter()
+            generation = self.session.generate(ids, limit)
+            tokens = generation.tokens
+            self.last_metrics = dict(steps=getattr(generation, 'steps', 0),
+                decode_gpu_ms=getattr(generation, 'decode_ms', 0.0), wall_ms=(time.perf_counter()-started)*1000,
+                verify_tokens=assets.gamma+1 if assets and assets.gamma else 1)
+            self.last_metrics['decode_step_ms'] = self.last_metrics['decode_gpu_ms'] / max(1, self.last_metrics['steps'])
+            logging.getLogger(__name__).info('Generation: %s', self.last_metrics)
         except ValueError as exc:
             raise APIError(str(exc)) from exc
         eos = self.session.eos
@@ -155,6 +166,7 @@ def create_app(backend, model_name, api_key=None):
             raise APIError("The model is busy; retry after the current request finishes", 429, "model_busy")
         try:
             content, finish, prompt_tokens, completion_tokens = backend.complete(request)
+            metrics = dict(getattr(backend, 'last_metrics', {}))
         except APIError:
             raise
         except Exception as exc:
@@ -162,33 +174,58 @@ def create_app(backend, model_name, api_key=None):
             raise APIError("Generation failed; see server logs", 500, "generation_failed") from exc
         finally:
             lock.release()
-        return {"id": f"chatcmpl-{uuid.uuid4().hex}", "object": "chat.completion", "created": int(time.time()),
+        headers = {f'X-Monolith-{name}': str(metrics[key]) for name, key in (
+            ('Decode-Steps', 'steps'), ('Decode-GPU-Ms', 'decode_gpu_ms'),
+            ('Decode-Step-Ms', 'decode_step_ms'), ('Verify-Tokens', 'verify_tokens')) if key in metrics}
+        return JSONResponse(headers=headers, content={"id": f"chatcmpl-{uuid.uuid4().hex}", "object": "chat.completion", "created": int(time.time()),
                 "model": model_name, "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
                                                   "finish_reason": finish, "logprobs": None}],
                 "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-                          "total_tokens": prompt_tokens + completion_tokens}}
+                          "total_tokens": prompt_tokens + completion_tokens}})
 
     return app
 
 
-def main():
-    import uvicorn
-
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True, help="Local checkpoint directory, including its chat template")
-    parser.add_argument("--pack", required=True, help="Packed weights directory")
+    parser.add_argument("--model", required=True, help="Hugging Face repo ID or local checkpoint path")
+    parser.add_argument("--draft", "--drafter", dest="draft", help="DSpark Hugging Face repo ID or local checkpoint path")
+    parser.add_argument("--draft-kind", choices=['dspark'], default='dspark')
+    parser.add_argument("--pack", help="Local pack-cache directory (default: $XDG_CACHE_HOME/monolith/packs); existing packs also accepted")
+    parser.add_argument("--draft-pack", help="Optional separate draft cache or existing draft pack")
+    parser.add_argument("--draft-quantization", choices=['auto', 'none', 'nvfp4'], default='auto',
+                        help="auto uses validated chip-specific NVFP4 draft recipes when available; otherwise source precision")
+    parser.add_argument("--revision", help="Target Hugging Face revision")
+    parser.add_argument("--draft-revision", help="Draft Hugging Face revision")
+    parser.add_argument("--download-dir", help="Hugging Face download cache directory")
+    parser.add_argument("--local-files-only", action='store_true', help="Resolve Hub IDs from the local Hub cache only")
+    parser.add_argument("--kernel-config", help="Optional explicit target/draft recipe JSON; defaults to matching chip recipes")
+    parser.add_argument("--kernel-config-key", help="Pin a context key in the selected recipe map")
     parser.add_argument("--served-model-name", default=None)
     parser.add_argument("--max-context", type=int, default=4096)
     parser.add_argument("--prefill-chunk-size", type=int, default=128, help="Prompt tokens per prefill pass (default: 128)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.max_context < 1:
         parser.error("--max-context must be positive")
     if args.prefill_chunk_size < 1:
         parser.error("--prefill-chunk-size must be positive")
+    if not args.draft and (args.draft_pack or args.draft_revision or args.kernel_config or args.kernel_config_key
+                          or args.draft_quantization != 'auto'):
+        parser.error('draft options require --draft')
+    return args
+
+
+def main(argv=None):
+    import uvicorn
+    from .serving.setup import prepare
+
+    args = parse_args(argv)
+    logging.basicConfig(level=logging.INFO)
+    assets = prepare(args)
     api_key = os.environ.get("MONOLITH_API_KEY")
-    backend = Backend(args.model, args.pack, args.max_context, args.prefill_chunk_size)
+    backend = Backend(str(assets.model_dir), str(assets.pack_dir), args.max_context, args.prefill_chunk_size, assets=assets)
     app = create_app(backend, args.served_model_name or Path(args.model).name, api_key)
     uvicorn.run(app, host=args.host, port=args.port, workers=1)
 
