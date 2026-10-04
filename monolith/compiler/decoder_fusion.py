@@ -10,6 +10,11 @@ from .region_fusion import fuse_regions
 
 
 def optimize(program, config):
+    if config.get('moe'):
+        if any(config.get(k) for k in ('gdn','attention','mlp')):
+            raise ValueError('MoE task recipes currently select routed experts independently of dense decoder regions')
+        from .moe_fusion import optimize_moe
+        return optimize_moe(program,config['moe'])
     p = copy.deepcopy(program)
     end = next((i for i, o in enumerate(p.ops) if p.kernels[o.kernel].function == 'accept_scan'), len(p.ops))
     regions = []

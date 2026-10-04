@@ -29,7 +29,7 @@ from tools.bench.layer_vs_mlx import our_model
 from tools.bench.gdn_block_static import normalize, merge, compile_config, fuse_mixer_prefix
 
 
-def build(sess, index, part='layer', *, gdn_mixer_fusion=False):
+def build(sess, index, part='layer', *, gdn_mixer_fusion=False, force_tiles=False):
     layer = sess.model.layers()[index]
     g = Graph('fixed_modelopt_layer')
     lc = LowerContext(t=T)
@@ -46,7 +46,7 @@ def build(sess, index, part='layer', *, gdn_mixer_fusion=False):
     g.check()
     for ps in DEFAULT_PASSES:
         ps(g)
-    p = emit_program(g, pack=sess.pack, profile=sess.profile, t=8, tuner=sess.tuner,
+    p = emit_program(g, pack=sess.pack, profile=sess.profile, t=8, tuner=None if force_tiles else sess.tuner,
                      tail=None, attention=sess.attention, commute_norm=sess.commute_norm,
                      gdn_mixer_fusion=gdn_mixer_fusion)
     sess.tuner.save(sess.dev.info().name)

@@ -21,6 +21,10 @@ class MetalBackend:
     def handler(self, kind, shared_handlers):
         return shared_handlers[kind]
 
+    def direct_attention_shape(self, ctx, heads, kv, d, t, lm_mode, qk_norm):
+        """Additional shapes eligible for the explicit direct-cache attention route."""
+        return False
+
     def validate_config(self, config):
         """Chip backends may add constraints for their own scheduling options."""
 

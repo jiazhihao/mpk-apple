@@ -11,7 +11,8 @@ Markov + confidence heads. Semantics follow DeepSpec's ``modeling/dspark/qwen3/m
   the draft layers; every layer's attention has keys = the context cache (positions < start) ∪ the new context
   positions ∪ the block itself, with **no mask** (bidirectional inside the block), q/k RMSNorm and full RoPE as the
   target's; the block's own k/v are not kept.
-* **Heads**: base logits = the target's ``lm_head`` over the normed block hidden; the vanilla Markov head adds
+* **Heads**: base logits use the checkpoint's frozen ``lm_head`` when present, otherwise the target's head,
+  over the normed block hidden; the vanilla Markov head adds
   ``W₂ · W₁[prev_k]`` (``prev_0`` = the anchor, ``prev_{k+1}`` = the sampled draft) before the argmax; the confidence
   head is ``σ(w · [h_k ; W₁[prev_k]] + b)``. The reference verifies the confident prefix (confidence ≥ threshold);
   ``lower_select`` can use the profile's cost table instead (design §5.8).
@@ -129,18 +130,24 @@ class DraftAttention(Module):
 
 @register_drafter("dspark")
 class DSparkDrafter(Drafter):
-    """Share the target head, and its embedding when the checkpoint omits a frozen copy."""
+    """Use frozen checkpoint embeddings/head when present, otherwise share the target's."""
 
     def __init__(self, cfg: DSparkConfig, *, target_lm_head: Optional[LMHead], max_context: int = 4096, pack_rows: int = 16,
                  confidence_threshold: float = 0.0, sts: Optional[Sequence[float]] = None,
                  shared_embedding: bool = False, kernel_config: Optional[Dict[str, Any]] = None,
-                 attention: Optional[str] = None) -> None:
-        """``target_lm_head``: the target's head (the block's logits go through it; None when only packing).
+                 attention: Optional[str] = None, checkpoint_lm_head: bool = False,
+                 block_size: Optional[int] = None) -> None:
+        """``target_lm_head``: fallback head when the draft checkpoint does not supply one (None when only packing).
         ``confidence_threshold``: the confident-prefix rule's threshold (≤ 0 verifies the whole block, the
         reference's default) used when the caller of ``lower_select`` has no cost table. ``sts``: per-position
         temperatures dividing the confidence logits (the calibration of the confidence chain, design §5.8;
         ``tools/bench/sts_calibrate.py`` fits them against measured acceptance)."""
         super().__init__(prefix="draft.")
+        if block_size is not None:
+            from dataclasses import replace
+            if isinstance(block_size, bool) or not isinstance(block_size, int) or not 1 <= block_size <= cfg.block_size:
+                raise ValueError(f"DSpark: block_size must be in 1..{cfg.block_size}")
+            cfg = replace(cfg, block_size=block_size)
         self.cfg, self.gamma, self.max_context = cfg, cfg.block_size, max_context
         self.kernel_config = kernel_config
         if attention not in (None, 'v1', 'mma', 'auto'):
@@ -162,7 +169,10 @@ class DSparkDrafter(Drafter):
                                             RMSNorm(h, eps, f"{hp}post_attention_layernorm.weight", prefix=f"{lp}post_norm.", one_plus=False),
                                             GatedMLP(h, cfg.intermediate_size, hf_prefix=f"{hp}mlp.", prefix=f"{lp}mlp.", chunk=pack_rows // 2), prefix=lp))
         self.norm = RMSNorm(h, eps, "norm.weight", prefix="draft.norm.", one_plus=False)
-        self._lm_head = target_lm_head
+        # A checkpoint may freeze a different target quantization's head. Keep
+        # those proposal weights instead of silently substituting the verifier's.
+        self.lm_head = LMHead(h, cfg.vocab_size, hf_name="lm_head.weight", prefix="draft.lm_head.") if checkpoint_lm_head else None
+        self._lm_head = self.lm_head if self.lm_head is not None else target_lm_head
         self.markov_w1 = Embedding(cfg.vocab_size, cfg.markov_rank, "markov_head.markov_w1.weight", prefix="draft.markov_w1.")
         # the Markov bias is a separate BF16 linear added to the block's logits in BF16: the residual epilogue with
         # the product rounded first reproduces both roundings
@@ -183,6 +193,7 @@ class DSparkDrafter(Drafter):
         ckpt = SafetensorsDir(path)
         try:
             options.setdefault("shared_embedding", "embed_tokens.weight" not in ckpt.names())
+            options.setdefault("checkpoint_lm_head", "lm_head.weight" in ckpt.names())
         finally:
             ckpt.close()
         drafter = cls(DSparkConfig.from_pretrained(path), target_lm_head=target_lm_head, max_context=max_context, **options)

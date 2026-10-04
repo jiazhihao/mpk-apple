@@ -1,11 +1,13 @@
 from ..base import MetalBackend
 from .scheduling import finalize
+from .attention import direct_attention_shape
 
 
 class Backend(MetalBackend):
     """Measured 40-core Max fusion policy and explicit draft/decoder recipes."""
     id = "m5_max_40c"
     finalize = staticmethod(finalize)
+    direct_attention_shape = staticmethod(direct_attention_shape)
 
     def validate_config(self, config):
         from .validation import validate_gdn_config

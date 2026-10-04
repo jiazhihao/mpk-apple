@@ -115,6 +115,10 @@ def ensure_pack(checkpoint, model, root, *, capacity, layout, backend, role='tar
     identity = dict(version=CACHE_VERSION, checkpoint=checkpoint_identity(checkpoint), capacity=capacity,
                     layout=asdict(layout), backend=backend, role=role, quantization=quantization,
                     keep=['markov_w1'] if quantization else [])
+    # Older DSpark packs omitted checkpoint-owned vocabulary heads. Give the
+    # corrected pack a new key without invalidating unrelated target caches.
+    if role == 'draft' and getattr(model, 'lm_head', None) is not None:
+        identity['checkpoint_lm_head'] = True
     # Normalize tuples before comparison with JSON loaded from disk.
     identity = json.loads(json.dumps(identity, sort_keys=True))
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]

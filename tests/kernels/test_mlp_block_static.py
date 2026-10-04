@@ -178,6 +178,29 @@ def test_native_vector_loads_and_mixed_projection_layouts(mlp,tk,ks,tn):
     assert np.isfinite(got).all() and np.linalg.norm(ref-got)/np.linalg.norm(ref)<.005
 
 
+def test_static_region_adds_its_step_state_guard(mlp):
+    from monolith.compiler.region_fusion import fuse_regions
+    dev, p, output = mlp
+    assert not any(n == p.step_state for op in p.ops for _, n, _ in op.bindings)
+    cfg = dict(workers=4, sgs=8, tn=32, ksplit=4, compact=True, barrier='simd')
+    control, fused = fuse_regions(p, [(0, len(p.ops), 'mlp', cfg)])
+    assert sum(n == p.step_state for _, n, _ in fused.ops[0].bindings) == 1
+    engines = [Engine(pr, dev) for pr in (control, fused)]
+    x = f32_to_bf16(np.random.default_rng(88).normal(0, .1, (8, 1024)).astype(np.float32)).tobytes()
+    for engine in engines:
+        engine.buffers['hidden'].write(x, 0)
+        engine.buffers[p.step_state].write(p.layout.pack({'t_this_step': 8}), 0)
+        checked_run(engine, 3)
+    assert engines[0].read(output, len(x)) == engines[1].read(output, len(x))
+    engine = engines[1]
+    engine.buffers[output].fill(0)
+    engine.buffers[p.step_state].write(p.layout.pack({'t_this_step': 8, 'done': 1}), 0)
+    # Submit directly so the runner cannot satisfy the done guard for the kernel.
+    report = nt.Queue(dev).run(engine.ops)
+    assert not report.error
+    assert engine.read(output, len(x)) == bytes(len(x))
+
+
 @pytest.mark.parametrize('tn',[64,128])
 @pytest.mark.parametrize('mode,tk',[('native',128)])
 def test_wide_nvfp4_output_tile(mlp,tn,mode,tk):

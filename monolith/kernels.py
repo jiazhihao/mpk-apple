@@ -168,7 +168,7 @@ def gemv_macros(info: PackInfo, *, t: int, rg: int | None = None, out_bf16: bool
     if rsplit != 1:
         # the work items split a block's rows (design §5.5): a narrow slab's blocks alone leave most of the crew idle —
         # the 0.6B's 1024-row projections are 64 blocks over the M5 Pro's 240 SIMD-groups (decode-kernels.md §10)
-        if rsplit not in gemv_rsplits(info.rows, rg, epilogue) or pairs is not None:
+        if rsplit not in gemv_rsplits(info.rows, rg, epilogue):
             raise ValueError(f"gemv_T: RSPLIT={rsplit} does not fit R={info.rows}, RG={rg}, epilogue {epilogue!r}")
         macros["RSPLIT"] = f"{rsplit}u"
     if pairs is not None:

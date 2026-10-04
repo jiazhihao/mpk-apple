@@ -59,7 +59,7 @@ class _Ctx:
     stat_parts: Dict[str, int] = field(default_factory=dict)              # statistic value -> partial sums per token
     dynamic_t: bool = False                                               # T from StepState (prefill chunks); else static
     speculative: bool = False                                             # the round is in the program: per-T GEMV variants
-    attention: str = "v1"                                                 # v1 | v2 | v3 | mma | auto (M5 verification tiles, otherwise v3)
+    attention: str = "v1"                                                 # v1 | v2 | v3 | mma | mma-direct | auto
     attn_rows: int = 4                                                    # v1's query rows per pass (the profile's attention_rows)
     attn_v2_tg: int = 2                                                   # v2's threadgroups per core (the profile's attention_v2_threadgroups)
     accelerator: str = "off"                                              # "on": T > 1 GEMVs on the tensor-ops tile (#51)
@@ -767,18 +767,36 @@ def _gqa_src(ctx: _Ctx, v2: bool = False, v3: bool = False, mma: bool = False) -
         "gqa_decode_v3.metal" if v3 else ("gqa_decode_v2.metal" if v2 else "gqa_decode.metal"))
 
 
-def _gqa_kernel(ctx: _Ctx, heads: int, kv: int, lm_mode: int = 0, t_c: Optional[int] = None, d: int = 128) -> str:
+def _gqa_direct_shape(ctx: _Ctx, heads: int, kv: int, d: int, t: int,
+                      lm_mode: int, qk_norm: bool) -> bool:
+    """The selected chip owns the additional, explicitly requested shape policy."""
+    return current_backend().direct_attention_shape(ctx, heads, kv, d, t, lm_mode, qk_norm)
+
+
+def _gqa_kernel(ctx: _Ctx, heads: int, kv: int, lm_mode: int = 0, t_c: Optional[int] = None, d: int = 128,
+                qk_norm: bool = True) -> str:
     """Use M5 matrix tiles for verification blocks of at least four tokens and D=128/256.
     The single-row v3 kernel remains the decode path; explicit overrides support A/B runs.
+    The measured static-eight-row direct-cache override also covers D=64.
     ``t_c`` is the op's compiled row count, including LM drafter row sources."""
-    rows = (heads // kv) * (ctx.t if t_c is None else t_c)
-    if ctx.attention == "mma":
+    t = ctx.t if t_c is None else t_c
+    rows = (heads // kv) * t
+    attention = ctx.attention
+    if attention == "mma-direct":
+        if _gqa_direct_shape(ctx, heads, kv, d, t, lm_mode, qk_norm):
+            return "mma"
+        attention = "auto"
+    if attention == "mma":
         return "mma" if d in (128, 256) else "v3"
-    if ctx.attention == "auto" and ctx.accelerator == "on" and d in (128, 256) and (ctx.t if t_c is None else t_c) >= 4:
+    # Unnormalized queries need the finer FP16 probability partition below.
+    # Automatic selection is limited to the shape that passed the checkpoint
+    # token gate; other no-norm shapes retain v3 pending validation.
+    mma_validated = qk_norm or (d == 128 and heads == 24 and kv == 8)
+    if attention == "auto" and ctx.accelerator == "on" and mma_validated and d in (128, 256) and t >= 4:
         return "mma"
-    if ctx.attention in ("v3", "auto"):
+    if attention in ("v3", "auto"):
         return "v3"
-    if ctx.attention == "v2":
+    if attention == "v2":
         return "v2" if rows <= 32 and not lm_mode else "v1"
     return "v1"
 
@@ -804,6 +822,11 @@ def _gqa_geometry(ctx: _Ctx, a: Dict[str, Any], ctx_max: int, v2: bool):
 
 
 def _gqa_mma_direct(ctx: _Ctx, a: Dict[str, Any], t: int, capacity: int) -> bool:
+    if ctx.attention == "mma-direct" and _gqa_direct_shape(ctx, a["heads"], a["kv_heads"],
+            a["head_dim"], t, int(a.get("lm_mode", 0)), a.get("qk_norm", True)):
+        if capacity < 256 or capacity % 256:
+            raise ValueError("mma-direct requires KV capacity divisible by 256")
+        return True
     # The larger softmax partition changes rounding. Restrict it to the relaxed
     # path and the measured shape; complete tiles must fit the allocated cache.
     return (ctx.commute_norm and a["head_dim"] == 128 and a["heads"] == 32 and a["kv_heads"] == 8
@@ -815,7 +838,8 @@ def _gqa_mma_chunk(d: int, direct: bool = False) -> int:
 
 
 def _gqa_mma_adaptive(a: Dict[str, Any], t: int) -> bool:
-    return a["head_dim"] == 128 and a["heads"] // a["kv_heads"] == 2 and t == 4 and not a.get("lm_mode", 0)
+    return (a.get("qk_norm", True) and a["head_dim"] == 128 and a["heads"] // a["kv_heads"] == 2
+            and t == 4 and not a.get("lm_mode", 0))
 
 
 def _gqa(ctx: _Ctx, op: Op) -> None:
@@ -827,7 +851,7 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
     segs = {name: (off, n) for name, off, n in a["segments"]}
     ctx_max = ctx.shape(kc)[0]
-    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0], d)
+    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0], d, a.get("qk_norm", True))
     if kind == "v3":
         return                                                    # core and merge are one dispatch: the merge's handler emits it (it holds the output and the gate)
     v2 = kind == "v2"
@@ -836,6 +860,7 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
         direct = _gqa_mma_direct(ctx, a, ctx.rows_of(op)[0], ctx_max)
         n_sg, chunk = ctx.cores * (8 if direct else 4), _gqa_mma_chunk(d, direct)
         macros = dict(macros, FIXED_CHUNK="1", DIRECT_KV=str(int(direct)),
+                      MMA_PROB_FP16=str(int(not a.get("qk_norm", True))),
                       MMA_SG="4" if direct else str(kernels.gqa_mma_simdgroups(d, heads // kv)), CH=str(chunk))
         if _gqa_mma_adaptive(a, ctx.rows_of(op)[0]):
             macros["ADAPTIVE_CHUNK"] = "1"
@@ -843,7 +868,9 @@ def _gqa(ctx: _Ctx, op: Op) -> None:
     t_c, _ = ctx.rows_of(op)                                      # the op's rows: T_max, or an LM drafter's chain row
     rows_max = rep * t_c
     capacity_chunk = 32 if macros.get("ADAPTIVE_CHUNK") == "1" else chunk
-    n_chunks_max = _gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, capacity_chunk, n_sg, fixed=kind == "mma")   # the merge derives the same count
+    # v2 can use 32-key chunks even when the layer's default workspace was
+    # sized for v1's 64-key chunks. Reserve its complete worst-case extent.
+    n_chunks_max = _gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, capacity_chunk, n_sg, fixed=kind in ("mma", "v2"))
     prm = ctx.params("gqa", kernels.gqa_params(
         heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=segs["q"][0], gate_off=0, k_off=segs["k"][0],
         v_off=segs["v"][0], in_stride=ctx.shape(proj)[1], out_stride=heads * d, ctx_max=ctx_max, eps=float(a["eps"]),
@@ -892,7 +919,7 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     out = op.outputs[0]
     a = op.attrs
     d, heads, kv = a["head_dim"], a["heads"], a["kv_heads"]
-    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0], d)
+    kind = _gqa_kernel(ctx, heads, kv, int(a.get("lm_mode", 0)), ctx.rows_of(op)[0], d, a.get("qk_norm", True))
     if kind == "v3":
         _gqa_v3(ctx, op)
         return
@@ -911,7 +938,7 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     if fused:
         macros = dict(macros, **fused[1])
     capacity_chunk = 32 if macros.get("ADAPTIVE_CHUNK") == "1" else chunk
-    n_chunks_max = (_gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, capacity_chunk, n_sg, fixed=kind == "mma") if core is not None
+    n_chunks_max = (_gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, capacity_chunk, n_sg, fixed=kind in ("mma", "v2")) if core is not None
                     else ctx.shape(part_o)[1] // (kv * rep * d))
     t_c, _ = ctx.rows_of(op)
     prm = ctx.params("gqa_merge", kernels.gqa_params(

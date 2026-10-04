@@ -21,8 +21,8 @@ def tune_gemv(program, index, config):
         raise ValueError('invalid shader GEMV row or worker geometry')
     if integer('EPILOGUE',0)==2 and ((rows//2)%split or (rows//2//split)%rg):
         raise ValueError('gate/up row groups must preserve paired rows')
-    if integer('PAIRS',0):
-        raise ValueError('explicit shader geometry does not support routed pairs')
+    if integer('PAIRS',0) and config.get('x_hoist', integer('X_HOIST',0)):
+        raise ValueError('routed pairs select a different activation row per item; hoisting is unsafe')
     if integer('STAT_OUT',0) and split != integer('RSPLIT',1):
         raise ValueError('row splitting a statistic producer requires resizing its consumers')
     kernel = copy.deepcopy(original)

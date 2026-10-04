@@ -56,7 +56,7 @@ def profile_draft(engine, stage_runners, restore, expected, *, reps=7, warmup=3)
     def check():
         state = engine.state()
         assert not state['done'] and not state['error'], state
-        assert state['draft_tokens'][:7] == expected['next_drafts']
+        assert state['draft_tokens'][:len(expected['next_drafts'])] == expected['next_drafts']
         return state
 
     queue = nt.Queue(engine.dev)

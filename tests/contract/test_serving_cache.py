@@ -168,3 +168,52 @@ def test_prepare_builds_target_and_draft_caches(checkpoint, tmp_path):
     native = prepare(args, device_info=info)
     assert native.pack_dir == assets.pack_dir and native.draft_pack != assets.draft_pack
     assert 'quantize' not in json.loads((native.draft_pack/'manifest.json').read_text())
+
+
+@pytest.mark.parametrize('requested,expected', [(None,7),(8,8),(4,4)])
+def test_serving_defaults_to_seven_proposals_and_allows_override(checkpoint, tmp_path, requested, expected):
+    pytest.importorskip('fastapi')
+    from monolith.serve import parse_args
+    from monolith.serving.setup import prepare
+    from tests.dspark_synth import write_checkpoint
+    path, _ = checkpoint
+    draft = tmp_path/'draft'
+    draft.mkdir()
+    write_checkpoint(draft, with_head=False, block_size=8, vocab_size=50,
+                     target_hidden_size=256, target_layer_ids=[0,1])
+    cli = ['--model',str(path),'--draft',str(draft),'--pack',str(tmp_path/'packs'),
+           '--max-context','16','--draft-quantization','none']
+    if requested is not None:
+        cli += ['--draft-block-size',str(requested)]
+    args = parse_args(cli)
+    info = SimpleNamespace(name='Apple M5 Max',gpu_cores=40,apple_family=10)
+    assets = prepare(args,device_info=info)
+    assert assets.gamma == expected and assets.capacity == 16+expected-1
+    _, opts = assets.options(8)
+    assert opts['verify_length'] == expected
+    assert opts['drafter_options']['block_size'] == expected
+    for invalid in (0,9):
+        args.draft_block_size = invalid
+        with pytest.raises(ValueError,match='draft-block-size'):
+            prepare(args,device_info=info)
+
+
+def test_load_session_uses_seven_fixed_dspark_proposals(checkpoint, tmp_path, monkeypatch):
+    from monolith import generate
+    from tests.dspark_synth import write_checkpoint
+    path,_ = checkpoint
+    draft=tmp_path/'draft';draft.mkdir()
+    write_checkpoint(draft,with_head=False,block_size=8,vocab_size=50,
+                     target_hidden_size=256,target_layer_ids=[0,1])
+    monkeypatch.setattr(generate,'Session',lambda model,pack,**kw:SimpleNamespace(**kw))
+    options=dict(drafter_dir=str(draft),max_context=32)
+    default=generate.load_session(str(path),'unused',**options)
+    assert default.drafter.gamma==7 and default.verify=='fixed' and default.verify_length==7
+    cli=generate.load_session(str(path),'unused',**options,verify='fixed',verify_length=None)
+    assert cli.verify_length==7
+    fixed=generate.load_session(str(path),'unused',**options,drafter_options={'block_size':8})
+    assert fixed.drafter.gamma==8 and fixed.verify_length==8
+    unset=generate.load_session(str(path),'unused',**options,drafter_options={'block_size':None})
+    assert unset.drafter.gamma==7 and unset.verify_length==7
+    explicit=generate.load_session(str(path),'unused',**options,drafter_options={'block_size':8},verify='cost')
+    assert explicit.drafter.gamma==8 and explicit.verify=='cost'

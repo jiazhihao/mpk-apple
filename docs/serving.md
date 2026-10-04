@@ -45,7 +45,11 @@ draft pack determines its precision. Other combinations retain source precision 
 draft weights; draft quantization can affect proposal acceptance. The 32-core M5 Max has an
 independent backend and does not inherit the 40-core serving recipes.
 
-Verification uses the anchor plus all seven draft tokens (eight rows). Both NVFP4 and
+The default is seven proposals plus one anchor (eight verification rows), or the
+checkpoint's smaller supported block. `--draft-block-size` explicitly selects a
+different supported proposal count. `load_session` and the generation CLI use
+the same DSpark default, with fixed verification unless another rule is requested.
+Both NVFP4 and
 source-precision recipes select the largest 128/4K/8K/16K/32K key not exceeding the prompt
 length (128 is also used for shorter prompts). NVFP4 uses its long-context draft recipe
 from 4K onward, combined with each context's target recipe from the existing files.
@@ -53,6 +57,9 @@ Selection happens once per request. `--kernel-config` can override the recipe JS
 `--kernel-config-key` can pin an entry. Recipes live in the selected chip backend.
 
 The checkpoint must include its tokenizer and chat template.
+Experimental support for NVIDIA's Qwen3.6-35B-A3B hybrid MoE, including its
+Koopah DSpark pairing and outstanding numerical qualification, is described in
+[the model support and validation notes](qwen-hybrid-moe.md).
 The server applies that template with an assistant generation prompt and thinking disabled where supported.
 Checkpoint resolution and packing happen during startup. GPU loading and Metal compilation happen
 on the first chat request. Subsequent requests reuse the session, but GPU weights/engines can

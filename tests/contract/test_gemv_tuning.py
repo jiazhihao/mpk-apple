@@ -44,3 +44,11 @@ def test_statistic_extent_cannot_change_without_its_consumer():
 def test_gate_up_row_pairing_is_preserved():
     p=fixture();p.kernels['k'].macros['EPILOGUE']='2'
     with pytest.raises(ValueError,match='paired'):tune_gemv(p,0,dict(rg=16))
+
+
+def test_routed_pairs_can_split_rows_but_cannot_hoist_across_experts():
+    p=fixture();p.kernels['k'].macros.update(PAIRS='1',X_HOIST='0',EPILOGUE='2')
+    tune_gemv(p,0,dict(workers=80,sgs=4,rg=2,rsplit=4))
+    assert p.kernels[p.ops[0].kernel].macros['RSPLIT']=='4u'
+    with pytest.raises(ValueError,match='hoisting'):
+        tune_gemv(p,0,dict(x_hoist=True))

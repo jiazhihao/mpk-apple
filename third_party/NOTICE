@@ -23,6 +23,8 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
 - `monolith/models/qwen3_5/model.py`, `monolith/models/qwen3_5/weights.py` — adapted from
   `python/mirage/mpk/models/qwen38/modeling.py` @ 5beaed8 (Apache-2.0): the layer structure, the stacked projection
   layouts (`[q | gate | k | v]`, `[qkv | z | a | b]`) and the checkpoint key routing; tensor parallelism dropped.
+- `monolith/models/qwen3_5_moe/config.py`, `monolith/models/qwen3_5_moe/model.py` — extend the above
+  hybrid config and model composition with the existing sparse/shared-expert library; retain the same provenance.
 - `tools/goldens/hf_golden.py` — adapted from `tests/runtime_python/models/qwen38/hf_golden.py` @ 5beaed8
   (Apache-2.0): the golden recipe (BF16, eager attention, hidden states + greedy tokens), extended with
   teacher-forced top-k logits and a torch-free output format.
@@ -73,6 +75,15 @@ Format: `<path in this repo>` — adapted from / copied from `<repo>` `<path>` @
 ## Original
 
 - `probes/` — original to this repository.
+
+- `monolith/compiler/moe_fusion.py`, `monolith/compiler/moe_ready.py`, `monolith/compiler/moe_down.py`,
+  `kernels/common/moe_group.metal` — independent
+  Metal implementations informed by Mirage PR #786's expert task grouping and
+  separation of task decomposition from worker placement. Reference:
+  `mirage-project/mirage`, `include/mirage/static_megakernel/expert_queue.cuh`
+  and `python/mirage/mpk/moe.py` at
+  `c28cac618b98fda1e0f1d590923b5f69b4ef3603` (Apache-2.0).
+  No CUDA source copied; no Mirage dependency.
 
 ## DeepSpec (deepseek-ai/DeepSpec, MIT)
 

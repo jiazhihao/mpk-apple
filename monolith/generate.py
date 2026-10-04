@@ -341,6 +341,13 @@ def load_session(model_dir: str, pack_dir: str, *, max_context: int = 4096, eos:
         from .spec import DRAFTERS
 
         dopts = dict(drafter_options or {})
+        if drafter_kind == 'dspark':
+            from .spec.dspark import DSparkConfig
+            if dopts.get('block_size') is None:
+                dopts['block_size'] = min(7, DSparkConfig.from_pretrained(drafter_dir).block_size)
+            options.setdefault('verify', 'fixed')
+            if options['verify'] == 'fixed' and options.get('verify_length') is None:
+                options['verify_length'] = dopts['block_size']
         if sts_path:
             with open(sts_path) as f:
                 dopts["sts"] = json.load(f)["temperatures"]
@@ -369,13 +376,14 @@ def main(argv=None) -> int:
     ap.add_argument("--drafter-kernel-config", type=Path, help="explicit drafter task-compiler recipe JSON")
     ap.add_argument("--decoder-kernel-config", type=Path, help="explicit eight-row target decoder recipe JSON")
     ap.add_argument("--draft-gamma", type=int, default=None, help="an LM drafter's drafts per round (--drafter-kind lm; default 5)")
-    ap.add_argument("--verify", default="cost", choices=["cost", "threshold", "fixed"], help="the verify-length rule (cost needs the chip's cost table)")
+    ap.add_argument("--draft-block-size", type=int, help="DSpark proposals per round (default: up to seven plus the target anchor)")
+    ap.add_argument("--verify", default=None, choices=["cost", "threshold", "fixed"], help="the verify-length rule (DSpark default: fixed; LM default: cost)")
     ap.add_argument("--verify-threshold", type=float, default=None, help="the confident-prefix threshold (<= 0: verify the whole block)")
     ap.add_argument("--verify-length", type=int, default=None, help="with --verify fixed: the drafts verified every step")
     ap.add_argument("--sts", default=None, help="STS temperatures JSON for the confidence chain (tools/bench/sts_calibrate.py)")
     ap.add_argument("--barriers", default="minimal", choices=["minimal", "all"], help="ICB barriers: only where a dependency needs one, or on every op")
-    ap.add_argument("--attention", default=None, choices=["v1", "v2", "v3", "mma", "auto"],
-                    help="the attention kernel (default: the chip profile's; auto = M5 matrix attention for verification blocks, v3 for short blocks)")
+    ap.add_argument("--attention", default=None, choices=["v1", "v2", "v3", "mma", "mma-direct", "auto"],
+                    help="attention kernel (auto = chip policy; mma-direct = measured static-eight-row long-context shapes, otherwise auto)")
     ap.add_argument("--prefill-attention", default=None, choices=["v1", "v2", "v3", "mma", "auto"],
                     help="independent prefill attention selection (v3 avoids large matrix partial workspaces)")
     ap.add_argument("--accelerator", default=None, choices=["on", "off"], help="T > 1 GEMVs on the tensor-ops tile (default: the chip profile's)")
@@ -385,17 +393,22 @@ def main(argv=None) -> int:
                     help="use the chip profile's fixed-eight-row GDN mixer fusion when supported")
     ap.add_argument("--math", default="safe", choices=["safe", "fast"], help="Metal math mode for the kernels")
     a = ap.parse_args(argv)
+    if a.draft_block_size is not None and (not a.drafter or a.drafter_kind != 'dspark'):
+        ap.error('--draft-block-size requires a DSpark drafter')
     from tokenizers import Tokenizer
 
     tok = Tokenizer.from_file(str(Path(a.model) / "tokenizer.json"))
     ids = tok.encode(a.prompt, add_special_tokens=False).ids
     t0 = time.time()
     draft_options = {"gamma": a.draft_gamma} if a.draft_gamma is not None else {}
+    if a.draft_block_size is not None:
+        draft_options['block_size'] = a.draft_block_size
     if a.drafter_kernel_config:
         draft_options["kernel_config"] = json.loads(a.drafter_kernel_config.read_text())
     sess = load_session(a.model, a.pack, max_context=a.max_context, eos=-1 if a.no_eos else None,
                         temperature=a.temperature, top_k=a.top_k, top_p=a.top_p, min_p=a.min_p, seed=a.seed, autotune=not a.no_autotune,
-                        drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind, verify=a.verify,
+                        drafter_dir=a.drafter, drafter_pack=a.drafter_pack, drafter_kind=a.drafter_kind,
+                        verify=a.verify or ('fixed' if a.drafter_kind == 'dspark' else 'cost'),
                         verify_threshold=a.verify_threshold, verify_length=a.verify_length, sts_path=a.sts, barriers=a.barriers,
                         drafter_options=draft_options,
                         prefill_chunk_size=a.prefill_chunk_size, attention=a.attention, fast_math=(a.math == "fast"), accelerator=a.accelerator, commute_norm=a.commute_norm,

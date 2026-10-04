@@ -3,7 +3,8 @@
 Each sample replays the same T input rows at the same cache position. Distinct
 checkpoint layers stream their distinct weights in a dependency chain; time divided
 by the layer count is a direct mean, not a difference between whole-model timings.
-Both engines use BF16 inputs and the checkpoint's unchanged quantized weights.
+Input values are rounded to BF16; MLX retains the checkpoint's activation dtype
+and unchanged quantized weights, avoiding mixed FP16/BF16 attention promotion.
 """
 from __future__ import annotations
 import argparse
@@ -26,16 +27,13 @@ def kv_prefix(layer, ctx, heads, dim):
                  for scale in (.5, .1))
 
 
-def our_stack(sess, indices, t, ctx, x, random_prefix=False):
+def layer_program(sess, indices, t, x):
     from monolith.core.ir import Graph
     from monolith.core.dtypes import DType
     from monolith.core.shapes import T
     from monolith.nn import LowerContext, state_shape
     from monolith.compiler import emit_program
     from monolith.compiler.passes import DEFAULT_PASSES
-    from monolith.runtime import Engine
-    from monolith.formats.fp import f32_to_bf16
-
     g = Graph('fixed_layer_stack')
     lc = LowerContext(t=T)
     for e in sess.model.state_spec().entries:
@@ -51,8 +49,14 @@ def our_stack(sess, indices, t, ctx, x, random_prefix=False):
     for p in DEFAULT_PASSES:
         p(g)
     prog = emit_program(g, pack=sess.pack, profile=sess.profile, t=t, tuner=sess.tuner, tail=None, attention=sess.attention,
-                        commute_norm=sess.commute_norm)
-    eng = Engine(prog, sess.dev)
+                        commute_norm=sess.commute_norm, accelerator=sess.accelerator, barriers=sess.barriers)
+    return prog, outputs
+
+
+def initialize_stack(eng, sess, indices, t, ctx, x, random_prefix=False):
+    """Restore the same input and cache prefix outside the timed replay."""
+    from monolith.formats.fp import f32_to_bf16
+
     if random_prefix:
         from monolith.packs.transforms import rope_head_perm
         for i in indices:
@@ -64,7 +68,16 @@ def our_stack(sess, indices, t, ctx, x, random_prefix=False):
             eng.buffers[mixer.prefix + 'k_cache'].write(f32_to_bf16(keys[..., perm]).tobytes(), 0)
             eng.buffers[mixer.prefix + 'v_cache'].write(f32_to_bf16(vals).tobytes(), 0)
     eng.buffers['hidden'].write(f32_to_bf16(x).tobytes(), 0)
+    prog = eng.program
     eng.buffers[prog.step_state].write(prog.layout.pack({'position': ctx, 't_this_step': t}), 0)
+
+
+def our_stack(sess, indices, t, ctx, x, random_prefix=False, *, buffers=None):
+    from monolith.runtime import Engine
+
+    prog, outputs = layer_program(sess, indices, t, x)
+    eng = Engine(prog, sess.dev, buffers=buffers, fast_math=sess.fast_math)
+    initialize_stack(eng, sess, indices, t, ctx, x, random_prefix)
     return eng, outputs
 
 
@@ -72,7 +85,8 @@ def mlx_stack(model, indices, t, ctx, x, random_prefix=False):
     import mlx.core as mx
     from mlx_lm.models.cache import KVCache, ArraysCache
     layers = list(model.layers)
-    inp = mx.array(x[None], dtype=mx.bfloat16)
+    dtype = layers[indices[0]].input_layernorm.weight.dtype
+    inp = mx.array(x[None], dtype=dtype)
     caches, initial = [], []
     for i in indices:
         layer = layers[i]
@@ -81,8 +95,8 @@ def mlx_stack(model, indices, t, ctx, x, random_prefix=False):
             # MPK replays a fixed StepState.step: its ping-pong input slot
             # remains zero. Reset MLX to the same input state each replay.
             # Materialize the initial convolution and recurrent state outside timing.
-            mx.eval(layer(mx.zeros_like(inp), cache=cache), cache.state)
-            state = [mx.zeros_like(a) if a is not None else None for a in cache.state]
+            mx.eval(layer(mx.zeros_like(inp), cache=cache), cache[0], cache[1])
+            state = [mx.zeros_like(cache[j]) if cache[j] is not None else None for j in range(2)]
             mx.eval(state)
             initial.append(state)
         else:
@@ -90,13 +104,13 @@ def mlx_stack(model, indices, t, ctx, x, random_prefix=False):
             attn = layer.self_attn
             nh = getattr(attn, 'n_kv_heads', None) or attn.num_key_value_heads
             d = getattr(attn, 'head_dim', None) or attn.q_proj.weight.shape[0] // attn.n_heads
-            zeros = mx.zeros((1, nh, ctx + t + 256, d), dtype=mx.bfloat16)
+            zeros = mx.zeros((1, nh, ctx + t + 256, d), dtype=dtype)
             cache.keys = zeros
             cache.values = mx.zeros_like(zeros)
             if random_prefix:
                 keys, vals = kv_prefix(i, ctx, nh, d)
-                cache.keys = mx.concatenate([mx.array(keys.transpose(1, 0, 2)[None], dtype=mx.bfloat16), zeros[:, :, ctx:]], axis=2)
-                cache.values = mx.concatenate([mx.array(vals.transpose(1, 0, 2)[None], dtype=mx.bfloat16), zeros[:, :, ctx:]], axis=2)
+                cache.keys = mx.concatenate([mx.array(keys.transpose(1, 0, 2)[None], dtype=dtype), zeros[:, :, ctx:]], axis=2)
+                cache.values = mx.concatenate([mx.array(vals.transpose(1, 0, 2)[None], dtype=dtype), zeros[:, :, ctx:]], axis=2)
             cache.offset = ctx
             mx.eval(cache.keys, cache.values)
             initial.append(None)
@@ -109,9 +123,16 @@ def mlx_stack(model, indices, t, ctx, x, random_prefix=False):
             if state is None:
                 cache.offset = ctx
             else:
-                cache.state = list(state)
+                for slot, value in enumerate(state):
+                    cache[slot] = value
             h = layers[i](h, mask=None if t == 1 or state is not None else 'causal', cache=cache)
         return h
+
+    # A recurrent layer's next state is an independent graph output. Evaluate
+    # it together with h so fixed-state replays cannot elide the state update.
+    step.state_outputs = lambda: [cache[j] for cache, state in zip(caches, initial)
+                                  if state is not None for j in range(2) if cache[j] is not None]
+    step.activation_dtype = str(dtype)
     def check(outputs):
         previous = inp
         cosines = []
@@ -119,11 +140,15 @@ def mlx_stack(model, indices, t, ctx, x, random_prefix=False):
             if state is None:
                 cache.offset = ctx
             else:
-                cache.state = list(state)
-            ref = np.asarray(layers[i](previous, mask=None if t == 1 or state is not None else 'causal', cache=cache).astype(mx.float32)).reshape(-1).astype(np.float64)
+                for slot, value in enumerate(state):
+                    cache[slot] = value
+            ref = layers[i](previous, mask=None if t == 1 or state is not None else 'causal', cache=cache)
+            if ref.dtype != dtype:
+                raise ValueError(f'MLX layer {i} promoted {dtype} inputs to {ref.dtype}')
+            ref = np.asarray(ref.astype(mx.float32)).reshape(-1).astype(np.float64)
             flat = got.reshape(-1).astype(np.float64)
             cosines.append(float(flat @ ref / (np.linalg.norm(flat) * np.linalg.norm(ref))))
-            previous = mx.array(got[None], dtype=mx.bfloat16)
+            previous = mx.array(got[None], dtype=dtype)
         return min(cosines)
     return step, check
 
@@ -132,6 +157,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--model', required=True)
     ap.add_argument('--pack', required=True)
+    ap.add_argument('--modelopt', action='store_true',
+                    help='use native MLX-LM with the unchanged ModelOpt NVFP4 codes and tensor scales')
     ap.add_argument('--ts', default='1,4,6,8')
     ap.add_argument('--ctx', default='128,1024')
     ap.add_argument('--kind', default='all', choices=['all', 'attention', 'gdn'])
@@ -139,7 +166,7 @@ def main():
     ap.add_argument('--layers', help='comma-separated checkpoint layer indices, within the selected kind')
     ap.add_argument('--individual', action='store_true', help='benchmark each selected layer separately; retain stack runs to check streaming latency')
     ap.add_argument('--kv-prefix', choices=['random', 'zero'], default='random')
-    ap.add_argument('--attention', choices=['auto','v1','v2','v3','mma'], default='auto')
+    ap.add_argument('--attention', choices=['auto','v1','v2','v3','mma','mma-direct'], default='auto')
     ap.add_argument('--reps', type=int, default=5)
     ap.add_argument('--steps', type=int, default=24)
     ap.add_argument('--out', type=Path)
@@ -160,7 +187,11 @@ def main():
 
     ts, ctxs = list(map(int, a.ts.split(','))), list(map(int, a.ctx.split(',')))
     sess = Session(our_model(a.model, None, max(ctxs) + max(ts) + 256), a.pack, eos=-1, attention=a.attention, commute_norm=a.commute_norm)
-    model, _ = load(a.model)
+    if a.modelopt:
+        from tools.bench.modelopt_qwen_mlx import load as load_modelopt
+        model = load_modelopt(a.model, layer_indices=list(map(int, a.layers.split(','))) if a.layers else None)
+    else:
+        model, _ = load(a.model)
     indices = [i for i, l in enumerate(model.layers) if a.kind == 'all' or
                (a.kind == 'gdn') == bool(getattr(l, 'is_linear', False))]
     if a.layers:
@@ -194,11 +225,11 @@ def main():
             start = time.perf_counter()
             for _ in range(a.steps):
                 y = step()
-                mx.async_eval(y)
+                mx.async_eval(y, *step.state_outputs())
                 pending.append(y)
                 if len(pending) > 1:
                     mx.eval(pending.pop(0))
-            mx.eval(*pending)
+            mx.eval(*pending, *step.state_outputs())
             return (time.perf_counter() - start) * 1e3 / a.steps
         ours()
         if baseline is not None:
@@ -232,8 +263,10 @@ def main():
                    metric='fixed_individual_layer' if a.individual else 'fixed_layer_stack', kind=a.kind, layer_indices=indices, T=t, ctx=ctx, steps=a.steps,
                    attention=a.attention, commute_norm=a.commute_norm, pack=str(Path(a.pack).resolve()), checkpoint=str(Path(a.model).resolve()),
                    mlx_version=importlib.metadata.version('mlx'), mlx_lm_version=importlib.metadata.version('mlx-lm'),
+                   mlx_weight_adapter='ModelOpt NVFP4 original codes + tensor scales' if a.modelopt else 'stock mlx-lm loader',
                    os=platform.platform(), repetitions=a.reps, prefix=f'{a.kv_prefix} KV; zero recurrent input slot',
-                   dtype='bfloat16', cosine=cosine, oracle_pass=oracle_pass, oracle_threshold=a.min_cosine, ours_us=w * 1000 / len(indices), mlx_us=m * 1000 / len(indices),
+                   dtype='bfloat16', mlx_activation_dtype=step.activation_dtype,
+                   cosine=cosine, oracle_pass=oracle_pass, oracle_threshold=a.min_cosine, ours_us=w * 1000 / len(indices), mlx_us=m * 1000 / len(indices),
                    ratio=w / m, faster_in_every_pair=all(s["ours_wall_ms"] < s["mlx_wall_ms"] for s in samples), samples=samples)
         if baseline is not None:
             b = min(s['baseline_wall_ms'] for s in samples)

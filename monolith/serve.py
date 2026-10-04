@@ -191,6 +191,7 @@ def parse_args(argv=None):
     parser.add_argument("--model", required=True, help="Hugging Face repo ID or local checkpoint path")
     parser.add_argument("--draft", "--drafter", dest="draft", help="DSpark Hugging Face repo ID or local checkpoint path")
     parser.add_argument("--draft-kind", choices=['dspark'], default='dspark')
+    parser.add_argument("--draft-block-size", type=int, help="Draft proposals per round (default: up to seven, plus one target anchor)")
     parser.add_argument("--pack", help="Local pack-cache directory (default: $XDG_CACHE_HOME/monolith/packs); existing packs also accepted")
     parser.add_argument("--draft-pack", help="Optional separate draft cache or existing draft pack")
     parser.add_argument("--draft-quantization", choices=['auto', 'none', 'nvfp4'], default='auto',
@@ -211,7 +212,9 @@ def parse_args(argv=None):
         parser.error("--max-context must be positive")
     if args.prefill_chunk_size < 1:
         parser.error("--prefill-chunk-size must be positive")
-    if not args.draft and (args.draft_pack or args.draft_revision or args.kernel_config or args.kernel_config_key
+    if args.draft_block_size is not None and args.draft_block_size < 1:
+        parser.error('--draft-block-size must be positive')
+    if not args.draft and (args.draft_pack or args.draft_revision or args.draft_block_size is not None or args.kernel_config or args.kernel_config_key
                           or args.draft_quantization != 'auto'):
         parser.error('draft options require --draft')
     return args

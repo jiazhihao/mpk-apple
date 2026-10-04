@@ -36,7 +36,8 @@ class ServingAssets:
         key = None
         if self.draft_dir:
             options.update(drafter_dir=str(self.draft_dir), drafter_pack=str(self.draft_pack),
-                           drafter_kind='dspark', verify='fixed', verify_length=self.gamma)
+                           drafter_kind='dspark', verify='fixed', verify_length=self.gamma,
+                           drafter_options=dict(block_size=self.gamma))
         if self.recipes:
             keys = sorted(int(k) for k in self.recipes)
             key = self.recipe_key or str(max((k for k in keys if k <= prompt_tokens), default=keys[0]))
@@ -45,7 +46,7 @@ class ServingAssets:
                 for k, v in recipe.get('accelerator_min_t', {}).items()})
             if 'bf16_min_t' in recipe:
                 profile.accelerator_min_t['bf16'] = recipe['bf16_min_t']
-            options.update(drafter_options=dict(attention=recipe.get('draft_attention', 'mma'),
+            options.update(drafter_options=dict(block_size=self.gamma, attention=recipe.get('draft_attention', 'mma'),
                                                kernel_config=copy.deepcopy(recipe.get('draft'))),
                            decoder_kernel_config=copy.deepcopy(recipe.get('target')),
                            prefill_attention='v3', accelerator='on')
@@ -70,12 +71,14 @@ def prepare(args, *, device_info=None):
     # Reserve the extra block positions used by draft attention beyond the target context.
     draft = DRAFTERS.get('dspark').from_checkpoint(str(draft_dir), target_lm_head=None,
                 max_context=args.max_context) if draft_dir else None
-    gamma = draft.gamma if draft else 0
+    gamma = (min(7, draft.gamma) if args.draft_block_size is None else args.draft_block_size) if draft else 0
+    if draft and not 1 <= gamma <= draft.gamma:
+        raise ValueError(f'--draft-block-size must be between 1 and {draft.gamma}')
     capacity = args.max_context + max(0, gamma - 1)
     model = cls.from_checkpoint(str(model_dir), max_context=capacity)
     if draft:
         draft = DRAFTERS.get('dspark').from_checkpoint(str(draft_dir), target_lm_head=model.lm_head,
-                                                       max_context=capacity)
+                                                       max_context=capacity, block_size=gamma)
         draft.bind_target(model)
         if (draft.cfg.target_hidden != model.config.hidden_size
                 or draft.cfg.hidden_size != model.config.hidden_size

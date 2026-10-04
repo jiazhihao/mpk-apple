@@ -8,7 +8,7 @@ def optimize(program, config):
     p = copy.deepcopy(program)
     # Feature KV projection is independent of the block QKV projection. Move
     # it before the mixer so its n_inject=1 shader fallback stays outside the
-    # fixed seven-row region. Both variants preserve their original predicates.
+    # fixed draft-block region. Both variants preserve their original predicates.
     cores = [o for o in p.ops if p.kernels[o.kernel].macros.get('DRAFT') == '1'
              and p.kernels[o.kernel].function in ('gqa_decode', 'gqa_decode_mma')]
     regions = []

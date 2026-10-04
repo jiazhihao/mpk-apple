@@ -46,6 +46,8 @@ def main():
     ap.add_argument('--kind', choices=('all','gdn','mlp','attention','gdn-prefix','attention-prefix'), default='all')
     ap.add_argument('--configs', type=Path, help='JSON list of explicit configurations')
     ap.add_argument('--control-only',action='store_true',help='measure normalized multi-dispatch configurations without fusion')
+    ap.add_argument('--force-tiles', action='store_true',
+                    help='screen default tile candidates against the autotuned production program')
     ap.add_argument('--reference-config', type=Path, help='one prior configuration, timed in every paired round')
     ap.add_argument('--layer', type=int, help='override the default screening layer')
     ap.add_argument('--ctx', default='128,8192', help='attention context lengths for the paired screen')
@@ -64,10 +66,11 @@ def main():
     for kind,index,part in cases:
         if a.kind not in ('all',kind): continue
         if a.layer is not None:index=a.layer
-        p,output = build(sess,index,part)
+        production,output = build(sess,index,part)
+        p = build(sess,index,part,force_tiles=True)[0] if a.force_tiles else production
         layer = sess.model.layers()[index]
-        base = Engine(p,sess.dev)
-        shared = {n:b for n,b in base.buffers.items() if p.buffers[n].role=='weights'}
+        base = Engine(production,sess.dev)
+        shared = {n:b for n,b in base.buffers.items() if production.buffers[n].role=='weights'}
         reference=None
         if a.reference_config:
             refcfg=json.loads(a.reference_config.read_text())
@@ -133,7 +136,7 @@ def main():
                         assert engines['matched_control'].read(name)==data, 'control/fusion state changed: '+name
                     results={n:{metric:min(s[metric] for s in ss) for metric in ('gpu_us','wall_us')}
                              for n,ss in samples.items()}
-                    row=dict(kind=kind,layer=index,ctx=ctx,capacity=capacity,config=cfg,check=check,control_bit_exact=None if a.control_only else True,replay_bit_exact=True,selected_engine=selected,
+                    row=dict(kind=kind,layer=index,ctx=ctx,capacity=capacity,config=cfg,force_tiles=a.force_tiles,check=check,control_bit_exact=None if a.control_only else True,replay_bit_exact=True,selected_engine=selected,
                              reference_config=refcfg if reference is not None else None,
                              results=results,samples=samples,reps=a.reps,steps=a.steps,
                              dispatches={n:len(e.program.ops) for n,e in engines.items()},

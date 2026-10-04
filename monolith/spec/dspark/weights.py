@@ -1,6 +1,6 @@
 """Loading a DSpark drafter checkpoint (the DeepSpec / TorchSpec safetensors naming, no prefix): ``embed_tokens``,
 ``fc``, ``hidden_norm``, ``layers.N.*`` as a Qwen3 layer, ``norm``, ``markov_head.markov_w1/w2``,
-``confidence_head.proj``; no ``lm_head`` (the target's is used). llama.cpp's GGUF naming (``markov_w1/w2``,
+``confidence_head.proj``; optional frozen ``lm_head`` (otherwise the target's is used). llama.cpp's GGUF naming (``markov_w1/w2``,
 ``conf_proj``, ``dflash.block_size``) is a later addition."""
 
 from __future__ import annotations
