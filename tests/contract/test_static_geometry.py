@@ -37,6 +37,16 @@ def test_long_task_chain_has_bounded_scratch_expression():
     for index in range(28):assert f'sizeof(s{index}::Scratch)' in source
 
 
+def test_preprocessing_without_apple_sdk_preserves_task_source(monkeypatch):
+    from monolith.compiler import static_fusion
+    kernel=KernelSpec('kernel void noop(uint gid [[thread_position_in_grid]]) { uint n=COUNT; }',
+                      'noop',{'COUNT':'16u'})
+    expected=static_fusion.stage(kernel,0)
+    which=static_fusion.shutil.which
+    monkeypatch.setattr(static_fusion.shutil,'which',lambda name:None if name=='xcrun' else which(name))
+    assert static_fusion.stage(kernel,0)==expected
+
+
 @pytest.mark.parametrize('kw', [{'attention_groups':0},{'attention_groups':4097},
                                {'attention_qm':32},{'attention_qm':24},{'merge_sgs':16},{'merge_unroll':3},
                                {'attention_compact_partials':1},

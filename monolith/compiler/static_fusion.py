@@ -4,7 +4,7 @@ Inline the production task bodies into one fixed-worker kernel. The normalized
 multi-dispatch program is a required control: cooperative activation loading and
 common threadgroup geometry change performance independently of fusion.
 """
-import re, subprocess, copy, struct
+import re, subprocess, copy, struct, shutil
 from monolith.kernels import KERNELS_DIR
 from monolith.runtime.program import KernelSpec, OpSpec, BufferSpec
 
@@ -597,7 +597,11 @@ def stage(k,i,immutable=()):
         src=src.replace('xp[(ulong)c[1]*K+kp*TK+c[0]]',
             'xp[(ulong)min(uint(c[1]),T_act-1u)*K+kp*TK+min(uint(c[0]),uint(TK)-1u)]')
     defs='\n'.join(f'#define {a} {b}' for a,b in k.macros.items())
-    preprocessed=subprocess.run(['xcrun','clang','-E','-P','-x','c++','-'],input=defs+'\n'+src,text=True,capture_output=True)
+    # Preprocessing is CPU-only; Linux contract tests have no Apple SDK wrapper.
+    command=['xcrun','clang'] if shutil.which('xcrun') else [shutil.which('clang') or shutil.which('c++')]
+    if command[0] is None:
+        raise ValueError('static task preprocessing requires clang or a C++ compiler')
+    preprocessed=subprocess.run(command+['-E','-P','-x','c++','-'],input=defs+'\n'+src,text=True,capture_output=True)
     if preprocessed.returncode:
         raise ValueError('static task preprocessing failed: '+preprocessed.stderr.strip())
     src=preprocessed.stdout
