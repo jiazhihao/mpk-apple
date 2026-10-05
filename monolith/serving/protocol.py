@@ -121,10 +121,18 @@ class ChatRequest(BaseModel):
     def token_limit(self):
         return self.max_completion_tokens or self.max_tokens or 256
 
-    def template_inputs(self):
+    def template_inputs(self, *, cache_prefix=False):
         messages = []
-        for m in self.messages:
+        # Probe the reusable part of the last conversational message. Agent
+        # clients put project instructions in earlier text blocks of this same
+        # message; dropping the whole message discards that reusable context.
+        last = next((i for i in range(len(self.messages) - 1, -1, -1)
+                     if self.messages[i].role not in ('system', 'developer')), -1)
+        for i, m in enumerate(self.messages):
             content = m.content if isinstance(m.content, str) else ''.join(p.text for p in m.content or [])
+            if cache_prefix and i == last:
+                content = (''.join(p.text for p in m.content[:-1])
+                           if cache_prefix != 'message' and isinstance(m.content, list) else '')
             item = {'role': 'system' if m.role == 'developer' else m.role, 'content': content}
             if m.tool_call_id:
                 item['tool_call_id'] = m.tool_call_id
@@ -178,6 +186,32 @@ FUNCTION_BLOCK = re.compile(r'<function=([^>]+)>(.*?)</function>', re.S)
 PARAMETER_BLOCK = re.compile(r'<parameter=([^>]+)>(.*?)</parameter>', re.S)
 
 
+def streaming_text(content, request):
+    """Return the stable visible prefix without exposing partial tool payloads.
+
+    Complete calls are emitted as structured events only after validation. A
+    marker split across tokenizer chunks stays buffered, as do incomplete UTF-8
+    and suffixes that could become a configured stop sequence.
+    """
+    if request.tools and request.tool_choice != 'none':
+        content = TOOL_BLOCK.sub('', content)
+        marker = '<tool_call>'
+        start = content.find(marker)
+        if start >= 0:
+            content = content[:start]
+        else:
+            for length in range(len(marker) - 1, 0, -1):
+                if content.endswith(marker[:length]):
+                    content = content[:-length]
+                    break
+    stops = [request.stop] if isinstance(request.stop, str) else request.stop or []
+    hold = max((length for stop in stops for length in range(1, len(stop))
+                if content.endswith(stop[:length])), default=0)
+    if hold:
+        content = content[:-hold]
+    return content.rstrip('\ufffd')
+
+
 def tool_payload(payload, request):
     if not payload.startswith('<function='):
         return json.loads(payload)
@@ -191,20 +225,24 @@ def tool_payload(payload, request):
         key, value = parameter.groups()
         if key in arguments:
             raise ValueError('duplicate parameter')
-        value = value.removeprefix('\n').removesuffix('\n')
         field = schema.get('properties', {}).get(key, {})
-        if field.get('type') != 'string':
-            try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                if field.get('type') in ('object', 'array', 'integer', 'number', 'boolean', 'null'):
-                    raise ValueError('invalid typed parameter')
-        arguments[key] = value
+        arguments[key] = parameter_value(value, field)
     if PARAMETER_BLOCK.sub('', body).strip():
         raise ValueError('unparsed function content')
     if set(schema.get('required', [])) - arguments.keys():
         raise ValueError('missing required parameters')
     return {'name': name, 'arguments': arguments}
+
+
+def parameter_value(value, field):
+    value = value.removeprefix('\n').removesuffix('\n')
+    if field.get('type') != 'string':
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            if field.get('type') in ('object', 'array', 'integer', 'number', 'boolean', 'null'):
+                raise ValueError('invalid typed parameter')
+    return value
 
 
 def parse_completion(content, request, finish):
@@ -231,7 +269,8 @@ def parse_completion(content, request, finish):
         raise APIError('The model generated multiple calls when parallel_tool_calls=false', 502, 'invalid_tool_call')
     if not calls and (request.tool_choice == 'required' or isinstance(request.tool_choice, dict)):
         raise APIError('The model did not produce the required tool call', 502, 'invalid_tool_call')
-    visible = TOOL_BLOCK.sub('', content).strip() if calls else content
+    # Preserve prose byte-for-byte so the final body matches streamed deltas.
+    visible = TOOL_BLOCK.sub('', content) if calls else content
     message = {'role': 'assistant', 'content': visible or (None if calls else '')}
     if calls:
         message['tool_calls'] = calls
@@ -251,7 +290,7 @@ def anthropic_request(body):
         for block in content or []:
             kind = block.get('type')
             if kind == 'text':
-                text.append(block['text'])
+                text.append({k: block[k] for k in ('type', 'text', 'cache_control') if k in block})
             elif kind == 'tool_use' and role == 'assistant':
                 calls.append({'id': block['id'], 'type': 'function', 'function': {
                     'name': block['name'], 'arguments': json.dumps(block['input'])}})
@@ -263,7 +302,7 @@ def anthropic_request(body):
                 raise APIError(f'Unsupported Messages content block: {kind}')
         messages.extend(results)
         if text or calls:
-            messages.append({'role': role, 'content': ''.join(text), **({'tool_calls': calls} if calls else {})})
+            messages.append({'role': role, 'content': text, **({'tool_calls': calls} if calls else {})})
     tools = []
     for tool in body.get('tools', []):
         if tool.get('type', 'custom') != 'custom':
@@ -279,9 +318,15 @@ def anthropic_request(body):
             raise APIError('Unsupported tool_choice')
     if body.get('thinking', {}).get('type', 'disabled') != 'disabled':
         raise APIError('Extended thinking is unavailable; set thinking.type=disabled')
-    for key in ('output_config', 'output_format'):
-        if body.get(key):
-            raise APIError(f'{key} is not supported')
+    output_config = body.get('output_config')
+    if output_config:
+        if isinstance(output_config, dict) and set(output_config) == {'effort'}:
+            # Claude Code retries without effort when the rejection names the
+            # capability. Keep rejecting constraints we cannot actually honor.
+            raise APIError('This model does not support the effort parameter (output_config.effort)')
+        raise APIError('output_config is not supported')
+    if body.get('output_format'):
+        raise APIError('output_format is not supported')
     return ChatRequest(model=body['model'], messages=messages, tools=tools, tool_choice=converted,
         parallel_tool_calls=not choice.get('disable_parallel_tool_use', False), max_tokens=body['max_tokens'],
         temperature=body.get('temperature', 0.0), top_p=body.get('top_p', 1.0),

@@ -38,7 +38,7 @@ class Buffer {
  public:
   // shared-storage buffer of `nbytes`, optionally initialized from `data`
   Buffer(const Device& d, size_t nbytes, const void* data = nullptr);
-  // wraps a page-aligned range of a memory-mapped file with newBufferWithBytesNoCopy (no copy, no ownership)
+  // wraps an immutable, shared read-only file mapping with newBufferWithBytesNoCopy
   Buffer(const Device& d, const std::string& path, uint64_t offset, size_t nbytes);
   ~Buffer();
   size_t nbytes() const;
@@ -121,6 +121,9 @@ struct RunnerStats {
   double gpu_ms = 0;          // sum of the command buffers' GPU times
   double wall_ms = 0;         // wall time of run()
   double host_busy_ms = 0;    // CPU time spent by the pump thread (encode + drain), from getrusage
+  double encode_ms = 0;       // host wall time preparing command buffers
+  double commit_ms = 0;       // host wall time in Metal commit()
+  double wait_ms = 0;         // host wall time waiting for completion (overlaps GPU time)
   bool done = false;          // StepState.done was observed
   std::string error;
 };
@@ -128,12 +131,13 @@ struct RunnerStats {
 class Runner {
  public:
   // `resources`: every buffer the program touches (ICB execution needs them made resident explicitly).
+  // `read_only_resources`: the immutable subset (weights/parameters); other buffers permit writes.
   // `step_state` holds the StepState struct; `done_offset` / `ring_head_offset` / `ring_tail_offset` are its field
   // offsets. `ring` is the token ring: `ring_capacity` 8-byte slots, each `(sequence << 32) | token` written by the
   // GPU as one aligned store; the host drains by sequence and publishes `ring_tail` for the GPU's overflow check.
   Runner(const Device& d, const Icb& icb, const std::vector<Dispatch>& ops, std::vector<const Buffer*> resources,
          const Buffer& step_state, uint32_t done_offset, uint32_t ring_head_offset, uint32_t ring_tail_offset,
-         const Buffer& ring, uint32_t ring_capacity);
+         const Buffer& ring, uint32_t ring_capacity, std::vector<const Buffer*> read_only_resources = {});
   ~Runner();
   // Replays the step program up to `max_steps` times: `steps_per_cb` steps per command buffer (the max_cb_ms
   // control), `in_flight` command buffers queued ahead. `reencode` = the fallback path (fresh encoder per step,

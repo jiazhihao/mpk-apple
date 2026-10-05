@@ -944,9 +944,12 @@ def _gqa_merge(ctx: _Ctx, op: Op) -> None:
     n_chunks_max = (_gqa_chunk_capacity(ctx, part_o, part_md, ctx_max, kv, rep, d, capacity_chunk, n_sg, fixed=kind in ("mma", "v2")) if core is not None
                     else ctx.shape(part_o)[1] // (kv * rep * d))
     t_c, _ = ctx.rows_of(op)
+    # Keep the producer's exact KV capacity, including unaligned DSpark
+    # headroom. Rounding it to a partial stride breaks workspace compaction.
+    merge_capacity = ctx_max if core is not None else n_chunks_max * chunk
     prm = ctx.params("gqa_merge", kernels.gqa_params(
         heads=heads, kv_heads=kv, t_active=t_c, position=0, n_sg=n_sg, q_off=0, gate_off=0, k_off=0, v_off=0,
-        in_stride=heads * d, out_stride=heads * d, ctx_max=n_chunks_max * chunk, eps=1e-6, scaling=1.0, has_gate=gate is not None,
+        in_stride=heads * d, out_stride=heads * d, ctx_max=merge_capacity, eps=1e-6, scaling=1.0, has_gate=gate is not None,
         n_chunks_max=n_chunks_max, rows_max=rep * t_c))
     km = ctx.kernel("gqa", _gqa_src(ctx, v2), "gqa_merge_v2" if v2 else "gqa_merge", macros, static_params=[("gqa", "p", prm)])
     st = ctx.program.step_state
@@ -1509,8 +1512,9 @@ def compile_program(model: Model, pack: PackFile, profile: Profile, *, t: Option
     (and its pack) the dynamic-T program carries the speculative round instead of the advance: ``verify`` = ``"cost"``
     (the cost-aware verify-length rule when the profile has a cost table for the pack's dominant format, otherwise the
     threshold rule), ``"threshold"`` (``verify_threshold``; None = 0.5, ≤ 0 = verify the whole block) or ``"fixed"``
-    (``verify_length`` drafts every step — the measurement's baseline). ``prefill=True`` retains the one-token
-    variants needed by a partial prompt chunk, even when verification always processes two or more tokens."""
+    (``verify_length`` drafts every step — the measurement's baseline). ``prefill=True`` retains dedicated
+    one-token variants for partial chunks. Without them, the next retained variant's range still extends to
+    T=1, allowing a short prompt tail to run through the resident verification graph."""
     layout = layout or StepStateLayout()
     g = Graph("step")
     token = model.lower(g)

@@ -140,6 +140,9 @@ class Harness:
             dp = (nt.Dispatch().pipeline(self.pso_prepare).buffer(0, mb).buffer(1, abb).buffer(2, self.conv_state)
                   .buffer(4, self.aux[0]).buffer(5, self.aux[1]).buffer(6, self.aux[2]).buffer(8, self.prep)
                   .bytes(9, params).buffer(15, self.st).grid(3 * t * hv).threadgroup(32).barrier())
+            if hasattr(self, 'prefill_prepare_geometry'):
+                grid, group = self.prefill_prepare_geometry
+                dp.grid(*grid).threadgroup(*group)
             d.buffer(8, self.prep)
             ds.insert(0, dp)
         r = nt.Queue(self.dev).run(ds)
@@ -401,3 +404,42 @@ def test_single_pass_matches_general_recurrence_with_continuation(dev, t, sl, gr
         np.testing.assert_array_equal(*[h.step(proj, t_active=active, done=done) for h in hs])
         for attr, size in (("conv_state", 2 * hs[0].conv_bytes), ("rec_state", 2 * hs[0].rec_bytes)):
             assert getattr(hs[0], attr).read(0, size) == getattr(hs[1], attr).read(0, size)
+
+
+@pytest.mark.parametrize('t', [128, 512, 1024])
+def test_prefill_register_resident_recurrence(dev, t):
+    torch = pytest.importorskip('torch')
+    m, rng = _module(64, 8, 16, 128, 128, seed=104)
+    hs = [Harness(dev, m, t, prepared=True, slice_cols=4, slices_per_block=1,
+                  tokens_per_pass=tp, ab_separate=True, specialize=True) for tp in (8, t)]
+    for active, done in [(t, False), (1, False), (t-1, False), (0, False), (t, False), (t, True)]:
+        proj = _proj(rng, torch, t, m.in_proj.n)
+        np.testing.assert_array_equal(*[h.step(proj, t_active=active, done=done) for h in hs])
+        for attr, size in (('conv_state', 2*hs[0].conv_bytes), ('rec_state', 2*hs[0].rec_bytes)):
+            assert getattr(hs[0], attr).read(0, size) == getattr(hs[1], attr).read(0, size)
+
+
+def test_shared_prefill_preparation_preserves_partial_chunks_and_state(dev):
+    from monolith.compiler.prefill import shared_gdn_preparation
+    from monolith.runtime.program import BufferSpec, KernelSpec, OpSpec, Program
+    torch = pytest.importorskip('torch')
+    m, rng = _module(64, 2, 6, 128, 128, seed=451)
+    hs = [Harness(dev, m, 512, ab_separate=True, prepared=True, slice_cols=4,
+                  slices_per_block=1, tokens_per_pass=512) for _ in range(2)]
+    h = hs[1]
+    import struct
+    params = struct.pack('<3I', m.v_heads, m.k_heads, 512)
+    op = OpSpec('prep', [(9, 'params', 0)], (1, 1, 1), (32, 1, 1))
+    p = Program({'prep': KernelSpec(h.source, 'gdn_prepare', h.macros)},
+                {'params': BufferSpec(len(params), params, 'params')}, [op])
+    shared_gdn_preparation(p, op)
+    k = p.kernels[op.kernel]
+    h.pso_prepare = nt.Pipeline(nt.Library(dev, k.source, k.macros), 'gdn_prepare')
+    h.prefill_prepare_geometry = (op.grid, op.threadgroup)
+    for active in (512, 1, 2, 257, 511):
+        proj = _proj(rng, torch, 512, m.value_dim + m.conv_dim + 2*m.v_heads)
+        outputs = [h.step(proj, t_active=active) for h in hs]
+        np.testing.assert_array_equal(*outputs)
+        assert hs[0].prep.read(0, hs[0].prep.nbytes) == hs[1].prep.read(0, hs[1].prep.nbytes)
+        for a, b in zip(hs[0].get_state(), hs[1].get_state()):
+            np.testing.assert_array_equal(a, b)

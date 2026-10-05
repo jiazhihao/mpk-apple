@@ -97,6 +97,23 @@ def test_program_json_roundtrip(tmp_path):
     assert q.to_json() == p.to_json() and q.ops[1].name == "advance" and q.buffers["params"].init == p.buffers["params"].init
 
 
+def test_pipeline_cache_survives_engine_replacement_without_reusing_state():
+    from monolith.runtime import _native as nt
+    device, cache = nt.Device(), {}
+    first = Engine(_program(2), device, pipeline_cache=cache)
+    pipelines = dict(first.pipelines)
+    assert first.run(2).tokens == [7, 14]
+    del first
+    second = Engine(_program(3), device, pipeline_cache=cache)
+    assert all(second.pipelines[name] is pipeline for name, pipeline in pipelines.items())
+    assert second.run(3).tokens == [7, 14, 21]
+    assert len(cache) == 2
+    changed = Engine(_program(1), device, fast_math=True, pipeline_cache=cache)
+    assert all(changed.pipelines[name] is not pipeline for name, pipeline in pipelines.items())
+    assert changed.run(1).tokens == [7]
+    assert len(cache) == 4
+
+
 def test_ring_overflow_is_an_error_not_corruption():
     eng = Engine(_program(n_stop=1000, ring_cap=16))           # 16 slots, 25 steps per buffer: the GPU outruns the host
     rep = eng.run(1000, steps_per_cb=25, in_flight=3)
@@ -126,3 +143,36 @@ def test_profile_gives_per_op_gpu_times():
         write_chrome_trace(f.name, eng.program, runs)
         ev = json.load(open(f.name))["traceEvents"]
         assert len(ev) == 6 and ev[0]["ph"] == "X" and ev[0]["name"] == "map"
+
+
+def test_runner_reports_host_phases_without_counting_wait_as_cpu():
+    eng = Engine(_program(n_stop=20))
+    report = eng.run(20, steps_per_cb=5, in_flight=2)
+    assert report.tokens == [7 * s for s in range(1, 21)]
+    assert report.encode_ms >= 0 and report.commit_ms >= 0 and report.wait_ms >= 0
+    assert report.encode_ms + report.commit_ms + report.wait_ms <= report.wall_ms + 0.1
+
+
+def test_read_only_file_weights_survive_engine_recreation(tmp_path):
+    import os
+    path = tmp_path / 'weights.pack'
+    page = os.sysconf('SC_PAGESIZE')
+    values = np.arange(page // 4, dtype=np.uint32)
+    path.write_bytes(bytes(page) + values.tobytes())
+    source = """#include <metal_stdlib>
+using namespace metal;
+kernel void copy_weights(device const uint* w [[buffer(0)]], device uint* out [[buffer(1)]],
+                         uint i [[thread_position_in_grid]]) { out[i] = w[i] + 7u; }
+"""
+    program = _program(1)
+    program.buffers['weights'] = BufferSpec(page, role='weights', file=str(path), file_offset=page)
+    program.buffers['out'] = BufferSpec(page, role='arena')
+    program.kernels['copy'] = KernelSpec(source, 'copy_weights')
+    program.ops = [OpSpec('copy', [(0, 'weights', 0), (1, 'out', 0)],
+                         (page // 4 // 128, 1, 1), (128, 1, 1), True)]
+    for _ in range(2):
+        engine = Engine(program)
+        engine.run(1, steps_per_cb=1, in_flight=1)
+        np.testing.assert_array_equal(np.frombuffer(engine.read('out'), dtype=np.uint32), values + 7)
+        del engine
+    assert path.read_bytes() == bytes(page) + values.tobytes()

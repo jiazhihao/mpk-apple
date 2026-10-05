@@ -299,6 +299,10 @@ kernel void gdn_mixer(device const ushort* proj [[buffer(0)]], device const usho
 #if STEP_STATE
   if (st->done) return;
 #if COMMIT
+  // Intermediate prefill accepts every input row. The forward recurrence has
+  // already written the new slot, and accept_scan advanced the parity to it.
+  // Only speculative rejection needs a replay of the committed prefix.
+  if (st->prefill_left > 0u) return;
   const uint T = st->checkpoint_index;                       // the committed tokens of the step that just ended (n_inject is the drafter's row count)
 #else
   const uint T = st->t_this_step;

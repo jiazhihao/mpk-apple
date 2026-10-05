@@ -15,7 +15,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
@@ -41,6 +41,12 @@ class Generation:
     committed: Optional[List[int]] = None    # per decode step: tokens committed (accepted + the bonus)
     verify_len: Optional[List[int]] = None   # per decode step: drafts verified (L)
     confidences: Optional[List[List[float]]] = None   # per decode step: the block's confidences [gamma]
+    cached_prompt_tokens: int = 0
+    setup_ms: float = 0.0
+    prefill_wall_ms: float = 0.0
+    state_reset_ms: float = 0.0
+    checkpoint_ms: float = 0.0
+    prefill_timings: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def ms_per_token(self) -> float:
@@ -74,7 +80,9 @@ class Session:
                  verify: str = "cost", verify_threshold: Optional[float] = None, verify_length: Optional[int] = None,
                  barriers: str = "minimal", attention: Optional[str] = None, fast_math: bool = False, accelerator: Optional[str] = None,
                  prefill_chunk_size: int = 128, commute_norm: bool = True, gdn_mixer_fusion: bool = True,
-                 prefill_attention: Optional[str] = None, decoder_kernel_config: Optional[Dict[str, Any]] = None) -> None:
+                 prefill_attention: Optional[str] = None, decoder_kernel_config: Optional[Dict[str, Any]] = None,
+                 prefix_cache: bool = False, prefix_cache_min_tokens: int = 0, device=None, pipeline_cache=None,
+                 prefill_optimizations: bool = True, prefix_cache_max_bytes: Optional[int] = None) -> None:
         """``drafter`` (a ``Drafter`` built with the model's head) and its pack turn the session speculative: one
         small dynamic-T decode program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
         from .runtime import _native as nt
@@ -84,7 +92,7 @@ class Session:
         self.model, self.pack = model, PackFile(pack_dir)
         bind_pack_formats(model, self.pack)                    # a pack re-quantized at pack time differs from the checkpoint the tree was built from
         self.spec_steps_per_cb, self.spec_in_flight = 1, 2     # the round's pump cadence (generate); the plain path takes the call's
-        self.dev = nt.Device()
+        self.dev = device or nt.Device()
         info = self.dev.info()
         self.profile = profile or config_for_device(info.gpu_cores, info.apple_family, info.name)
         if self.profile is None:
@@ -113,6 +121,7 @@ class Session:
         # Prompt chunks can need much larger matrix-attention partials than the
         # verification block. Allow a lower-memory prefill path independently.
         self.prefill_attention = prefill_attention
+        self.prefill_optimizations = prefill_optimizations
         self.decoder_kernel_config = decoder_kernel_config
         if accelerator is None and os.environ.get("MONOLITH_ACCELERATOR") in ("on", "off"):
             self.accelerator = os.environ["MONOLITH_ACCELERATOR"]                    # an A/B knob for the test tiers
@@ -122,6 +131,24 @@ class Session:
         model.sampler = GreedySampler(prefix="sampler.") if temperature <= 0 else StochasticSampler(temperature, top_k, top_p, min_p, seed, prefix="sampler.")
         self.engines: Dict[Any, Any] = {}
         self._programs: Dict[Any, Any] = {}
+        # Pipelines do not retain weight buffers. Keep them even when memory
+        # pressure requires switching between prefill and decode allocations.
+        self._pipelines = pipeline_cache if pipeline_cache is not None else {}
+        self._setup_ms = 0.0
+        self.prefix_cache = None
+        entries = list(model.state_spec().entries)
+        if drafter is not None:
+            entries += list(drafter.state_entries())
+        self._kv_buffers = {entry.name for entry in entries if entry.checkpoints == 1
+                            and entry.name.endswith(('k_cache', 'v_cache', 'k_ctx', 'v_ctx'))}
+        if prefix_cache:
+            from .runtime.prefix_cache import PrefixCache
+            # A 22K Qwen/DSpark checkpoint exceeds 2 GiB. Allow it on larger
+            # machines, without consuming the same allowance on smaller chips.
+            budget = prefix_cache_max_bytes
+            if budget is None:
+                budget = min(4 * 1024**3, info.recommended_working_set // 8)
+            self.prefix_cache = PrefixCache(entries, max_bytes=budget, min_tokens=prefix_cache_min_tokens)
         self._last_engine = None
         self.buffers: Optional[Dict[str, Any]] = None
         self.tuner = None
@@ -147,20 +174,42 @@ class Session:
         bound = max(bound, self.drafter.gamma + 1 if self.drafter is not None else 1)
         return self._engine(f"prefill.{bound}", bound, dynamic=True, prefill=True)
 
+    def prepare(self):
+        """Compile prefill/decode programs without making their weight layouts resident."""
+        from .runtime.engine import compile_pipelines
+        bound = max(self.prefill_chunk_size, self.drafter.gamma + 1 if self.drafter is not None else 1)
+        plans = [(f'prefill.{bound}', bound, True, True),
+                 (0, self.decode_t_max, True, False) if self.drafter is not None else (1, 1, False, False)]
+        for key, rows, dynamic, prefill in plans:
+            if key not in self._programs:
+                self._programs[key] = self._compile(rows, dynamic=dynamic, prefill=prefill)
+            compile_pipelines(self._programs[key], self.dev, fast_math=self.fast_math, cache=self._pipelines)
+
+    def release_engines(self, keep_state_from=None):
+        """Release GPU allocations, retaining CPU programs and executable pipelines."""
+        self.buffers = ({n: b for n, b in keep_state_from.buffers.items()
+                         if keep_state_from.program.buffers[n].role in ('state', 'step_state', 'ring')
+                         or n in ('accept_log', 'conf_log')} if keep_state_from is not None else None)
+        self.engines.clear()
+        self._last_engine = None
+
     def _engine(self, key, bound: int, *, dynamic: bool, prefill: bool = False):
         from .runtime import Engine
 
         if key not in self.engines:
+            started = time.perf_counter()
             prog = self._programs.get(key)
             if prog is None:
                 prog = self._compile(bound, dynamic=dynamic, prefill=prefill)
                 self._programs[key] = prog
-            eng = Engine(prog, self.dev, buffers=self.buffers, fast_math=self.fast_math)
+            eng = Engine(prog, self.dev, buffers=self.buffers, fast_math=self.fast_math,
+                         pipeline_cache=self._pipelines)
             if self.buffers is None:
                 self.buffers = dict(eng.buffers)
             else:
                 self.buffers.update(eng.buffers)
             self.engines[key] = eng
+            self._setup_ms += (time.perf_counter() - started) * 1000
         return self.engines[key]
 
     def _compile(self, bound, *, dynamic, prefill):
@@ -171,51 +220,117 @@ class Session:
                                attention=self.prefill_attention if prefill and self.prefill_attention is not None else self.attention,
                                accelerator=self.accelerator, commute_norm=self.commute_norm,
                                prefill=prefill, gdn_mixer_fusion=self.gdn_mixer_fusion)
+        if prefill and bound >= 32 and self.prefill_optimizations:
+            from .compiler.arena import reuse_arenas
+            from .compiler.prefill import specialize_prompt
+            prog = specialize_prompt(prog)
+            with using_backend(self.profile.backend) as backend:
+                prog = backend.optimize_prefill(prog)
+            reuse_arenas(prog, barriers=self.barriers)
         if self.tuner is not None:
             self.tuner.save(self.dev.info().name)
         if self.decoder_kernel_config is not None and not prefill:
             if not dynamic or bound != 8:
                 raise ValueError('explicit decoder recipes require a dynamic eight-row verification program')
             from .compiler.barriers import place_barriers
-            with using_backend(self.profile.backend) as backend:
-                prog = backend.optimize_decoder(prog, self.decoder_kernel_config)
+            if self.decoder_kernel_config:
+                with using_backend(self.profile.backend) as backend:
+                    prog = backend.optimize_decoder(prog, self.decoder_kernel_config)
             place_barriers(prog, self.barriers)
         return prog
 
-    def reset(self) -> None:
+    def reset(self, *, preserve_kv: bool = False) -> None:
         """Zero the states, StepState and ring for a new sequence (the weights stay mapped)."""
         for eng in self.engines.values():
             for name, spec in eng.program.buffers.items():
+                # Position zero invalidates every old KV row. New inputs write
+                # each row before attention can read it; clearing capacity-sized
+                # caches needlessly pages several GB through the CPU.
+                if preserve_kv and name in self._kv_buffers:
+                    continue
                 if spec.role in ("state", "step_state", "ring"):
                     eng.buffers[name].fill(0)
 
     def generate(self, prompt_ids: List[int], max_new_tokens: int, *, steps_per_cb: int = 8, in_flight: int = 3,
-                 on_tokens=None, cancelled=None) -> Generation:
+                 on_tokens=None, cancelled=None, cache_prefix_tokens: Union[int, Sequence[int]] = 0) -> Generation:
         p = len(prompt_ids)
         if p < 1:
             raise ValueError("the prompt must have at least one token")
-        if self.decoder_kernel_config is not None:
+        self._setup_ms = 0.0
+        cache = getattr(self, 'prefix_cache', None)
+        cached = cache.match(prompt_ids) if cache is not None else None
+        offset = len(cached.tokens) if cached is not None else 0
+        # A verification graph also accepts ordinary prompt rows: accept_scan
+        # uses prefill_left to commit their state without sampling. Its pruned
+        # projection variants cover T=1 as well. Keep the compact weights and
+        # ICB resident for short prompts/tails instead of remapping both packs.
+        can_ingest = (self.decoder_kernel_config is not None and self.drafter is not None
+                      and self.verify == 'fixed' and (self.verify_length or 0) >= 1)
+        resident_prefill = can_ingest and p - offset <= self.prefill_chunk_size
+        if self.decoder_kernel_config is not None and not resident_prefill:
             # Derived matrix layouts and the original prefill pack can each
             # fit while their union cannot. Retain CPU programs across requests,
             # but release decoder allocations before loading the prefill pack.
-            self.engines.clear()
-            self.buffers = None
-            self._last_engine = None
-        self.reset()
-        t_max = self.prefill_chunk_size
-        chunks = [list(prompt_ids[i: i + t_max]) for i in range(0, p, t_max)]
-        pre = self.prefill_engine(p)
+            self.release_engines()
+        elif resident_prefill and self.engines and 0 not in self.engines:
+            # A one-token response can finish in prefill without ever loading
+            # decode. Those original weight windows must not be reused by name
+            # for the decoder's differently packed matrices.
+            self.release_engines()
+        reset_started = time.perf_counter()
+        self.reset(preserve_kv=True)
+        state_reset_ms = (time.perf_counter() - reset_started) * 1000
+        t_max = self.decode_t_max if resident_prefill else self.prefill_chunk_size
+        # Split at the stable message prefix and just before the prompt tail.
+        # Intermediate passes do not sample or draft; their state can be reused
+        # exactly, including GDN recurrence and DSpark's injected-context KV.
+        boundaries = {p}
+        checkpoints = set()
+        if can_ingest and not resident_prefill:
+            # Move to the compact decoder before the first output token. The
+            # potentially expensive layout transition must not interrupt SSE.
+            boundaries.add(max(offset, p - self.decode_t_max))
+        if cache is not None:
+            # A reusable message prefix is enough for short tails. Copying a
+            # second multi-GB checkpoint just before sampling costs more than
+            # replaying a few eight-row passes on the next request.
+            candidates = [cache_prefix_tokens] if isinstance(cache_prefix_tokens, int) else cache_prefix_tokens
+            candidates = [n for n in candidates if 0 < n < p] or [p - 1]
+            checkpoints.update(n for n in candidates if offset < n < p and n >= cache.min_tokens)
+            boundaries.update(checkpoints)
+        chunks = []
+        begin = offset
+        for end in sorted(boundaries):
+            if end <= begin:
+                continue
+            chunks.extend(list(prompt_ids[i:min(i + t_max, end)]) for i in range(begin, end, t_max))
+            begin = end
+        pre = self.engine(0) if resident_prefill else self.prefill_engine(None if cache is not None else p)
         self._last_engine = pre
         cap = pre.program.context_capacity                    # the last new token is sampled at position p + max_new_tokens - 2
         if cap and p + max_new_tokens - 1 > cap:
             raise ValueError(f"generate: a {p}-token prompt plus {max_new_tokens} new tokens exceeds the context capacity of {cap} positions "
                              f"(the smaller of the model's and the drafter's max_context, less the draft block)")
         st = pre.buffers[pre.program.step_state]
-        prefill_ms = 0.0
+        checkpoint_ms = 0.0
+        if cached is not None:
+            checkpoint_started = time.perf_counter()
+            cache.restore(cached, pre)
+            checkpoint_ms += (time.perf_counter() - checkpoint_started) * 1000
+        initial_step = int(self.layout.unpack(st.read(0, self.layout.size))['step'])
+        prefill_ms = prefill_wall_ms = 0.0
+        prefill_timings = []
         tokens: List[int] = []
         for k, chunk in enumerate(chunks):
             if cancelled and cancelled():
                 return Generation([], prefill_ms, 0, 0, 0, 0)
+            if can_ingest and not resident_prefill and k == len(chunks) - 1:
+                self.release_engines(keep_state_from=pre)
+                del pre
+                pre = self.engine(0)
+                self._last_engine = pre
+                st = pre.buffers[pre.program.step_state]
+                resident_prefill = True
             # the host writes each chunk's tokens and length; the advance emits only after the last chunk
             state = self.layout.unpack(st.read(0, self.layout.size))
             state.update(t_this_step=len(chunk), pending_tokens=chunk, prefill_left=len(chunks) - 1 - k,
@@ -224,19 +339,24 @@ class Session:
             st.write(self.layout.pack(state), 0)
             r1 = pre.run(1, steps_per_cb=1, in_flight=1)
             prefill_ms += r1.gpu_ms
+            prefill_wall_ms += r1.wall_ms
+            prefill_timings.append(dict(position=offset, tokens=len(chunk), gpu_ms=r1.gpu_ms, wall_ms=r1.wall_ms,
+                host_busy_ms=getattr(r1, 'host_busy_ms', 0.0), encode_ms=getattr(r1, 'encode_ms', 0.0),
+                commit_ms=getattr(r1, 'commit_ms', 0.0), wait_ms=getattr(r1, 'wait_ms', 0.0)))
             tokens += r1.tokens
+            offset += len(chunk)
+            if cache is not None and offset in checkpoints:
+                checkpoint_started = time.perf_counter()
+                cache.save(prompt_ids[:offset], pre)
+                checkpoint_ms += (time.perf_counter() - checkpoint_started) * 1000
         if on_tokens:
             on_tokens(tokens)
         dec_ms = dec_wall = host = 0.0
         steps = 0
         n_pre = len(tokens)
         if max_new_tokens > 1 and not r1.done and not (cancelled and cancelled()):
-            if self.decoder_kernel_config is not None:
-                self.buffers = {n: b for n, b in pre.buffers.items()
-                                if pre.program.buffers[n].role in ('state', 'step_state', 'ring')
-                                or n in ('accept_log', 'conf_log')}
-                self.engines.clear()
-                self._last_engine = None
+            if self.decoder_kernel_config is not None and not resident_prefill:
+                self.release_engines(keep_state_from=pre)
                 del pre
             if on_tokens:
                 # Bound each host pump for incremental output/cancellation, while
@@ -245,7 +365,7 @@ class Session:
                 self._last_engine = dec
                 while len(tokens) < max_new_tokens and not (cancelled and cancelled()):
                     need = max_new_tokens - len(tokens)
-                    r2 = dec.run(min(4 if self.drafter else 8, need),
+                    r2 = dec.run(min(1 if self.drafter else 8, need),
                                  steps_per_cb=self.spec_steps_per_cb if self.drafter else steps_per_cb,
                                  in_flight=self.spec_in_flight if self.drafter else in_flight,
                                  max_tokens=need)
@@ -280,10 +400,13 @@ class Session:
             if err:                                               # past a request that fits sets 2 harmlessly, so only a short result is one)
                 raise RuntimeError(f"generate: the program stopped with error {err} after {len(tokens)} of {max_new_tokens} tokens "
                                    f"({'the token ring overflowed' if err == 1 else 'the context capacity was reached'})")
-        stats = self._accept_stats(self._last_engine, len(chunks)) if self.drafter is not None else None
+        stats = self._accept_stats(self._last_engine, initial_step + len(chunks)) if self.drafter is not None else None
         if stats is not None:
             steps = len(stats[0])          # the decode steps that ran: the pump's count includes the steps queued behind `done`, which returned at once
         gen = Generation(tokens[:max_new_tokens], prefill_ms, dec_ms, dec_wall, host, steps, decode_tokens=min(len(tokens), max_new_tokens) - n_pre)
+        gen.cached_prompt_tokens, gen.setup_ms = len(cached.tokens) if cached is not None else 0, self._setup_ms
+        gen.prefill_wall_ms, gen.state_reset_ms, gen.checkpoint_ms = prefill_wall_ms, state_reset_ms, checkpoint_ms
+        gen.prefill_timings = prefill_timings
         if stats is not None:
             gen.accepted, gen.committed, gen.verify_len, gen.confidences = stats
         return gen

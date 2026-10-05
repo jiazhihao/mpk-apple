@@ -64,6 +64,10 @@ class MetalBackend:
     def optimize_draft(self, program, drafter, *, prefill=False):
         return drafter.optimize_program(program, prefill=prefill)
 
+    def optimize_prefill(self, program):
+        """Chip-owned tuning for large prompt chunks, before scratch reuse."""
+        return program
+
     def serving_recipes(self, model, drafter, quantization):
         """Only opt matching workloads into recipes validated on this chip."""
         return {}

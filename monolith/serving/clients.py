@@ -46,6 +46,9 @@ def client_config(name, url, model, key, context=32768):
                    ANTHROPIC_MODEL=model, ANTHROPIC_DEFAULT_OPUS_MODEL=model,
                    ANTHROPIC_DEFAULT_SONNET_MODEL=model, ANTHROPIC_DEFAULT_HAIKU_MODEL=model,
                    CLAUDE_CODE_SUBAGENT_MODEL=model, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1',
+                   CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS='1',
+                   CLAUDE_CODE_MAX_CONTEXT_TOKENS=str(context),
+                   CLAUDE_CODE_ATTRIBUTION_HEADER='0',
                    MAX_THINKING_TOKENS='0',
                    CLAUDE_CODE_MAX_OUTPUT_TOKENS=str(min(4096, context // 4)))
         return ['claude', '--model', model], env
