@@ -3,6 +3,8 @@ import json
 import time
 import uuid
 
+from .protocol import APIError
+
 
 def sse(data, event=None):
     return (f'event: {event}\n' if event else '') + 'data: ' + (
@@ -19,6 +21,7 @@ class WireResponse:
         self.input_tokens = 0
         self.text = ''
         self.text_started = False
+        self.tool_calls = []
 
     def event(self, kind, **data):
         if self.protocol == 'responses':
@@ -73,6 +76,23 @@ class WireResponse:
         self.text += text
         self.text_started = True
 
+    def tool_delta(self, index, name, arguments, complete=None):
+        """Stream a pending Chat Completions call, retaining one ID per index."""
+        if index == len(self.tool_calls):
+            call = {'id': 'call_' + uuid.uuid4().hex, 'name': name, 'arguments': '', 'complete': None}
+            self.tool_calls.append(call)
+            yield self.chat_chunk({'tool_calls': [{'index': index, 'id': call['id'], 'type': 'function',
+                                                   'function': {'name': name, 'arguments': ''}}]})
+        if index >= len(self.tool_calls):
+            raise APIError('Tool call indices changed while streaming', 502, 'invalid_tool_call')
+        call = self.tool_calls[index]
+        if name != call['name'] or not arguments.startswith(call['arguments']):
+            raise APIError('Tool arguments changed while streaming', 502, 'invalid_tool_call')
+        delta = arguments[len(call['arguments']):]
+        call.update(arguments=arguments, complete=complete)
+        if delta:
+            yield self.chat_chunk({'tool_calls': [{'index': index, 'function': {'arguments': delta}}]})
+
     def body(self, message, finish, prompt_tokens, completion_tokens):
         calls = message.get('tool_calls', [])
         text = message.get('content') or ''
@@ -105,8 +125,27 @@ class WireResponse:
     def finish(self, body, include_usage=False):
         if self.protocol == 'chat':
             choice = body['choices'][0]
-            for i, call in enumerate(choice['message'].get('tool_calls', [])):
-                yield self.chat_chunk({'tool_calls': [{'index': i, **call}]})
+            calls = choice['message'].get('tool_calls', [])
+            if len(self.tool_calls) > len(calls):
+                raise APIError('Tool calls changed while streaming', 502, 'invalid_tool_call')
+            completed = []
+            for pending, call in zip(self.tool_calls, calls):
+                full = pending['complete'] or call['function']['arguments']
+                if (pending['name'] != call['function']['name'] or not full.startswith(pending['arguments'])
+                        or json.loads(full) != json.loads(call['function']['arguments'])):
+                    raise APIError('Tool arguments changed while streaming', 502, 'invalid_tool_call')
+                completed.append(full)
+            for i, call in enumerate(calls):
+                if i >= len(self.tool_calls):
+                    yield self.chat_chunk({'tool_calls': [{'index': i, **call}]})
+                    continue
+                pending = self.tool_calls[i]
+                full = completed[i]
+                call['id'] = pending['id']
+                call['function']['arguments'] = full
+                # Publish the closing brace only after execute() has validated
+                # every call. Some SDKs execute as soon as JSON is complete.
+                yield from self.tool_delta(i, pending['name'], full, full)
             yield self.chat_chunk({}, choice['finish_reason'])
             if include_usage:
                 yield sse({k: v for k, v in {**body, 'object': 'chat.completion.chunk', 'choices': []}.items()})

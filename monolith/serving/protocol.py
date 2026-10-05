@@ -225,20 +225,24 @@ def tool_payload(payload, request):
         key, value = parameter.groups()
         if key in arguments:
             raise ValueError('duplicate parameter')
-        value = value.removeprefix('\n').removesuffix('\n')
         field = schema.get('properties', {}).get(key, {})
-        if field.get('type') != 'string':
-            try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                if field.get('type') in ('object', 'array', 'integer', 'number', 'boolean', 'null'):
-                    raise ValueError('invalid typed parameter')
-        arguments[key] = value
+        arguments[key] = parameter_value(value, field)
     if PARAMETER_BLOCK.sub('', body).strip():
         raise ValueError('unparsed function content')
     if set(schema.get('required', [])) - arguments.keys():
         raise ValueError('missing required parameters')
     return {'name': name, 'arguments': arguments}
+
+
+def parameter_value(value, field):
+    value = value.removeprefix('\n').removesuffix('\n')
+    if field.get('type') != 'string':
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            if field.get('type') in ('object', 'array', 'integer', 'number', 'boolean', 'null'):
+                raise ValueError('invalid typed parameter')
+    return value
 
 
 def parse_completion(content, request, finish):

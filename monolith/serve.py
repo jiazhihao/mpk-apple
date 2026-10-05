@@ -22,6 +22,7 @@ from . import __version__
 from .serving.protocol import (APIError, ChatRequest, Message, TextPart, anthropic_request,
                                responses_request, parse_completion, streaming_text)
 from .serving.events import WireResponse
+from .serving.tool_stream import tool_prefixes
 
 
 class Backend:
@@ -91,7 +92,7 @@ class Backend:
             sessions.pop(next(iter(sessions)))
         self.sampling = sampling
 
-    def complete(self, request, *, on_text=None, on_start=None, cancelled=None):
+    def complete(self, request, *, on_text=None, on_content=None, on_start=None, cancelled=None):
         from jinja2 import TemplateError
 
         request_started = time.perf_counter()
@@ -116,17 +117,20 @@ class Backend:
             stopped = False
             def publish(tokens):
                 nonlocal first_text_ms, stopped
-                if on_text:
-                    text, _ = self.visible_text(tokens, request)
-                    text = streaming_text(text, request)
+                if on_text or on_content:
+                    content, _ = self.visible_text(tokens, request)
+                    text = streaming_text(content, request)
                     if text and first_text_ms is None:
                         first_text_ms = (time.perf_counter() - request_started) * 1000
-                    on_text(text)
+                    if on_text:
+                        on_text(text)
+                    if on_content:
+                        on_content(content)
                     stops = [request.stop] if isinstance(request.stop, str) else request.stop or []
                     if stops:
                         raw = self.tokenizer.decode(tokens, skip_special_tokens=True, clean_up_tokenization_spaces=False)
                         stopped = any(stop in raw for stop in stops)
-            options = dict(on_tokens=publish, cancelled=lambda: stopped or bool(cancelled and cancelled())) if on_text is not None else {}
+            options = dict(on_tokens=publish, cancelled=lambda: stopped or bool(cancelled and cancelled())) if on_text or on_content else {}
             if getattr(self.session, 'prefix_cache', None) is not None:
                 stable = set()
                 if messages:
@@ -174,6 +178,8 @@ class Backend:
         except ValueError as exc:
             raise APIError(str(exc)) from exc
         content, finish = self.visible_text(tokens, request)
+        if on_content:
+            on_content(content)
         return content, finish, len(ids), len(tokens)
 
     def visible_text(self, tokens, request):
@@ -264,6 +270,9 @@ def create_app(backend, model_name, api_key=None):
                 options = dict(on_text=lambda text: events.put(('text', text)),
                                on_start=lambda count: events.put(('start', count)),
                                cancelled=cancelled.is_set) if isinstance(backend, Backend) else {}
+                if options and wire.protocol == 'chat':
+                    options.pop('on_text')
+                    options['on_content'] = lambda content: events.put(('content', content))
                 result = execute(request, wire, **options)
                 if not options:
                     usage = result['usage']
@@ -297,11 +306,16 @@ def create_app(backend, model_name, api_key=None):
                         wire.input_tokens = value
                         for event in wire.start():
                             yield event
-                    elif kind == 'text':
-                        if not value.startswith(wire.text):
+                    elif kind in ('text', 'content'):
+                        text = streaming_text(value, request) if kind == 'content' else value
+                        if not text.startswith(wire.text):
                             raise RuntimeError('Decoded text changed after streaming')
-                        for event in wire.delta(value[len(wire.text):]):
+                        for event in wire.delta(text[len(wire.text):]):
                             yield event
+                        if kind == 'content':
+                            for snapshot in tool_prefixes(value, request):
+                                for event in wire.tool_delta(*snapshot):
+                                    yield event
                     elif kind == 'error':
                         yield wire.error(*value)
                         break
@@ -317,6 +331,8 @@ def create_app(backend, model_name, api_key=None):
                         for event in wire.finish(value, bool((request.stream_options or {}).get('include_usage'))):
                             yield event
                         break
+            except APIError as exc:
+                yield wire.error(exc.message, exc.code)
             finally:
                 cancelled.set()
         return StreamingResponse(generate(), media_type='text/event-stream',

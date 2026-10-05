@@ -161,11 +161,20 @@ history, greedy or stochastic sampling, output limits and stop strings. Response
 client-executed custom tools (such as patch input); grammar constraints are not enforced.
 Streaming text is emitted after each speculative round, including requests that advertise
 tools. Only verified target tokens are published. Incomplete UTF-8, possible stop-string
-suffixes, and tool markers are held until they can be decoded safely. Complete tool calls
-are validated and emitted as structured events at the end of generation. SSE keep-alives
+suffixes, and tool markers are held until they can be decoded safely. Chat Completions
+streams pending tool-call IDs, names and argument fragments, including the XML parameter
+format used by the Qwen checkpoints. The final argument-object brace is withheld until
+the full response passes tool validation, so truncated or malformed calls cannot become
+executable through an early JSON parse. Other APIs emit validated complete tool calls
+at the end of generation. SSE keep-alives
 cover compilation and prefill; empty events are not evidence of a first output token. Client
 disconnection stops further work at a prefill-chunk/decode-round boundary; an active Metal
 dispatch finishes first. Non-streaming requests retain the original native pump path.
+
+OpenCode can therefore display a pending `write`/`edit` tool while its arguments are
+being generated. OpenCode 1.18.34 does not render partial tool arguments in its UI;
+that is a [client limitation](https://github.com/anomalyco/opencode/blob/v1.18.34/packages/opencode/src/session/processor.ts#L295-L308),
+not buffering by this endpoint. Ordinary assistant text continues to stream separately.
 
 Defaults are 256 output tokens, greedy decoding, `top_p=1`, seed 0, and thinking disabled.
 Sampling changes rebuild the session while preserving the selected draft and kernel recipes.
