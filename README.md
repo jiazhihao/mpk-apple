@@ -1,3 +1,5 @@
+> **Project moved:** Active development and releases are now at [lithos-ai/lithos-metal](https://github.com/lithos-ai/lithos-metal). This repository is archived to preserve historical issues, pull requests, and benchmark evidence. Install with `brew install lithos-ai/tap/lithos-metal`.
+
 # lithos-metal
 
 A megakernel-style LLM inference engine for Apple silicon (M3 / M4 / M5, macOS 26+). First target:
