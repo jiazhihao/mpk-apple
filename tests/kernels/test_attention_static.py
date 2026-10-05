@@ -15,15 +15,19 @@ from monolith.runtime.program import BufferSpec, KernelSpec, OpSpec, Program
 
 @pytest.fixture(scope="module")
 def attention():
+    return attention_program()
+
+
+def attention_program(t=8, capacity=33024):
     dev = nt.Device()
     if dev.info().apple_family != 10:
         pytest.skip("coherent task fusion requires Apple10")
     # Same head width, replication and T as the measured attention layers.
-    heads, kv, d, t, capacity = 12, 2, 256, 8, 33024
+    heads, kv, d = 12, 2, 256
     hd, kd = heads*d, kv*d
     stride = 2*hd + 2*kd
     chunks = (capacity+31)//32
-    layout = StepStateLayout()
+    layout = StepStateLayout(t_max=max(t, 8))
     params = kernels.gqa_params(heads=heads, kv_heads=kv, t_active=t, position=0,
         n_sg=80, q_off=0, k_off=hd, v_off=hd+kd, gate_off=hd+2*kd,
         in_stride=stride, out_stride=hd, ctx_max=capacity, eps=1e-6,
@@ -58,6 +62,38 @@ def attention():
              OpSpec("fold", fold+[(15, "step_state", 0)], (t*heads, 1, 1), (32, 1, 1))],
         layout=layout, ring_capacity=1, context_capacity=capacity)
     return dev, program, (capacity, kd, t, stride)
+
+
+@pytest.mark.parametrize('rows,capacity', [(32, 8192), (128, 8192), (512, 8192), (512, 8113)])
+def test_prefill_attention_tails_and_cache(rows, capacity):
+    from monolith.backends.metal.m5_max_40c.prefill import optimize
+    from monolith.compiler.barriers import place_barriers
+    dev, original, (capacity, kd, _, stride) = attention_program(rows, capacity)
+    tuned = optimize(copy.deepcopy(original))
+    place_barriers(tuned)
+    assert len(tuned.ops) == 3
+    engines = [Engine(p, dev) for p in (original, tuned)]
+    rng = np.random.default_rng(2026)
+    for name in ('k', 'v'):
+        data = f32_to_bf16(rng.normal(0, .3, (capacity, kd)).astype(np.float32)).tobytes()
+        for e in engines:
+            e.buffers[name].write(data, 0)
+    for pos, active in ((0, rows), (rows, 1), (2047, rows//2+1), (4095, rows), (7600, rows)):
+        projection = f32_to_bf16(rng.normal(0, .3, (rows, stride)).astype(np.float32)).tobytes()
+        for e in engines:
+            e.buffers['qkv'].write(projection, 0)
+            e.buffers['step_state'].write(original.layout.pack(dict(position=pos, t_this_step=active)), 0)
+            before = {n: e.read(n) for n in ('k', 'v')}
+            e.run(1, steps_per_cb=1, in_flight=1)
+            for name, old in before.items():
+                new = e.read(name)
+                assert new[:pos*kd*2] == old[:pos*kd*2]
+                assert new[(pos+active)*kd*2:] == old[(pos+active)*kd*2:]
+        for name in ('k', 'v'):
+            assert engines[0].read(name) == engines[1].read(name)
+        a, b = [bf16_to_f32(np.frombuffer(e.read('out'), np.uint16)).astype(np.float64) for e in engines]
+        assert np.isfinite(b).all()
+        assert np.linalg.norm(a-b)/np.linalg.norm(a) < .005
 
 
 @pytest.mark.parametrize("sgs,qm,groups,active,unroll", [

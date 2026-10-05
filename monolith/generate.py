@@ -82,7 +82,7 @@ class Session:
                  prefill_chunk_size: int = 128, commute_norm: bool = True, gdn_mixer_fusion: bool = True,
                  prefill_attention: Optional[str] = None, decoder_kernel_config: Optional[Dict[str, Any]] = None,
                  prefix_cache: bool = False, prefix_cache_min_tokens: int = 0, device=None, pipeline_cache=None,
-                 prefix_cache_max_bytes: Optional[int] = None) -> None:
+                 prefill_optimizations: bool = True, prefix_cache_max_bytes: Optional[int] = None) -> None:
         """``drafter`` (a ``Drafter`` built with the model's head) and its pack turn the session speculative: one
         small dynamic-T decode program holds the round; ``verify`` / ``verify_threshold`` as in ``compile_program``."""
         from .runtime import _native as nt
@@ -121,6 +121,7 @@ class Session:
         # Prompt chunks can need much larger matrix-attention partials than the
         # verification block. Allow a lower-memory prefill path independently.
         self.prefill_attention = prefill_attention
+        self.prefill_optimizations = prefill_optimizations
         self.decoder_kernel_config = decoder_kernel_config
         if accelerator is None and os.environ.get("MONOLITH_ACCELERATOR") in ("on", "off"):
             self.accelerator = os.environ["MONOLITH_ACCELERATOR"]                    # an A/B knob for the test tiers
@@ -219,6 +220,13 @@ class Session:
                                attention=self.prefill_attention if prefill and self.prefill_attention is not None else self.attention,
                                accelerator=self.accelerator, commute_norm=self.commute_norm,
                                prefill=prefill, gdn_mixer_fusion=self.gdn_mixer_fusion)
+        if prefill and bound >= 32 and self.prefill_optimizations:
+            from .compiler.arena import reuse_arenas
+            from .compiler.prefill import specialize_prompt
+            prog = specialize_prompt(prog)
+            with using_backend(self.profile.backend) as backend:
+                prog = backend.optimize_prefill(prog)
+            reuse_arenas(prog, barriers=self.barriers)
         if self.tuner is not None:
             self.tuner.save(self.dev.info().name)
         if self.decoder_kernel_config is not None and not prefill:

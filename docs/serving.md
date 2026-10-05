@@ -210,6 +210,106 @@ a captured Messages or Chat request with these diagnostics. Its
 `--message-boundary-control` option reproduces the previous cache boundary with identical
 prompt tokens. Startup compilation is outside its request timings.
 
+On the 40-core M5 Max, the Qwen3.8-27B NVFP4 serving recipe uses prepared matrix
+attention for prefill, with local reduction over 2048 keys. At 512 rows it uses
+32-query/128-key tiles, compact prepared Q, direct device tensor reads of KV,
+and 80 workers of eight SIMD groups. Causal tiles stop before future keys.
+Other chunk sizes retain the 16-query/32-key path: below 256 rows it uses 320
+workers of eight SIMD groups; larger chunks use 160 workers of four SIMD groups.
+Projection tiling is selected by matrix shape in
+`monolith/backends/metal/m5_max_40c/prefill.py`. At 512 rows, NVFP4 MLP codes
+and scales are rearranged into contiguous cooperative-operand loads without
+changing their values. FP8 projections stay eight-bit and use contiguous packed
+operands with 32-token/16-channel tiles and an exact half-based decoder inside
+the kernel. Small native BF16 GDN projections use direct BF16 reads without
+expanding their storage. Tensor scales remain in the original FP32 epilogue. Derived files are content-addressed local caches; the
+checkpoint and original weight pack remain immutable.
+
+Single-token prompt tails use the same masked matrix paths, avoiding duplicate
+copies of the original projection weights. GDN preparation computes shared Q/K
+heads once, intermediate chunks skip sampling, GDN states commit without replaying
+accepted prompt rows, and the forward GDN pass retains state in registers through
+the chunk. Temporary allocations are reused after their last consumer. Decode
+still uses the existing seven-proposal DSpark recipe.
+
+The measured throughput choice for this model/device is `--prefill-chunk-size 512`.
+The portable default remains 128. In isolated whole-program GPU measurements
+(three samples after warmup, synthetic cached KV), 128-row chunks improved as
+follows; these numbers exclude HTTP, tokenizer, checkpoint and layout-transition
+costs and are not time to first token:
+
+| Cached context | Previous GPU ms | Tuned GPU ms | Speedup |
+| --- | ---: | ---: | ---: |
+| 0 | 320.84 | 193.75 | 1.66x |
+| 8192 | 471.13 | 232.40 | 2.03x |
+| 16384 | 625.81 | 283.60 | 2.21x |
+
+Scratch allocation at 128 rows fell from 1.87 GiB to 0.30 GiB. The final
+512-row graph uses 20.02 GiB of weights, 2.91 GiB of persistent state and 0.95 GiB
+of scratch in this fixture. This removes 6.72 GiB (25.1%) from the previous
+26.74-GiB expanded-FP8 prefill layout. The eight-row decode graph keeps its
+independent packed layouts; its 22.93 GiB of weight buffers is unchanged by this
+rollback. These are planned buffer sizes, not process RSS. The policy is specific
+to the measured Qwen projection shapes on the 40-core M5 Max.
+
+The compact rollback leaves decode kernels and recipes unchanged. At 128 and
+8192 tokens, the serialized decode program was identical with prefill tuning
+on/off and before/after compiling prefill. Paired full-round experiments tried
+half-based FP8 arithmetic, scratch reuse, their combination, and vectorized
+NVFP4 loads in target-only or target-plus-draft kernels. Each round restored
+real prompt state and verified an anchor plus seven proposals, including
+acceptance/commit and the next draft. Logits, GDN state, accepted tokens and next
+proposals matched exactly. Across 15 or 21 alternating pairs per candidate and
+context, median paired changes ranged from a 0.67% slowdown to a 0.70% speedup;
+none established a reliable improvement, so these decode candidates are not
+enabled. Scratch reuse alone saved 43.47 MiB but did not improve latency.
+
+The compact-FP8 context sweep used nine samples per point after warmup and
+synthetic cached KV. These are complete prefill-program GPU times, excluding
+HTTP, tokenization and model/layout setup; throughput is `512000 / GPU ms`.
+
+| Cached context | GPU ms per 512-token chunk | Prompt tokens/s |
+| --- | ---: | ---: |
+| 0 | 513.87 | 996 |
+| 8192 | 623.90 | 821 |
+| 16384 | 692.51 | 739 |
+
+These measurements use the compact default above. They are not paired with the
+earlier expanded-weight runs and should not be interpreted as a speedup over
+those runs. Sustained 1000 tokens/s has not been established. The current
+rollback has not remeasured the 32K point.
+
+The sweep covered matrix and attention tiles, SIMD crews, key/K partitions,
+lossless operand layouts, shared-memory staging, register reuse, task order,
+weight expansion, operand precision, fast math and full-reduction matrix calls.
+The last staged NVFP4 candidate fell to 817 aggregate tokens/s; full-reduction
+matrix calls did not improve speed and changed rounding. Neither is enabled.
+Safe math and the original quantization are retained.
+
+A 1024-row chunk fits (1.91 GiB scratch), but was slower per token than 512 rows
+at 8K and 16K in the earlier sweep; the new kernel/configuration choices are
+confined to 512 rows. The sweep tools are
+`tools/bench/prefill_attention.py`, `prefill_gemm.py`, `prefill_profile.py` and
+`prefill_compare.py`, plus `prefill_gdn.py` and `prefill_policy_compare.py`;
+raw benchmark output is kept outside the repository.
+Validation includes GPU shader-validation tests for causal cache boundaries,
+partial chunks, non-tile-aligned cache capacity and every finite FP8 code. The new
+512-row path matched all 32 greedy tokens from the original 128-row/v3-attention
+path at 1025-, 4097- and 16385-token prompts. The earlier 1024-row path also
+matched at 1025 and 4097 tokens. Synthetic tests cover speculative state handoff.
+The compact 512-row validation recorded 1.59/4.81/19.70 seconds of GPU prefill
+for those complete 1025/4097/16385-token prompts, respectively. These totals
+include all prompt passes and are distinct from the isolated warm-chunk table.
+These are numerical regression checks, not a general model-quality evaluation.
+The restarted compact-weight endpoint passed health/model discovery and streamed
+`COMPACT_READY` successfully (740 ms to first text). A subsequent 1-through-40
+counting request streamed 110 visible tokens across 15 text events: 223 ms to
+first text and 179 visible tokens/s after the first event. Server GPU decode
+steps averaged 41.54 ms for the short check and 43.13 ms for the counting check,
+including DSpark and eight-row verification. These are short functional smoke
+tests, not representative model-wide throughput measurements. The endpoint runs
+the updated checkout with 512-token chunks and NVFP4 DSpark.
+
 The warm-start fix is validated by exact-prefix contract tests and GPU continuation
 checks for the deep project checkpoint and the earlier system/tool fallback. The runtime
 also checks shared immutable weight mappings across engine recreation. Development

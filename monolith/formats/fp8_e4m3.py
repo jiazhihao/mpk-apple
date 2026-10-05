@@ -24,11 +24,21 @@ class FP8E4M3(Format):
     msl_decode = """
 #define WEIGHTS_PER_WORD 16u
 #define SCALE_GROUP 0u
+#ifndef FP8_DECODE
+#define FP8_DECODE 0
+#endif
 static inline float fp8_e4m3(uint q) {
+#if FP8_DECODE
+  // Place the sign and magnitude in a half, including subnormals, then correct
+  // the exponent bias in float. Opted in by the measured 512-row prefill policy.
+  half h = as_type<half>(ushort(((q & 127u) << 7) | ((q & 128u) << 8)));
+  return float(h) * 256.0f;
+#else
   uint e = (q >> 3) & 15u, m = q & 7u;
   float v = as_type<float>(((q & 0x7Fu) << 20) + (120u << 23));
   v = (e == 0u) ? float(m) * (1.0f / 512.0f) : v;
   return (q & 0x80u) ? -v : v;
+#endif
 }
 static inline void decode_word(uint4 q, thread float* out) {
   uint w[4] = {q.x, q.y, q.z, q.w};

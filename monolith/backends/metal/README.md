@@ -50,7 +50,7 @@ their contents; chip directories initially reuse those implementations.
 To customize a chip, override `Backend.handler` for individual operations,
 `finalize` for fusion/scheduling after emission, `direct_attention_shape` for
 additional explicitly requested direct-cache shapes, `optimize_decoder` or
-`optimize_draft` for explicit recipes, or `emit`/`compile` to replace the full
+`optimize_draft` for explicit recipes, `optimize_prefill` for prompt kernels, or `emit`/`compile` to replace the full
 lowering strategy. A `.metal` file with the same relative name overrides only
 that chip's source. Shared compiler fusion helpers remain reusable. Direct
 source-building experiments can use `with using_backend("m5_max_32c"):`.
@@ -72,6 +72,17 @@ maps live in [the 40-core recipes directory](m5_max_40c/recipes/); they do not
 enable automatic context routing. See the
 [optimization study](../../../docs/research/m5max-gdn-mixer-optimization.md).
 The additional direct-cache attention shapes live in `m5_max_40c/attention.py`.
+The 40-core `prefill.py` owns large-prompt D=256 attention preparation and
+locally reduced 2048-key partitions, plus measured NVFP4/FP8 projection tiles.
+The 512-row Qwen path uses contiguous NVFP4 and FP8 operands, shared GDN Q/K
+preparation, and masked matrix tails. FP8 stays eight-bit; only native BF16
+projections use direct BF16 reads. The compact layouts preserve checkpoint
+quantization and leave the eight-row decode recipe independent of prefill tuning.
+It runs before the shared scratch-lifetime pass. Prompt specialization skips
+intermediate sampling and removes redundant GDN commit replays; persistent
+state, input buffers, logits and acceptance logs never alias scratch storage.
+`Session(prefill_optimizations=False)` retains the original compiler path for
+comparisons. Other chips retain their attention/projection geometry.
 The [hybrid MoE study](../../../docs/qwen-hybrid-moe.md#eight-row-moe-task-tuning)
 records eight-row expert task tuning, experimental megakernel boundaries and
 the seven-proposal DSpark serving default.
