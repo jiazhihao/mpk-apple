@@ -18,6 +18,9 @@ class StepReport:
     host_busy_ms: float
     done: bool
     tokens: List[int]
+    encode_ms: float = 0.0
+    commit_ms: float = 0.0
+    wait_ms: float = 0.0
 
     @property
     def host_fraction(self) -> float:
@@ -25,12 +28,28 @@ class StepReport:
         return self.host_busy_ms / self.wall_ms if self.wall_ms else 0.0
 
 
+def compile_pipelines(program, device, *, fast_math=False, cache=None):
+    """Prepare executable kernels without allocating or retaining model buffers."""
+    pipelines = {}
+    for key, k in program.kernels.items():
+        identity = (device, k.source, tuple(sorted(k.macros.items())),
+                    k.language_version, fast_math, k.function)
+        pipeline = cache.get(identity) if cache is not None else None
+        if pipeline is None:
+            lib = nt.Library(device, k.source, k.macros, k.language_version, fast_math)
+            pipeline = nt.Pipeline(lib, k.function, True)
+            if cache is not None:
+                cache[identity] = pipeline
+        pipelines[key] = pipeline
+    return pipelines
+
+
 class Engine:
     """``buffers`` lets several programs share device buffers by name (a prefill program at T = P and a decode
     program at T = 1 over the same weights, states and StepState)."""
 
     def __init__(self, program: Program, device: Optional[nt.Device] = None, buffers: Optional[Dict[str, nt.Buffer]] = None,
-                 fast_math: bool = False) -> None:
+                 fast_math: bool = False, pipeline_cache: Optional[dict] = None) -> None:
         """``fast_math``: compile the kernels with Metal's fast math mode (the default is the safe mode)."""
         self.program = program
         self.fast_math = fast_math
@@ -55,10 +74,7 @@ class Engine:
                 buf = nt.Buffer(self.dev, spec.nbytes)
                 buf.fill(0)
             self.buffers[name] = buf
-        self.pipelines: Dict[str, nt.Pipeline] = {}
-        for key, k in program.kernels.items():
-            lib = nt.Library(self.dev, k.source, k.macros, k.language_version, fast_math)
-            self.pipelines[key] = nt.Pipeline(lib, k.function, True)
+        self.pipelines = compile_pipelines(program, self.dev, fast_math=fast_math, cache=pipeline_cache)
         self.ops = []
         for o in program.ops:
             d = nt.Dispatch().pipeline(self.pipelines[o.kernel]).grid(*o.grid).threadgroup(*o.threadgroup).barrier(o.barrier_before)
@@ -76,7 +92,8 @@ class Engine:
         # buffers actually bound by the ICB need a Metal residency declaration.
         resources = {name: self.buffers[name] for op in program.ops for _, name, _ in op.bindings}
         self.runner = nt.Runner(self.dev, self.icb, self.ops, list(resources.values()), self.buffers[program.step_state],
-                                lay.offset("done"), lay.offset("ring_head"), lay.offset("ring_tail"), ring, program.ring_capacity)
+                                lay.offset("done"), lay.offset("ring_head"), lay.offset("ring_tail"), ring, program.ring_capacity,
+                                [buffer for name, buffer in resources.items() if program.buffers[name].role in ('weights', 'params')])
 
     def run(self, max_steps: int, *, steps_per_cb: int = 8, in_flight: int = 3, reencode: bool = False, max_tokens: int = 0) -> StepReport:
         """Replay up to ``max_steps`` steps (``max_tokens`` > 0: stop submitting once that many tokens arrived; the
@@ -86,7 +103,8 @@ class Engine:
             raise RuntimeError(st.error)
         if st.done and int(self.state()["error"]) == 3:
             raise RuntimeError("Megakernel: bounded worker barrier timed out")
-        return StepReport(st.steps_submitted, st.command_buffers, st.gpu_ms, st.wall_ms, st.host_busy_ms, st.done, self.runner.drain())
+        return StepReport(st.steps_submitted, st.command_buffers, st.gpu_ms, st.wall_ms, st.host_busy_ms, st.done, self.runner.drain(),
+                          st.encode_ms, st.commit_ms, st.wait_ms)
 
     def profile(self, steps: int = 3) -> List[List[Tuple[float, float]]]:
         """Per-dispatch GPU (start, end) ms for ``steps`` re-encoded steps (one encoder per op with timestamp counter

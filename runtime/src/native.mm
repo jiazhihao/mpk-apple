@@ -77,14 +77,17 @@ NB_MODULE(_native, m) {
   nb::class_<RunnerStats>(m, "RunnerStats")
       .def_ro("steps_submitted", &RunnerStats::steps_submitted).def_ro("command_buffers", &RunnerStats::command_buffers)
       .def_ro("gpu_ms", &RunnerStats::gpu_ms).def_ro("wall_ms", &RunnerStats::wall_ms).def_ro("host_busy_ms", &RunnerStats::host_busy_ms)
+      .def_ro("encode_ms", &RunnerStats::encode_ms).def_ro("commit_ms", &RunnerStats::commit_ms).def_ro("wait_ms", &RunnerStats::wait_ms)
       .def_ro("done", &RunnerStats::done).def_ro("error", &RunnerStats::error);
 
   nb::class_<Runner>(m, "Runner")
       .def("__init__", [](Runner* self, const Device& d, const Icb& icb, const std::vector<Dispatch>& ops, std::vector<const Buffer*> resources,
-                          const Buffer& state, uint32_t done_offset, uint32_t ring_head_offset, uint32_t ring_tail_offset, const Buffer& ring, uint32_t ring_capacity) {
-             new (self) Runner(d, icb, ops, resources, state, done_offset, ring_head_offset, ring_tail_offset, ring, ring_capacity); },
+                          const Buffer& state, uint32_t done_offset, uint32_t ring_head_offset, uint32_t ring_tail_offset, const Buffer& ring, uint32_t ring_capacity,
+                          std::vector<const Buffer*> read_only_resources) {
+             new (self) Runner(d, icb, ops, resources, state, done_offset, ring_head_offset, ring_tail_offset, ring, ring_capacity, read_only_resources); },
            nb::arg("device"), nb::arg("icb"), nb::arg("ops"), nb::arg("resources"), nb::arg("step_state"), nb::arg("done_offset"),
            nb::arg("ring_head_offset"), nb::arg("ring_tail_offset"), nb::arg("ring"), nb::arg("ring_capacity"),
+           nb::arg("read_only_resources") = std::vector<const Buffer*>{},
            nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 10>())
       .def("run", &Runner::run, nb::arg("max_steps"), nb::arg("steps_per_cb") = 8, nb::arg("in_flight") = 3, nb::arg("reencode") = false, nb::arg("max_tokens") = 0,
            nb::call_guard<nb::gil_scoped_release>())

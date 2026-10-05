@@ -58,7 +58,10 @@ Buffer::Buffer(const Device& d, const std::string& path, uint64_t offset, size_t
   if (offset % page || nbytes % page) throw std::runtime_error("mmap buffers need page-aligned offset and length");
   int fd = open(path.c_str(), O_RDONLY);
   if (fd < 0) throw std::runtime_error("open failed: " + path);
-  void* p = mmap(nullptr, nbytes, PROT_READ, MAP_PRIVATE, fd, (off_t)offset);
+  // Immutable weights need no private copy-on-write mapping. MAP_PRIVATE
+  // makes Metal's first residency preparation expensive even for cached file
+  // pages; shared read-only mappings avoid that work across layout switches.
+  void* p = mmap(nullptr, nbytes, PROT_READ, MAP_SHARED, fd, (off_t)offset);
   close(fd);
   if (p == MAP_FAILED) throw std::runtime_error("mmap failed: " + path);
   impl->mapped = p; impl->mapped_len = nbytes;
@@ -236,6 +239,7 @@ struct RunnerImpl {
   id<MTLDevice> dev; id<MTLCommandQueue> q;
   std::shared_ptr<IcbImpl> icb; std::vector<Dispatch> ops;
   std::vector<id<MTLBuffer>> resources;
+  std::vector<MTLResourceUsage> resource_usage;
   id<MTLBuffer> state; uint32_t done_off, head_off, tail_off;
   id<MTLBuffer> ring; uint32_t cap;
   uint32_t tail = 0;                       // next ring slot the host reads
@@ -244,11 +248,15 @@ struct RunnerImpl {
 
 Runner::Runner(const Device& d, const Icb& icb, const std::vector<Dispatch>& ops, std::vector<const Buffer*> resources,
                const Buffer& step_state, uint32_t done_offset, uint32_t ring_head_offset, uint32_t ring_tail_offset,
-               const Buffer& ring, uint32_t ring_capacity)
+               const Buffer& ring, uint32_t ring_capacity, std::vector<const Buffer*> read_only_resources)
     : impl(std::make_shared<RunnerImpl>()) {
   impl->dev = d.impl->dev; impl->q = [d.impl->dev newCommandQueue];
   impl->icb = icb.impl; impl->ops = ops;
-  for (auto* r : resources) impl->resources.push_back(r->impl->buf);
+  for (auto* r : resources) {
+    impl->resources.push_back(r->impl->buf);
+    bool read_only = std::find(read_only_resources.begin(), read_only_resources.end(), r) != read_only_resources.end();
+    impl->resource_usage.push_back(read_only ? MTLResourceUsageRead : (MTLResourceUsageRead | MTLResourceUsageWrite));
+  }
   impl->state = step_state.impl->buf; impl->done_off = done_offset; impl->head_off = ring_head_offset; impl->tail_off = ring_tail_offset;
   impl->tail = *(volatile uint32_t*)((char*)impl->state.contents + impl->tail_off);   // resume where a previous runner over the same StepState/ring stopped
   impl->ring = ring.impl->buf; impl->cap = ring_capacity;
@@ -289,7 +297,9 @@ RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_f
   std::deque<id<MTLCommandBuffer>> pending;
   size_t tokens_seen = 0;
   auto observe = [&](id<MTLCommandBuffer> cb) {
+    double waiting = now_ms();
     [cb waitUntilCompleted];
+    st.wait_ms += now_ms() - waiting;
     st.gpu_ms += (cb.GPUEndTime - cb.GPUStartTime) * 1e3;
     st.command_buffers++;
     if (cb.error && st.error.empty()) st.error = [cb.error.localizedDescription UTF8String];
@@ -299,6 +309,7 @@ RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_f
   };
   while (st.steps_submitted < max_steps && !st.done && st.error.empty() && (max_tokens == 0 || tokens_seen < max_tokens)) {
     @autoreleasepool {
+      double encoding = now_ms();
       uint32_t n = std::min<uint64_t>(steps_per_cb, max_steps - st.steps_submitted);
       id<MTLCommandBuffer> cb = [r.q commandBuffer];
       id<MTLComputeCommandEncoder> en = [cb computeCommandEncoder];   // serial: step s+1 starts after step s
@@ -311,11 +322,14 @@ RunnerStats Runner::run(uint32_t max_steps, uint32_t steps_per_cb, uint32_t in_f
             [en dispatchThreadgroups:MTLSizeMake(d.grid[0], d.grid[1], d.grid[2]) threadsPerThreadgroup:MTLSizeMake(d.threadgroup[0], d.threadgroup[1], d.threadgroup[2])];
           }
       } else {
-        for (auto& b : r.resources) [en useResource:b usage:(MTLResourceUsageRead | MTLResourceUsageWrite)];
+        for (size_t i = 0; i < r.resources.size(); i++) [en useResource:r.resources[i] usage:r.resource_usage[i]];
         for (uint32_t s = 0; s < n; s++) [en executeCommandsInBuffer:r.icb->icb withRange:NSMakeRange(0, r.icb->count)];
       }
       [en endEncoding];
+      st.encode_ms += now_ms() - encoding;
+      double committing = now_ms();
       [cb commit];
+      st.commit_ms += now_ms() - committing;
       pending.push_back(cb);
       st.steps_submitted += n;
     }

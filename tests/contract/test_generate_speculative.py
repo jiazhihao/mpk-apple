@@ -27,7 +27,7 @@ def test_speculative_request(limit, decoded, prefill_done, error):
     session.reset = Mock()
     state = Mock(read=Mock(return_value=session.layout.pack({})))
     pre = SimpleNamespace(program=SimpleNamespace(context_capacity=128, step_state='state'),
-        buffers={'state': state}, run=Mock(return_value=SimpleNamespace(tokens=[10], gpu_ms=2.0, done=prefill_done)),
+        buffers={'state': state}, run=Mock(return_value=SimpleNamespace(tokens=[10], gpu_ms=2.0, wall_ms=2.1, done=prefill_done)),
         state=lambda: {'error': 0})
     result = SimpleNamespace(tokens=decoded, gpu_ms=3.0, wall_ms=4.0, host_busy_ms=0.5, steps=6, done=True)
     dec = SimpleNamespace(run=Mock(return_value=result), state=lambda: {'error': error})
@@ -54,3 +54,26 @@ def test_speculative_request(limit, decoded, prefill_done, error):
     else:
         session.engine.assert_not_called()
         dec.run.assert_not_called()
+
+
+def test_stream_publishes_each_verified_round_and_cancels_before_the_next():
+    session = Session.__new__(Session)
+    session.decoder_kernel_config = None
+    session.layout = StepStateLayout()
+    session.seed, session.prefill_chunk_size = 0, 128
+    session.drafter = SimpleNamespace(gamma=7)
+    session.spec_steps_per_cb, session.spec_in_flight = 1, 2
+    session.reset = Mock()
+    state = Mock(read=Mock(return_value=session.layout.pack({})))
+    pre = SimpleNamespace(program=SimpleNamespace(context_capacity=128, step_state='state'), buffers={'state': state},
+        run=Mock(return_value=SimpleNamespace(tokens=[10], gpu_ms=2.0, wall_ms=2.1, done=False)))
+    dec = SimpleNamespace(run=Mock(return_value=SimpleNamespace(tokens=[11, 12], gpu_ms=3.0,
+        wall_ms=4.0, host_busy_ms=0.5, steps=1, done=False)))
+    session.prefill_engine, session.engine = Mock(return_value=pre), Mock(return_value=dec)
+    session._accept_stats = Mock(return_value=([1], [2], [7], [[.5] * 7]))
+    published = []
+    result = session.generate([1, 2], 10, on_tokens=lambda tokens: published.append(list(tokens)),
+                              cancelled=lambda: len(published) == 2)
+    assert published == [[10], [10, 11, 12]]
+    assert result.tokens == [10, 11, 12]
+    dec.run.assert_called_once_with(1, steps_per_cb=1, in_flight=2, max_tokens=9)

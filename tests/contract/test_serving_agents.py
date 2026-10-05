@@ -86,6 +86,27 @@ def test_responses_tool_events_and_continuation():
     assert seen[-1].messages[-1].content == 'contents'
 
 
+def test_anthropic_effort_rejection_allows_client_retry():
+    client, seen = make_client('hello')
+    body = {'model': 'local', 'max_tokens': 10,
+            'messages': [{'role': 'user', 'content': 'hi'}],
+            'output_config': {'effort': 'high'}}
+    headers = {'x-api-key': 'test'}
+    response = client.post('/v1/messages', json=body, headers=headers)
+    assert response.status_code == 400 and not seen
+    assert 'does not support the effort parameter' in response.json()['error']['message']
+    del body['output_config']
+    assert client.post('/v1/messages', json=body, headers=headers).status_code == 200
+    for config in ({'format': {'type': 'json_schema'}},
+                   {'effort': 'high', 'format': {'type': 'json_schema'}},
+                   {'task_budget': {'type': 'tokens', 'budget': 100}}):
+        body['output_config'] = config
+        response = client.post('/v1/messages', json=body, headers=headers)
+        assert response.status_code == 400
+        assert response.json()['error']['message'] == 'output_config is not supported'
+    assert len(seen) == 1
+
+
 def test_custom_tool_preserves_multiline_input():
     patch = '*** Begin Patch\n  indented\n*** End Patch'
     client, _ = make_client('<tool_call><function=apply_patch><parameter=input>\n' + patch + '\n</parameter></function></tool_call>')
@@ -165,6 +186,9 @@ def test_launchers_scope_configuration_and_redact_keys(monkeypatch, capsys):
     assert 'model_providers.lithos-metal.wire_api="responses"' in command
     command, env = client_config('claude', 'http://localhost:8000', 'local', 'key')
     assert env['ANTHROPIC_API_KEY'] == 'key' and env['ANTHROPIC_AUTH_TOKEN'] == 'key'
+    assert env['CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'] == '1'
+    assert env['CLAUDE_CODE_ATTRIBUTION_HEADER'] == '0'
+    assert client_config('claude', 'http://localhost:8000', 'local', 'key', 8192)[1]['CLAUDE_CODE_MAX_CONTEXT_TOKENS'] == '8192'
     with pytest.raises(ValueError):
         endpoint('http://user:password@localhost:8000')
 
@@ -218,3 +242,164 @@ def test_token_count_uses_same_tool_template():
     assert response.json() == {'input_tokens': 3}
     assert calls[0][1]['tools'][0]['function']['name'] == 'read_file'
     assert calls[0][1]['enable_thinking'] is False
+
+
+def test_tool_stream_preserves_text_at_every_marker_boundary():
+    from monolith.serving.protocol import streaming_text
+    request = ChatRequest(model='local', messages=[{'role': 'user', 'content': 'Read'}], tools=[TOOL])
+    source = '  Reading now.\n' + XML + '\nFinished. '
+    emitted = ''
+    for end in range(1, len(source) + 1):
+        text = streaming_text(source[:end], request)
+        assert text.startswith(emitted)
+        assert '<tool_call' not in text and '<function=' not in text
+        emitted = text
+    message, finish = parse_completion(source, request, 'stop')
+    assert emitted == message['content'] == '  Reading now.\n\nFinished. '
+    assert finish == 'tool_calls'
+    assert len(message['tool_calls']) == 1
+
+
+def test_streaming_only_holds_ambiguous_suffixes():
+    from monolith.serving.protocol import streaming_text
+    request = ChatRequest(model='local', messages=[{'role': 'user', 'content': 'Hi'}], stop=['END'])
+    assert streaming_text("I'm", request) == "I'm"
+    assert streaming_text('Hello E', request) == 'Hello '
+    assert streaming_text('Hello EN', request) == 'Hello '
+    assert streaming_text('Hello Earth', request) == 'Hello Earth'
+    assert streaming_text('Hi \ufffd', request) == 'Hi '
+    assert streaming_text('Hi 世', request) == 'Hi 世'
+
+
+def test_backend_streams_prose_before_a_tool_call_finishes(monkeypatch):
+    from monolith import generate
+    published = []
+    pieces = ['Hello', 'Hello <tool_', 'Hello ' + XML]
+    def run(ids, n, *, on_tokens, cancelled):
+        for index in range(len(pieces)):
+            on_tokens([index])
+            assert published[-1] == ('Hello' if index == 0 else 'Hello ')
+        return SimpleNamespace(tokens=[2])
+    backend = Backend.__new__(Backend)
+    backend.model_dir, backend.pack_dir, backend.max_context = 'model', 'pack', 1024
+    backend.prefill_chunk_size = 128
+    backend.session, backend.sampling = None, None
+    backend.tokenizer = SimpleNamespace(apply_chat_template=lambda *a, **kw: [1, 2],
+        decode=lambda ids, **kw: pieces[ids[-1]])
+    monkeypatch.setattr(generate, 'load_session', lambda *a, **kw: SimpleNamespace(eos=99, generate=run))
+    request = ChatRequest(model='local', messages=[{'role': 'user', 'content': 'Read'}], tools=[TOOL])
+    result = backend.complete(request, on_text=published.append)
+    assert result[0] == pieces[-1]
+    assert backend.last_metrics['first_text_ms'] is not None
+
+
+def test_valid_chat_survives_a_template_that_rejects_empty_cache_probe(monkeypatch):
+    from monolith import generate
+    observed = []
+    def template(messages, **kwargs):
+        if messages[-1]['content'] == '':
+            raise ValueError('No user query found')
+        return [1, 2, 3]
+    def run(ids, n, **kwargs):
+        observed.append(kwargs['cache_prefix_tokens'])
+        return SimpleNamespace(tokens=[4])
+    backend = Backend.__new__(Backend)
+    backend.model_dir, backend.pack_dir, backend.max_context = 'model', 'pack', 1024
+    backend.prefill_chunk_size = 128
+    backend.session, backend.sampling = None, None
+    backend.tokenizer = SimpleNamespace(apply_chat_template=template, decode=lambda *a, **kw: 'Hello')
+    monkeypatch.setattr(generate, 'load_session', lambda *a, **kw:
+                        SimpleNamespace(eos=99, generate=run, prefix_cache=object()))
+    request = ChatRequest(model='local', messages=[{'role': 'system', 'content': 'Be useful'},
+                                                  {'role': 'user', 'content': 'Hi'}])
+    assert backend.complete(request)[0] == 'Hello'
+    assert observed == [0]
+
+
+def test_context_switch_keeps_programs_but_releases_inactive_gpu_buffers(monkeypatch):
+    from monolith import generate
+    from unittest.mock import Mock
+    loaded = []
+    def load(*args, **kwargs):
+        session = SimpleNamespace(dev=kwargs.get('device', object()),
+            _pipelines=kwargs.get('pipeline_cache', {}), prefix_cache=object(), release_engines=Mock())
+        loaded.append(session)
+        return session
+    monkeypatch.setattr(generate, 'load_session', load)
+    backend = Backend.__new__(Backend)
+    backend.model_dir, backend.pack_dir, backend.max_context = 'model', 'pack', 32768
+    backend.prefill_chunk_size = 128
+    backend.session, backend.sampling = None, None
+    backend.assets = SimpleNamespace(options=lambda n: (str(n), {'max_context': 32774}))
+    request = ChatRequest(model='local', messages=[{'role': 'user', 'content': 'Hi'}])
+    backend.select_session(request, 128)
+    first = backend.session
+    backend.select_session(request, 4096)
+    second = backend.session
+    first.release_engines.assert_called_once()
+    assert first.dev is second.dev and first._pipelines is second._pipelines
+    assert first.prefix_cache is second.prefix_cache
+    backend.select_session(request, 128)
+    second.release_engines.assert_called_once()
+    assert backend.session is first and len(loaded) == 2
+
+
+def test_anthropic_cache_probe_keeps_project_blocks_and_trailing_system():
+    from monolith.serving.protocol import anthropic_request
+    body = dict(model='local', max_tokens=32, system='System', messages=[
+        {'role': 'user', 'content': [
+            {'type': 'text', 'text': 'Project instructions.\n', 'cache_control': {'type': 'ephemeral'}},
+            {'type': 'text', 'text': 'Repository status.\n'},
+            {'type': 'text', 'text': 'First question'}]},
+        {'role': 'system', 'content': 'Client instructions'}])
+    request = anthropic_request(body)
+    full, tools = request.template_inputs()
+    prefix, prefix_tools = request.template_inputs(cache_prefix=True)
+    assert full == [dict(role='system', content='System\n\nClient instructions'),
+                    dict(role='user', content='Project instructions.\nRepository status.\nFirst question')]
+    assert prefix == [full[0], dict(role='user', content='Project instructions.\nRepository status.\n')]
+    assert tools == prefix_tools
+    body['messages'][0]['content'][-1]['text'] = 'A different question, with a different length'
+    assert anthropic_request(body).template_inputs(cache_prefix=True) == (prefix, tools)
+    body['messages'][0]['content'][1]['text'] = 'Changed repository state.\n'
+    assert anthropic_request(body).template_inputs(cache_prefix=True)[0] != prefix
+
+
+def test_cache_probe_keeps_identical_tool_choice_and_history():
+    request = ChatRequest(model='local', tools=[TOOL], tool_choice='required', messages=[
+        {'role': 'user', 'content': 'Old question'},
+        {'role': 'assistant', 'content': 'Old answer'},
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'Repeated context'},
+                                     {'type': 'text', 'text': 'New question'}]}])
+    full, tools = request.template_inputs()
+    prefix, prefix_tools = request.template_inputs(cache_prefix=True)
+    assert prefix[:-1] == full[:-1] and prefix_tools == tools
+    assert prefix[-1]['content'] == 'Repeated context'
+    request.messages[-1].content = 'One plain user message'
+    assert request.template_inputs(cache_prefix=True)[0][-1]['content'] == ''
+
+
+def test_backend_cache_boundary_uses_tokens_not_text_block_length(monkeypatch):
+    from monolith import generate
+    observed = []
+    def template(messages, **kwargs):
+        # Pairs deliberately straddle the boundary between content blocks.
+        source = '[' + messages[-1]['content'] + ']'
+        return [sum(ord(c) << (8*i) for i, c in enumerate(source[n:n+2]))
+                for n in range(0, len(source), 2)]
+    def run(ids, n, **kwargs):
+        observed.append((ids, kwargs['cache_prefix_tokens']))
+        return SimpleNamespace(tokens=[4])
+    backend = Backend.__new__(Backend)
+    backend.model_dir, backend.pack_dir, backend.max_context = 'model', 'pack', 1024
+    backend.prefill_chunk_size = 128
+    backend.session, backend.sampling = None, None
+    backend.tokenizer = SimpleNamespace(apply_chat_template=template, decode=lambda *a, **kw: 'Hello')
+    monkeypatch.setattr(generate, 'load_session', lambda *a, **kw:
+                        SimpleNamespace(eos=99, generate=run, prefix_cache=object()))
+    request = ChatRequest(model='local', messages=[{'role': 'user', 'content': [
+        {'type': 'text', 'text': 'abcd'}, {'type': 'text', 'text': 'ef'}]}])
+    assert backend.complete(request)[0] == 'Hello'
+    # '[a', 'bc' match, but 'de' in the full prompt differs from 'd]' in
+    # the prefix probe. The checkpoint must stop before that merged token.
+    assert observed[0][1] == 2

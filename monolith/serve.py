@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from . import __version__
 
 from .serving.protocol import (APIError, ChatRequest, Message, TextPart, anthropic_request,
-                               responses_request, parse_completion)
+                               responses_request, parse_completion, streaming_text)
 from .serving.events import WireResponse
 
 
@@ -36,13 +36,66 @@ class Backend:
         self.model_dir, self.pack_dir, self.max_context = model_dir, pack_dir, max_context
         self.prefill_chunk_size = prefill_chunk_size
         self.session, self.sampling = None, None
+        self._sessions = {}
         self.assets = assets
         self.last_metrics = {}
 
-    def complete(self, request, *, on_text=None, on_start=None, cancelled=None):
-        from jinja2 import TemplateError
+    def warmup(self, model_name):
+        """Compile and page in the default generation path before accepting traffic."""
+        logging.getLogger(__name__).info('Warming generation kernels and model weights…')
+        request = ChatRequest(model=model_name, messages=[Message(role='user', content='Hello')], max_tokens=2)
+        assets = getattr(self, 'assets', None)
+        contexts = sorted(int(k) for k in assets.recipes) if assets and assets.recipes else [1]
+        if assets and assets.recipe_key:
+            contexts = [int(assets.recipe_key)]
+        else:
+            contexts = [k for k in contexts if k <= self.max_context] or contexts[:1]
+        for context in contexts:
+            logging.getLogger(__name__).info('Compiling serving context recipe %s', context)
+            self.select_session(request, context)
+            self.session.prepare()
+        # Exercise both initial allocation and reuse/reset, including the
+        # incremental text path that the first real streaming request uses.
+        for _ in range(2):
+            self.complete(request, on_text=lambda text: None)
+        self.last_metrics = {}
+
+    def select_session(self, request, prompt_tokens):
         from .generate import load_session
 
+        assets = getattr(self, 'assets', None)
+        recipe_key, options = assets.options(prompt_tokens) if assets else (None, {'max_context': self.max_context})
+        sampling = (request.temperature, request.top_p, request.seed, recipe_key)
+        if self.session is not None and sampling == self.sampling:
+            return
+        # Keep CPU programs for a bounded number of recipe/sampling variants.
+        # Only the selected session retains GPU buffers; all share executable
+        # pipelines on the same device and exact-token sequence checkpoints.
+        sessions = getattr(self, '_sessions', {})
+        self._sessions = sessions
+        prefix_cache = getattr(self.session, 'prefix_cache', None)
+        if self.session is not None:
+            if hasattr(self.session, '_pipelines'):
+                options.update(device=self.session.dev, pipeline_cache=self.session._pipelines)
+                self.session.release_engines()
+            sessions[self.sampling] = self.session
+        self.session = sessions.pop(sampling, None)
+        if self.session is None:
+            self.session = load_session(self.model_dir, self.pack_dir, **options,
+                temperature=request.temperature, top_p=request.top_p, seed=request.seed,
+                autotune=False, prefill_chunk_size=self.prefill_chunk_size, prefix_cache=True,
+                prefix_cache_min_tokens=self.prefill_chunk_size)
+        if prefix_cache is not None:
+            self.session.prefix_cache = prefix_cache
+        while len(sessions) > 8:
+            sessions.pop(next(iter(sessions)))
+        self.sampling = sampling
+
+    def complete(self, request, *, on_text=None, on_start=None, cancelled=None):
+        from jinja2 import TemplateError
+
+        request_started = time.perf_counter()
+        first_text_ms = None
         messages, tools = request.template_inputs()
         try:
             ids = self.tokenizer.apply_chat_template(messages, tokenize=True, return_dict=False, add_generation_prompt=True,
@@ -57,31 +110,64 @@ class Backend:
         if on_start:
             on_start(len(ids))
         assets = getattr(self, 'assets', None)
-        recipe_key, options = assets.options(len(ids)) if assets else (None, {'max_context': self.max_context})
-        sampling = (request.temperature, request.top_p, request.seed, recipe_key)
-        if self.session is None or sampling != self.sampling:
-            self.session = None
-            self.session = load_session(self.model_dir, self.pack_dir, **options,
-                                       temperature=request.temperature, top_p=request.top_p, seed=request.seed,
-                                       autotune=False, prefill_chunk_size=self.prefill_chunk_size)
-            self.sampling = sampling
+        self.select_session(request, len(ids))
         try:
             started = time.perf_counter()
+            stopped = False
             def publish(tokens):
-                if on_text and not tools:
+                nonlocal first_text_ms, stopped
+                if on_text:
                     text, _ = self.visible_text(tokens, request)
-                    # Delay the unfinished word and stop-string prefix. This also
-                    # avoids emitting a replacement character for partial UTF-8.
+                    text = streaming_text(text, request)
+                    if text and first_text_ms is None:
+                        first_text_ms = (time.perf_counter() - request_started) * 1000
+                    on_text(text)
                     stops = [request.stop] if isinstance(request.stop, str) else request.stop or []
-                    hold = max([len(s) for s in stops] + [1])
-                    safe = text[:-hold]
-                    boundary = max(safe.rfind(' '), safe.rfind('\n')) + 1
-                    on_text(safe[:boundary])
-            options = dict(on_tokens=publish, cancelled=cancelled) if on_text is not None else {}
+                    if stops:
+                        raw = self.tokenizer.decode(tokens, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                        stopped = any(stop in raw for stop in stops)
+            options = dict(on_tokens=publish, cancelled=lambda: stopped or bool(cancelled and cancelled())) if on_text is not None else {}
+            if getattr(self.session, 'prefix_cache', None) is not None:
+                stable = set()
+                if messages:
+                    # Keep earlier text blocks of the final message (agent
+                    # project context), omitting its last block (the question).
+                    # Exact token comparison handles template/BPE boundaries.
+                    probes = []
+                    for mode in ('message', True):
+                        prefix_messages, _ = request.template_inputs(cache_prefix=mode)
+                        if prefix_messages in probes:
+                            continue
+                        probes.append(prefix_messages)
+                        try:
+                            prefix = self.tokenizer.apply_chat_template(prefix_messages,
+                                tokenize=True, return_dict=False, add_generation_prompt=False,
+                                enable_thinking=False, **({'tools': tools} if tools else {}))
+                        except (ValueError, TemplateError):
+                            continue  # A cache probe must not reject a valid request.
+                        count = 0
+                        for a, b in zip(ids, prefix):
+                            if a != b:
+                                break
+                            count += 1
+                        if count:
+                            stable.add(count)
+                # Keep the system/tool checkpoint as a fallback if the project
+                # text changes after a tool edits a file or git status changes.
+                options['cache_prefix_tokens'] = sorted(stable) if len(stable) > 1 else next(iter(stable), 0)
             generation = self.session.generate(ids, limit, **options)
             tokens = generation.tokens
             self.last_metrics = dict(steps=getattr(generation, 'steps', 0),
                 decode_gpu_ms=getattr(generation, 'decode_ms', 0.0), wall_ms=(time.perf_counter()-started)*1000,
+                prefill_gpu_ms=getattr(generation, 'prefill_ms', 0.0),
+                prefill_wall_ms=getattr(generation, 'prefill_wall_ms', 0.0),
+                state_reset_ms=getattr(generation, 'state_reset_ms', 0.0),
+                checkpoint_ms=getattr(generation, 'checkpoint_ms', 0.0),
+                setup_ms=getattr(generation, 'setup_ms', 0.0), first_text_ms=first_text_ms,
+                cached_prompt_tokens=getattr(generation, 'cached_prompt_tokens', 0),
+                prefill_encode_ms=sum(t['encode_ms'] for t in getattr(generation, 'prefill_timings', [])),
+                prefill_commit_ms=sum(t['commit_ms'] for t in getattr(generation, 'prefill_timings', [])),
+                prefill_wait_ms=sum(t['wait_ms'] for t in getattr(generation, 'prefill_timings', [])),
                 verify_tokens=assets.gamma+1 if assets and assets.gamma else 1)
             self.last_metrics['decode_step_ms'] = self.last_metrics['decode_gpu_ms'] / max(1, self.last_metrics['steps'])
             logging.getLogger(__name__).info('Generation: %s', self.last_metrics)
@@ -288,6 +374,7 @@ def parse_args(argv=None):
     parser.add_argument("--served-model-name", default=None)
     parser.add_argument("--max-context", type=int, default=32768)
     parser.add_argument("--prefill-chunk-size", type=int, default=128, help="Prompt tokens per prefill pass (default: 128)")
+    parser.add_argument("--no-warmup", action='store_true', help="Skip startup compilation/warmup; the first request pays this cost")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
@@ -316,6 +403,8 @@ def main(argv=None):
     api_key = os.environ.get("LITHOS_METAL_API_KEY") or os.environ.get("LMK_API_KEY") or os.environ.get("MONOLITH_API_KEY")
     backend = Backend(str(assets.model_dir), str(assets.pack_dir), args.max_context, args.prefill_chunk_size, assets=assets)
     model_name = args.served_model_name or (assets.model_dir.name if Path(args.model).expanduser().exists() else args.model)
+    if not args.no_warmup:
+        backend.warmup(model_name)
     app = create_app(backend, model_name, api_key)
     logging.getLogger(__name__).info('lithos-metal ready: http://%s:%s — model=%s; DSpark=%s; verification rows=%s',
                                    args.host, args.port, model_name, args.draft or 'disabled', assets.gamma + 1)

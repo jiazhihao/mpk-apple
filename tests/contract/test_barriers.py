@@ -159,7 +159,8 @@ def test_attention_kernel_follows_the_profile(tmp_path):
 
 @pytest.mark.parametrize("d", [128, 256])
 @pytest.mark.parametrize("kv", [4, 8])
-def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d, kv):
+@pytest.mark.parametrize("capacity", [8192, 8198])
+def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d, kv, capacity):
     from test_nn_lowering import CFG
     from monolith import kernels
     import struct
@@ -167,7 +168,7 @@ def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d, kv):
     monkeypatch.setitem(CFG["text_config"], "head_dim", d)
     monkeypatch.setitem(CFG["text_config"], "num_key_value_heads", kv)
     _checkpoint(tmp_path)
-    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=8192)
+    m = Qwen3_5Model.from_checkpoint(str(tmp_path), max_context=capacity)
     pack_model(m, str(tmp_path), str(tmp_path / "pack"), PackLayout(rows=16))
     pf = PackFile(tmp_path / "pack")
     profile = Profile.from_dict("mma", {"gpu_cores": 20, "nominal_gbps": 307,
@@ -189,9 +190,22 @@ def test_matrix_attention_selection_and_workspace(tmp_path, monkeypatch, d, kv):
     assert constants["STATIC_GQA_P_KV_HEADS"] == f"{kv}u"
     assert "STATIC_GQA_P_POSITION" not in constants and "STATIC_GQA_P_T_ACTIVE" not in constants
     chunks, rows = params[15:17]
-    assert chunks == 8192 // (32 if d == 256 or adaptive else 64)
+    chunk = 32 if d == 256 or adaptive else 64
+    assert chunks == -(-capacity // chunk)
+    merge_params = prog.buffers[next(b for i, b, _ in merge.bindings if i == 4)].init
+    assert struct.unpack_from('<I', merge_params, 44)[0] == params[11] == capacity
     assert prog.buffers[bindings[7]].nbytes >= kv * chunks * rows * d * 4
     assert prog.buffers[bindings[8]].nbytes >= kv * chunks * rows * 2 * 4
+    if d == 256:
+        from monolith.compiler.attention_fusion import compact_partials
+        # Serving reserves six extra DSpark positions, so capacity need not
+        # align with either the original tile or the fused 96-key partition.
+        for op in (core, merge):
+            prog.kernels[op.kernel].macros['CH'] = '96u'
+        compact_partials(prog)
+        compact_chunks = -(-capacity // 96)
+        assert prog.buffers[bindings[7]].nbytes == kv * compact_chunks * rows * d * 4
+        assert prog.buffers[bindings[8]].nbytes == kv * compact_chunks * rows * 2 * 4
 
 
 @pytest.mark.parametrize("t", [1, 2, 3, 4, 6, 8])

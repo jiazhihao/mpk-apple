@@ -36,6 +36,22 @@ files. `--print-config` prints a redacted launch plan. Set `LITHOS_METAL_URL` fo
 `LITHOS_METAL_API_KEY` for an authenticated server. `lithos-metal env` intentionally prints shell-ready exports
 including the configured key; avoid putting its output in public logs.
 
+For Claude Code, install the client with `brew install --cask claude-code`, then run
+`lithos-metal claude`. The launcher selects the local target model for all model roles,
+declares the server's context limit, disables unsupported experimental request fields
+and thinking, and omits the attribution prefix so separate sessions can reuse the prompt
+cache. The Messages adapter rejects unsupported effort with a capability-specific error;
+Claude Code retries without effort. Tool permissions retain the client's settings.
+The local Qwen model generates the answers, including when Claude Code's interface or
+system prompt refers to Claude.
+
+Claude Code 2.1.285 was tested against the local Qwen3.8-27B NVFP4 + DSpark endpoint:
+streamed text and a `Read` tool/result continuation both completed successfully. Its
+standard prompt carried 22,348 input tokens on this checkout. First text took 110 s
+uncached and 53 s on a second launch (14,993 cached tokens); partial prefix reuse still
+leaves substantial prefill work. These client integration checks do not establish the
+sub-second first-token target for long prompts.
+
 | Client | Connection |
 |---|---|
 | OpenCode | Inline `@ai-sdk/openai-compatible` provider, Chat Completions |
@@ -111,10 +127,14 @@ Experimental support for NVIDIA's Qwen3.6-35B-A3B hybrid MoE, including its
 Koopah DSpark pairing and outstanding numerical qualification, is described in
 [the model support and validation notes](qwen-hybrid-moe.md).
 The server applies that template with an assistant generation prompt and thinking disabled where supported.
-Checkpoint resolution and packing happen during startup. GPU loading and Metal compilation happen
-on the first chat request. Subsequent requests reuse the session, but GPU weights/engines can
-be rebuilt when switching between prefill and decode to fit the device's memory.
-`GET /health` reports HTTP process liveness, not GPU readiness. `GET /v1/models` lists the served alias.
+Checkpoint resolution, packing, and generation warmup happen before the server accepts
+requests. Warmup compiles the default sampling configuration's prefill/decode programs for
+each selected context recipe, then exercises allocation and reuse with short generations.
+Only one session's GPU weight buffers stay resident. `--no-warmup` defers this cost to
+requests. A different sampling configuration can still need additional compilation.
+Compiled pipelines and a bounded set of CPU programs survive engine replacement.
+`GET /health` reports process liveness after startup;
+`GET /v1/models` lists the served alias.
 
 ```bash
 curl http://127.0.0.1:8000/v1/chat/completions \
@@ -139,9 +159,12 @@ print(response.choices[0].message.content)
 The APIs support text messages, developer/system instructions, function tools, tool-result
 history, greedy or stochastic sampling, output limits and stop strings. Responses also adapts
 client-executed custom tools (such as patch input); grammar constraints are not enforced.
-Streaming text is emitted as bounded decode batches finish; complete tool calls are validated
-and emitted at the end of generation. SSE keep-alives cover compilation and prefill. Client
-disconnection stops further work at a prefill-chunk/decode-batch boundary; an active Metal
+Streaming text is emitted after each speculative round, including requests that advertise
+tools. Only verified target tokens are published. Incomplete UTF-8, possible stop-string
+suffixes, and tool markers are held until they can be decoded safely. Complete tool calls
+are validated and emitted as structured events at the end of generation. SSE keep-alives
+cover compilation and prefill; empty events are not evidence of a first output token. Client
+disconnection stops further work at a prefill-chunk/decode-round boundary; an active Metal
 dispatch finishes first. Non-streaming requests retain the original native pump path.
 
 Defaults are 256 output tokens, greedy decoding, `top_p=1`, seed 0, and thinking disabled.
@@ -158,9 +181,44 @@ The default context capacity is 32768; use `--max-context` to fit the model and 
 DSpark reserves another `block_size - 1` positions internally for its attention block (six for
 this drafter). Thus `--max-context 33018` uses the same 33024-position capacity as the earlier
 27B benchmarks. Changing capacity creates another cache entry rather than modifying an old pack.
-Prompt processing uses 128-token chunks by default (`--prefill-chunk-size`), with a separate compiled graph
-from single-token decode. Short prompts use smaller prefill buckets. Increasing the chunk size increases
-temporary GPU memory; it does not change the context capacity or the decode graph's token bound.
+Large prompts use 128-token prefill chunks by default (`--prefill-chunk-size`). With an explicit
+fixed-verification decoder recipe, short prompts and cached tails of up to that length reuse
+the resident eight-row graph. This avoids remapping the prefill and decode weight layouts.
+Large prompts switch to the decoder for their final input rows before publishing any text,
+so that layout transition does not interrupt the output stream.
+The server keeps at most two exact-token CPU checkpoints within a budget of one eighth of
+Metal's recommended working set, capped at 4 GiB. This permits a complete 22K-token
+Qwen/DSpark checkpoint (about 2.09 GiB), including both GDN recurrent slots and the occupied
+target/draft KV rows. Earlier text blocks of the last message are eligible for caching;
+Claude Code's project context is therefore retained while its final question is replayed.
+The adapter preserves text-block boundaries without changing the rendered prompt. A cache
+hit still requires an exact token-prefix match, including tool definitions and project
+context. Plain string messages retain the message-boundary fallback. Shared system/tool
+prefixes are retained when refreshing a conversation checkpoint. Short prompts are replayed
+instead of copied into the cache. Cache contents are local to the process and are lost on
+restart. Cache misses, long uncached prompts, and recipe changes can still take more than a
+second; streaming alone cannot remove prefill time. Increasing the prefill chunk size increases
+temporary GPU memory without changing context capacity or verification width.
+
+Immutable weight files use shared read-only mappings, and the runtime declares weights and
+parameters as read-only Metal resources. This reduces first-use residency overhead when
+prefill and decode require different pack layouts. A sufficiently short cached suffix runs
+entirely on the resident decoder and avoids both layout transitions. Per-chunk diagnostics
+separate GPU time from host encoding, command-buffer commit and completion wait; wait time
+overlaps GPU execution and must not be added to GPU time. `tools/bench/warm_start.py` runs
+a captured Messages or Chat request with these diagnostics. Its
+`--message-boundary-control` option reproduces the previous cache boundary with identical
+prompt tokens. Startup compilation is outside its request timings.
+
+The warm-start fix is validated by exact-prefix contract tests and GPU continuation
+checks for the deep project checkpoint and the earlier system/tool fallback. The runtime
+also checks shared immutable weight mappings across engine recreation. Development
+measurements with a 22572-token Claude Code prompt reused 22550 tokens, leaving 22
+for prefill. That development checkout also contained separate prefill kernel tuning;
+its 232–550 ms backend first-text measurements are preliminary, exclude HTTP/client
+overhead, and were collected while another GPU task was active. They are not a latency
+guarantee or an isolated benchmark of this PR. Kernel tuning and raw result files are
+not included here; an isolated endpoint benchmark remains outstanding.
 
 By default the server listens only on localhost. For access through an SSH tunnel, forward port 8000.
 Set `LITHOS_METAL_API_KEY` before launch (`LMK_API_KEY` and `MONOLITH_API_KEY` remain aliases) to require `Authorization: Bearer <key>` on `/v1/*`;
@@ -181,6 +239,20 @@ Save an ordinary Chat Completions request as `request.json`, then measure both t
 .venv/bin/python tools/bench/serve_latency.py \
   --request request.json --warmup 1 --reps 5 --out /tmp/serve-latency.json
 ```
+
+Measure first nonempty streamed text and output cadence separately:
+
+```bash
+.venv/bin/python tools/bench/serve_stream_latency.py \
+  --request request.json --reps 3 --tokenizer /path/to/local/checkpoint \
+  --out /tmp/stream-latency.json
+```
+
+The first request is retained in the results, rather than discarded as warmup. With
+`--tokenizer`, visible throughput excludes EOS and the first text event. The separate
+usage-based estimate can include EOS or hidden tool tokens and must not be reported as
+visible text throughput. Actual throughput depends on DSpark acceptance; a fast GPU round
+does not guarantee 100 output tokens/second on every prompt.
 
 Server/cache contract tests (requires `httpx`):
 `.venv/bin/python -m pytest tests/contract/test_serve.py tests/contract/test_serving_cache.py`.
@@ -204,6 +276,38 @@ end to end. The Homebrew formula passed Ruby syntax checking; `brew install` awa
 publication of the tap and release.
 
 ## Measured serving configuration
+
+[M] October 4, 2026 streaming update, 40-core M5 Max, 48 GB, Qwen3.8-27B-NVFP4
+with its published NVFP4 DSpark head and seven proposals plus anchor. After default
+startup warmup, sequential greedy HTTP requests measured:
+
+| Request | Input tokens | First nonempty text | Visible output tokens/s |
+|---|---:|---:|---:|
+| Short identity question, no cached prompt | 21 | 135–162 ms | 107–108 |
+| Ocean facts, no cached prompt | 128 | 695–706 ms | 66–67 |
+| OpenCode identity question, shared prefix cached | 7,460 | 237 ms | 70 |
+| OpenCode merge-sort answer, shared prefix cached | 7,468 | 219–362 ms | 127 |
+| First OpenCode identity question, uncached | 7,460 | 31,899 ms | 68 |
+
+The short and 128-token cases have three samples each; the coding case has two;
+the cold/cached OpenCode identity cases have one each. The OpenCode requests advertise
+ten tools and share a 7,436-token system/tool prefix. The coding answer is capped at
+256 output tokens. Throughput retokenizes visible text with the target tokenizer,
+excludes EOS and the first event, and measures from the first through last text event.
+Maximum gaps between text events were under 49 ms, including the uncached request.
+Cold compilation is now paid before readiness and the prefill/decode layout transition
+happens before first text. Long uncached prefill remains slow: these results do **not**
+establish sub-second first text or 100 tokens/s for every request. Acceptance-dependent
+throughput and cold prompt latency must be reported separately.
+
+An end-to-end OpenCode 1.18.34 check subsequently emitted a larger 14,265-token
+request. Replaying that captured request after the cache-budget fix measured
+59.88 seconds to first text uncached and 400 ms with the shared prefix cached.
+Changing the user question to the merge-sort task reused 14,241 prefix tokens;
+the resulting 14,273-token requests measured 256–264 ms to first text and
+115 visible output tokens/s (two 256-output-token samples). Text-event gaps were
+under 61 ms. These HTTP timings exclude OpenCode process startup. The actual
+OpenCode command also completed successfully with the local provider.
 
 [M] October 3, 2026: 40-core M5 Max, 48 GB, the checkpoint revisions recorded in
 [the DSpark integration report](research/m5max-27b-dspark.md#checkpoints-and-integration),
